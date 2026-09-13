@@ -13,6 +13,10 @@ export function LibraryPage() {
     queryKey: ['artists'],
     queryFn: api.artists,
   })
+  const { data: upgradable } = useQuery({
+    queryKey: ['upgradable'],
+    queryFn: api.upgradable,
+  })
 
   const scan = useMutation({
     mutationFn: api.runMonitor,
@@ -29,12 +33,30 @@ export function LibraryPage() {
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
+  const upgradeAll = useMutation({
+    mutationFn: api.upgradeAll,
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['upgradable'] })
+      qc.invalidateQueries({ queryKey: ['queue'] })
+      qc.invalidateQueries({ queryKey: ['health'] })
+      toast.push(
+        res.queued
+          ? `Queued ${res.queued} upgrade(s) to ${res.target || 'target quality'}`
+          : res.message || 'Nothing to upgrade',
+        'ok',
+      )
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+
   const filtered = useMemo(() => {
     if (!data) return []
     const q = filter.trim().toLowerCase()
     if (!q) return data
     return data.filter((a) => a.name.toLowerCase().includes(q))
   }, [data, filter])
+
+  const upgradeCount = upgradable?.length || 0
 
   return (
     <div>
@@ -44,6 +66,15 @@ export function LibraryPage() {
           <p>Artists you follow. New releases download automatically.</p>
         </div>
         <div className="toolbar" style={{ marginBottom: 0 }}>
+          {upgradeCount > 0 && (
+            <button
+              className="btn secondary"
+              onClick={() => upgradeAll.mutate()}
+              disabled={upgradeAll.isPending}
+            >
+              {upgradeAll.isPending ? 'Queuing…' : `Upgrade all (${upgradeCount})`}
+            </button>
+          )}
           <button
             className="btn secondary"
             onClick={() => scan.mutate()}

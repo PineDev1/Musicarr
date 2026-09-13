@@ -56,11 +56,39 @@ def migrate_schema() -> None:
         "qobuz_user_auth_token": "TEXT DEFAULT ''",
         "qobuz_app_id": "VARCHAR(64) DEFAULT ''",
         "qobuz_app_secret": "VARCHAR(128) DEFAULT ''",
+        "min_track_count": "INTEGER DEFAULT 0",
+        "ignore_junk_titles": "BOOLEAN DEFAULT 1",
+        "ignore_live_releases": "BOOLEAN DEFAULT 0",
+        "notify_webhook_url": "TEXT DEFAULT ''",
+        "notify_on_complete": "BOOLEAN DEFAULT 1",
+        "notify_on_failure": "BOOLEAN DEFAULT 1",
+        "upgrade_enabled": "BOOLEAN DEFAULT 1",
+        "media_refresh_url": "TEXT DEFAULT ''",
+        "media_refresh_token": "TEXT DEFAULT ''",
+        "media_refresh_type": "VARCHAR(32) DEFAULT 'webhook'",
+        "auth_enabled": "BOOLEAN DEFAULT 0",
+        "auth_username": "VARCHAR(128) DEFAULT 'admin'",
+        "auth_password_hash": "TEXT DEFAULT ''",
+        "auth_secret": "TEXT DEFAULT ''",
+        "ssl_enabled": "BOOLEAN DEFAULT 0",
+        "public_domain": "VARCHAR(512) DEFAULT ''",
+        "player_enabled": "BOOLEAN DEFAULT 0",
     }
     existing = _existing_columns("app_settings")
     for name, definition in settings_cols.items():
         if existing and name not in existing:
             _add_column("app_settings", f"{name} {definition}")
+
+    artist_cols = _existing_columns("artists")
+    if artist_cols:
+        if "monitor_mode" not in artist_cols:
+            _add_column("artists", "monitor_mode VARCHAR(16) DEFAULT 'all'")
+        if "include_singles" not in artist_cols:
+            _add_column("artists", "include_singles BOOLEAN")
+
+    album_cols = _existing_columns("albums")
+    if album_cols and "quality" not in album_cols:
+        _add_column("albums", "quality VARCHAR(16) DEFAULT ''")
 
     for table, id_col in (
         ("artists", "deezer_id"),
@@ -91,6 +119,27 @@ def migrate_schema() -> None:
     job_cols = _existing_columns("download_jobs")
     if job_cols and "target_provider_id" not in job_cols:
         _add_column("download_jobs", "target_provider_id VARCHAR(64) DEFAULT ''")
+    if job_cols and "error_category" not in job_cols:
+        _add_column("download_jobs", "error_category VARCHAR(32) DEFAULT ''")
+
+    player_user_cols = {
+        "show_recently_played": "BOOLEAN DEFAULT 1",
+        "show_shuffle_mix": "BOOLEAN DEFAULT 1",
+        "wave_height": "REAL DEFAULT 6.0",
+        "wave_length": "REAL DEFAULT 20.0",
+        "wave_speed": "REAL DEFAULT 12.0",
+        "wave_thickness": "REAL DEFAULT 3.0",
+        "wave_color": "VARCHAR(32) DEFAULT '#3dba7a'",
+        "wave_flatten_when_paused": "BOOLEAN DEFAULT 1",
+    }
+    existing_pu = _existing_columns("player_users")
+    for name, definition in player_user_cols.items():
+        if existing_pu and name not in existing_pu:
+            _add_column("player_users", f"{name} {definition}")
+
+    pl_cols = _existing_columns("player_playlists")
+    if pl_cols and "is_smart" not in pl_cols:
+        _add_column("player_playlists", "is_smart BOOLEAN DEFAULT 0")
 
 
 def init_db() -> None:

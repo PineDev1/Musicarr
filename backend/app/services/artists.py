@@ -19,8 +19,15 @@ def _legacy_id(provider: str, provider_id: str) -> int:
     return abs(hash(f"{provider}:{provider_id}")) % 2_000_000_000
 
 
-def album_type_allowed(db: Session, album_type: str) -> bool:
+def album_type_allowed_for_artist(db: Session, artist: Artist, album_type: str) -> bool:
     settings = ensure_settings(db)
+    if album_type == "single":
+        # Per-artist override: False blocks singles; True allows; None inherits global
+        override = getattr(artist, "include_singles", None)
+        if override is False:
+            return False
+        if override is True:
+            return True
     mapping = {
         "album": settings.include_albums,
         "ep": settings.include_eps,
@@ -31,18 +38,32 @@ def album_type_allowed(db: Session, album_type: str) -> bool:
 
 
 def sync_artist_albums(db: Session, artist: Artist) -> list[Album]:
+    from app.services.filters import is_junk_title, is_live_title
+
+    if not artist.monitored or (getattr(artist, "monitor_mode", "all") or "all") == "none":
+        return list(
+            db.scalars(select(Album).where(Album.artist_id == artist.id)).all()
+        )
+
+    if artist.provider == "local":
+        return list(
+            db.scalars(select(Album).where(Album.artist_id == artist.id)).all()
+        )
+
     provider = get_active_provider(db)
     if artist.provider != provider.name:
-        # Prefer the artist's own provider adapter when possible
         from app.services.providers import get_provider
 
         provider = get_provider(db, artist.provider)
 
+    settings = ensure_settings(db)
     raw_albums = provider.list_albums(artist.provider_id)
     existing = {
         a.provider_id: a
         for a in db.scalars(select(Album).where(Album.artist_id == artist.id)).all()
     }
+    monitor_mode = (getattr(artist, "monitor_mode", None) or "all").lower()
+    cutoff = artist.added_at
     touched: list[Album] = []
     for raw in raw_albums:
         pid = raw.provider_id
@@ -55,8 +76,27 @@ def sync_artist_albums(db: Session, artist: Artist) -> list[Album]:
             album.album_type = raw.album_type
             touched.append(album)
             continue
-        if not album_type_allowed(db, raw.album_type):
+        if not album_type_allowed_for_artist(db, artist, raw.album_type):
             continue
+        if getattr(settings, "ignore_junk_titles", True) and is_junk_title(raw.title or ""):
+            continue
+        if getattr(settings, "ignore_live_releases", False) and is_live_title(raw.title or ""):
+            continue
+        min_tracks = int(getattr(settings, "min_track_count", 0) or 0)
+        if min_tracks > 0 and (raw.track_count or 0) > 0 and raw.track_count < min_tracks:
+            if raw.album_type in {"album", "ep", "compilation"}:
+                continue
+        if monitor_mode == "new" and raw.release_date and cutoff:
+            try:
+                from datetime import date as date_cls
+
+                rd = date_cls.fromisoformat(raw.release_date[:10])
+                added = cutoff.date() if hasattr(cutoff, "date") else cutoff
+                if rd < added:
+                    continue
+            except ValueError:
+                pass
+
         album = Album(
             provider=artist.provider,
             provider_id=pid,
@@ -67,8 +107,8 @@ def sync_artist_albums(db: Session, artist: Artist) -> list[Album]:
             release_date=raw.release_date,
             cover_url=raw.cover_url,
             track_count=raw.track_count,
-            monitored=artist.monitored,
-            status="wanted" if artist.monitored else "skipped",
+            monitored=True,
+            status="wanted",
         )
         db.add(album)
         touched.append(album)

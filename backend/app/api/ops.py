@@ -4,10 +4,28 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models import DownloadJob, HistoryEvent
-from app.models.schemas import DownloadJobOut, HistoryOut, ReorganizeResult, ScanResult
+from app.models.schemas import (
+    DownloadJobOut,
+    HistoryOut,
+    ImportResult,
+    ImportReviewOut,
+    LinkArtistRequest,
+    ReorganizeResult,
+    ScanResult,
+)
 from app.services.download_queue import download_queue
-from app.services.library import reorganize_library, scan_library
+from app.services.library import (
+    build_import_review,
+    import_existing_library,
+    link_local_artist,
+    reorganize_library,
+    scan_library,
+)
 from app.services.monitor import release_monitor
+from app.services.settings_service import ensure_settings
+from app.api.artists import _artist_group_out
+from app.services.artists import find_linked_artists, get_artist_detail
+from app.models.schemas import ArtistOut
 
 router = APIRouter(tags=["ops"])
 
@@ -36,6 +54,20 @@ def retry_job(job_id: int, db: Session = Depends(get_db)):
     return job
 
 
+@router.post("/queue/retry-failed")
+def retry_failed_jobs(
+    db: Session = Depends(get_db),
+    category: str | None = None,
+    skip_permanent: bool = True,
+):
+    """Retry failed jobs. By default skips auth/rematch (need user action)."""
+    exclude = ["auth", "rematch"] if skip_permanent and not category else None
+    retried = download_queue.retry_failed(
+        db, category=category, exclude_categories=exclude
+    )
+    return {"retried": retried}
+
+
 @router.get("/history", response_model=list[HistoryOut])
 def get_history(db: Session = Depends(get_db), limit: int = 100):
     return list(
@@ -54,6 +86,47 @@ def clear_finished(db: Session = Depends(get_db)):
 @router.post("/library/scan", response_model=ScanResult)
 def library_scan(db: Session = Depends(get_db)):
     return scan_library(db)
+
+
+@router.post("/library/import", response_model=ImportResult)
+def library_import(db: Session = Depends(get_db), link_providers: bool = True):
+    """Import a previous on-disk music library into Musicarr."""
+    return import_existing_library(db, link_providers=link_providers)
+
+
+@router.get("/library/review", response_model=ImportReviewOut)
+def library_review(db: Session = Depends(get_db), suggest: bool = True):
+    """Show local / weakly tagged imports that need manual linking."""
+    return build_import_review(db, suggest=suggest)
+
+
+@router.post("/library/review/{artist_id}/link", response_model=ArtistOut)
+def library_review_link(
+    artist_id: int,
+    payload: LinkArtistRequest,
+    db: Session = Depends(get_db),
+):
+    settings = ensure_settings(db)
+    try:
+        linked = link_local_artist(
+            db,
+            artist_id,
+            provider_id=payload.provider_id,
+            provider_name=payload.provider or settings.active_provider,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    detail = get_artist_detail(db, linked.id)
+    group = find_linked_artists(db, detail or linked)
+    return _artist_group_out(
+        group,
+        include_albums=True,
+        active=(settings.active_provider or "deezer").lower(),
+        target_bitrate=(settings.bitrate or "flac").lower(),
+        upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
+    )
 
 
 @router.post("/library/reorganize", response_model=ReorganizeResult)

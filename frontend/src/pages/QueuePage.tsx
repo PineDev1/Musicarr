@@ -1,7 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, type DownloadJob } from '../api'
 import { useToast } from '../Toast'
+
+const CATEGORY_LABELS: Record<string, string> = {
+  auth: 'Auth / login',
+  rematch: 'No match on active source',
+  unavailable: 'Unavailable',
+  network: 'Network',
+  other: 'Other',
+  '': 'Uncategorized',
+}
 
 export function QueuePage() {
   const qc = useQueryClient()
@@ -19,11 +28,13 @@ export function QueuePage() {
       try {
         const snap = JSON.parse(ev.data) as Array<{
           id: number
+          album_id?: number | null
           artist_name: string
           album_title: string
           state: string
           progress: number
           error: string | null
+          error_category?: string
           retries: number
         }>
         setLive(
@@ -31,12 +42,13 @@ export function QueuePage() {
             id: j.id,
             target_type: 'album',
             target_id: 0,
-            album_id: null,
+            album_id: j.album_id ?? null,
             artist_name: j.artist_name,
             album_title: j.album_title,
             state: j.state,
             progress: j.progress,
             error: j.error,
+            error_category: j.error_category || '',
             retries: j.retries,
             created_at: '',
             started_at: null,
@@ -58,6 +70,14 @@ export function QueuePage() {
     mutationFn: (id: number) => api.retryJob(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['queue'] }),
   })
+  const retryFailed = useMutation({
+    mutationFn: () => api.retryFailedJobs({ skipPermanent: true }),
+    onSuccess: (res) => {
+      toast.push(`Retried ${res.retried} job(s)`, 'ok')
+      qc.invalidateQueries({ queryKey: ['queue'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
   const clearFinished = useMutation({
     mutationFn: api.clearFinishedQueue,
     onSuccess: (res) => {
@@ -71,9 +91,26 @@ export function QueuePage() {
   const merged = jobs.map((j) => {
     const liveJob = live?.find((l) => l.id === j.id)
     return liveJob
-      ? { ...j, progress: liveJob.progress, state: liveJob.state, error: liveJob.error }
+      ? {
+          ...j,
+          progress: liveJob.progress,
+          state: liveJob.state,
+          error: liveJob.error,
+          error_category: liveJob.error_category || j.error_category,
+        }
       : j
   })
+
+  const failedGroups = useMemo(() => {
+    const map = new Map<string, DownloadJob[]>()
+    for (const j of merged.filter((x) => x.state === 'failed')) {
+      const key = j.error_category || 'other'
+      const list = map.get(key) || []
+      list.push(j)
+      map.set(key, list)
+    }
+    return Array.from(map.entries()).sort((a, b) => b[1].length - a[1].length)
+  }, [merged])
 
   return (
     <div>
@@ -82,14 +119,40 @@ export function QueuePage() {
           <h1>Queue</h1>
           <p>Download progress updates live while jobs run.</p>
         </div>
-        <button
-          className="btn secondary"
-          onClick={() => clearFinished.mutate()}
-          disabled={clearFinished.isPending}
-        >
-          Clear finished
-        </button>
+        <div className="toolbar" style={{ marginBottom: 0 }}>
+          <button
+            className="btn secondary"
+            onClick={() => retryFailed.mutate()}
+            disabled={retryFailed.isPending}
+          >
+            Retry failed (skip auth/rematch)
+          </button>
+          <button
+            className="btn secondary"
+            onClick={() => clearFinished.mutate()}
+            disabled={clearFinished.isPending}
+          >
+            Clear finished
+          </button>
+        </div>
       </div>
+
+      {failedGroups.length > 0 && (
+        <div className="banner warn" style={{ marginBottom: '1rem' }}>
+          <strong>Failed downloads</strong>
+          <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.2rem' }}>
+            {failedGroups.map(([cat, list]) => (
+              <li key={cat}>
+                {CATEGORY_LABELS[cat] || cat}: {list.length}
+                {cat === 'rematch' || cat === 'auth'
+                  ? ' — fix source in Settings or re-add the artist; these are not auto-retried'
+                  : ''}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {isLoading && <p className="muted">Loading…</p>}
       {error && <p className="error">{(error as Error).message}</p>}
       {merged.length === 0 && (
@@ -116,6 +179,11 @@ export function QueuePage() {
                     {job.artist_name} – {job.album_title}
                   </strong>
                   {job.error && <div className="error">{job.error}</div>}
+                  {job.state === 'failed' && job.error_category && (
+                    <div className="muted">
+                      Category: {CATEGORY_LABELS[job.error_category] || job.error_category}
+                    </div>
+                  )}
                   {job.retries > 0 && <div className="muted">Retries: {job.retries}</div>}
                 </td>
                 <td>

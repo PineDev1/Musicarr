@@ -68,7 +68,10 @@ class ReleaseMonitor:
                 db.scalars(
                     select(Artist)
                     .options(joinedload(Artist.albums))
-                    .where(Artist.monitored.is_(True), Artist.provider == active)
+                    .where(
+                        Artist.monitored.is_(True),
+                        Artist.provider == active,
+                    )
                 )
                 .unique()
                 .all()
@@ -93,6 +96,9 @@ class ReleaseMonitor:
                     synced = sync_artist_albums(db, artist)
                     checked += 1
                     for album in synced:
+                        mode = (getattr(artist, "monitor_mode", None) or "all").lower()
+                        if mode == "none":
+                            continue
                         if album.provider_id not in before_ids and album.status == "wanted":
                             new_albums += 1
                             download_queue.enqueue_album(db, album.id)

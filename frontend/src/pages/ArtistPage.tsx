@@ -136,16 +136,28 @@ export function ArtistPage() {
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
+  const patchArtist = useMutation({
+    mutationFn: (body: Record<string, unknown>) => api.patchArtist(artistId, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['artist', artistId] })
+      qc.invalidateQueries({ queryKey: ['artists'] })
+      qc.invalidateQueries({ queryKey: ['wanted'] })
+      toast.push('Artist monitoring updated', 'ok')
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
   const patchAlbum = useMutation({
     mutationFn: ({ albumId, body }: { albumId: number; body: Record<string, unknown> }) =>
       api.patchAlbum(albumId, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['artist', artistId] }),
   })
   const downloadAlbum = useMutation({
-    mutationFn: (albumId: number) => api.downloadAlbum(albumId),
+    mutationFn: ({ albumId, upgrade }: { albumId: number; upgrade?: boolean }) =>
+      api.downloadAlbum(albumId, upgrade),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['queue'] })
       qc.invalidateQueries({ queryKey: ['health'] })
+      qc.invalidateQueries({ queryKey: ['upgradable'] })
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
@@ -159,6 +171,7 @@ export function ArtistPage() {
   if (!data) return <p className="muted">Artist not found.</p>
 
   const sources = data.providers?.length ? data.providers : [data.provider]
+  const monitorMode = data.monitor_mode || (data.monitored ? 'all' : 'none')
 
   return (
     <div>
@@ -190,7 +203,42 @@ export function ArtistPage() {
         )}
       </div>
 
-      <div className="toolbar">
+      <div className="toolbar" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <div className="field" style={{ margin: 0, minWidth: 180 }}>
+          <label>Monitor</label>
+          <select
+            value={monitorMode}
+            onChange={(e) => patchArtist.mutate({ monitor_mode: e.target.value })}
+            disabled={patchArtist.isPending}
+          >
+            <option value="all">All albums</option>
+            <option value="new">New albums only</option>
+            <option value="none">Unmonitored</option>
+          </select>
+        </div>
+        <div className="field" style={{ margin: 0, minWidth: 200 }}>
+          <label>Singles for this artist</label>
+          <select
+            value={
+              data.include_singles === true
+                ? 'yes'
+                : data.include_singles === false
+                  ? 'no'
+                  : 'inherit'
+            }
+            onChange={(e) => {
+              const v = e.target.value
+              patchArtist.mutate({
+                include_singles: v === 'inherit' ? null : v === 'yes',
+              })
+            }}
+            disabled={patchArtist.isPending}
+          >
+            <option value="inherit">Use global setting</option>
+            <option value="yes">Always include</option>
+            <option value="no">Never include</option>
+          </select>
+        </div>
         <button className="btn secondary" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
           Refresh metadata
         </button>
@@ -230,7 +278,9 @@ export function ArtistPage() {
               )}
               <div style={{ minWidth: 0 }}>
                 <div>
-                  <strong>{album.title}</strong>{' '}
+                  <Link to={`/albums/${album.id}`}>
+                    <strong>{album.title}</strong>
+                  </Link>{' '}
                   {downloading ? (
                     <span className={`badge ${job.state}`}>{job.state}</span>
                   ) : failed ? (
@@ -238,10 +288,16 @@ export function ArtistPage() {
                   ) : (
                     <span className={`badge ${album.status}`}>{album.status}</span>
                   )}
+                  {album.upgrade_available && (
+                    <span className="badge upgrade" style={{ marginLeft: 6 }}>
+                      upgrade
+                    </span>
+                  )}
                 </div>
                 <div className="muted">
                   {album.release_date || 'Unknown date'} · {album.album_type} · {album.track_count}{' '}
                   tracks
+                  {album.quality ? ` · ${album.quality.toUpperCase()}` : ''}
                 </div>
                 <div style={{ marginTop: 6 }}>
                   {downloading ? (
@@ -272,10 +328,19 @@ export function ArtistPage() {
                     Cancel
                   </button>
                 )}
+                {!downloading && album.upgrade_available && (
+                  <button
+                    className="btn secondary"
+                    onClick={() => downloadAlbum.mutate({ albumId: album.id, upgrade: true })}
+                    disabled={downloadAlbum.isPending}
+                  >
+                    Upgrade
+                  </button>
+                )}
                 {!downloading && album.status !== 'downloaded' && (
                   <button
                     className="btn secondary"
-                    onClick={() => downloadAlbum.mutate(album.id)}
+                    onClick={() => downloadAlbum.mutate({ albumId: album.id })}
                     disabled={downloadAlbum.isPending}
                   >
                     {failed ? 'Retry' : 'Download'}

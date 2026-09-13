@@ -36,6 +36,22 @@ export type Settings = {
   include_eps: boolean
   include_singles: boolean
   include_compilations: boolean
+  min_track_count: number
+  ignore_junk_titles: boolean
+  ignore_live_releases: boolean
+  notify_webhook_url: string
+  notify_on_complete: boolean
+  notify_on_failure: boolean
+  upgrade_enabled: boolean
+  media_refresh_url: string
+  media_refresh_token_set: boolean
+  media_refresh_type: string
+  auth_enabled: boolean
+  auth_username: string
+  auth_password_set: boolean
+  ssl_enabled: boolean
+  public_domain: string
+  player_enabled: boolean
   download_concurrency: number
   max_retries: number
   provider_ok: boolean | null
@@ -46,6 +62,13 @@ export type Settings = {
   tidal_error: string | null
   qobuz_ok: boolean | null
   qobuz_error: string | null
+}
+
+export type AppAuthStatus = {
+  enabled: boolean
+  authenticated: boolean
+  username: string | null
+  password_set: boolean
 }
 
 export type ArtistSearchResult = {
@@ -84,6 +107,8 @@ export type Album = {
   monitored: boolean
   status: string
   path: string | null
+  quality?: string
+  upgrade_available?: boolean
   artist_name?: string | null
   sources?: string[]
   tracks: Track[]
@@ -97,6 +122,8 @@ export type Artist = {
   name: string
   image_url: string | null
   monitored: boolean
+  monitor_mode?: string
+  include_singles?: boolean | null
   added_at: string
   last_synced_at: string | null
   album_count: number
@@ -105,6 +132,29 @@ export type Artist = {
   providers?: string[]
   linked_artist_ids?: number[]
   albums: Album[]
+}
+
+export type ImportReviewArtist = {
+  id: number
+  name: string
+  provider: string
+  album_count: number
+  reason: string
+  suggestions: ArtistSearchResult[]
+}
+
+export type ImportReviewAlbum = {
+  id: number
+  title: string
+  artist_id: number
+  artist_name: string
+  reason: string
+}
+
+export type ImportReview = {
+  local_artists: ImportReviewArtist[]
+  weak_albums: ImportReviewAlbum[]
+  message: string
 }
 
 export type DownloadJob = {
@@ -117,6 +167,7 @@ export type DownloadJob = {
   state: string
   progress: number
   error: string | null
+  error_category?: string
   retries: number
   created_at: string
   started_at: string | null
@@ -132,6 +183,7 @@ export type HistoryEvent = {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
     ...init,
   })
@@ -150,6 +202,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  authStatus: () => request<AppAuthStatus>('/auth/status'),
+  appLogin: (username: string, password: string) =>
+    request<AppAuthStatus>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  appLogout: () =>
+    request<AppAuthStatus>('/auth/logout-session', { method: 'POST' }),
   health: () => request<Health>('/health'),
   settings: (validate = false) => request<Settings>(`/settings?validate=${validate}`),
   updateSettings: (body: Record<string, unknown>) =>
@@ -191,26 +251,56 @@ export const api = {
     }),
   deleteArtist: (id: number) =>
     request<{ ok: boolean }>(`/artists/${id}`, { method: 'DELETE' }),
+  patchArtist: (id: number, body: Record<string, unknown>) =>
+    request<Artist>(`/artists/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   refreshArtist: (id: number) =>
     request<Artist>(`/artists/${id}/refresh`, { method: 'POST' }),
   downloadMissing: (id: number) =>
     request<{ queued: number }>(`/artists/${id}/download-missing`, { method: 'POST' }),
-  wanted: () => request<Album[]>('/albums/wanted'),
+  wanted: (albumType?: string) =>
+    request<Album[]>(
+      albumType ? `/albums/wanted?album_type=${encodeURIComponent(albumType)}` : '/albums/wanted',
+    ),
   downloadAllWanted: () =>
     request<{ queued: number }>('/albums/wanted/download-all', { method: 'POST' }),
   skipAllWanted: () =>
     request<{ skipped: number }>('/albums/wanted/skip-all', { method: 'POST' }),
-  patchAlbum: (id: number, body: Record<string, unknown>) =>
-    request<Album>(`/albums/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  downloadAlbum: (id: number) =>
-    request<{ queued: boolean; job_id: number | null }>(`/albums/${id}/download`, {
+  skipWantedSingles: () =>
+    request<{ skipped: number }>('/albums/wanted/skip-singles', { method: 'POST' }),
+  skipWantedJunk: () =>
+    request<{ skipped: number }>('/albums/wanted/skip-junk', { method: 'POST' }),
+  upgradable: () => request<Album[]>('/albums/upgradable'),
+  upgradeAll: () =>
+    request<{ queued: number; target?: string; message?: string }>('/albums/upgrade-all', {
       method: 'POST',
     }),
+  album: (id: number) => request<Album>(`/albums/${id}`),
+  patchAlbum: (id: number, body: Record<string, unknown>) =>
+    request<Album>(`/albums/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  downloadAlbum: (id: number, upgrade = false) =>
+    request<{ queued: boolean; job_id: number | null }>(
+      `/albums/${id}/download?upgrade=${upgrade}`,
+      { method: 'POST' },
+    ),
+  deleteAlbum: (id: number, deleteFiles = false) =>
+    request<{ ok: boolean; deleted_files: boolean }>(
+      `/albums/${id}?delete_files=${deleteFiles}`,
+      { method: 'DELETE' },
+    ),
   queue: (all = false) => request<DownloadJob[]>(`/queue?all_jobs=${all}`),
   cancelJob: (id: number) =>
     request<DownloadJob>(`/queue/${id}/cancel`, { method: 'POST' }),
   retryJob: (id: number) =>
     request<DownloadJob>(`/queue/${id}/retry`, { method: 'POST' }),
+  retryFailedJobs: (opts?: { category?: string; skipPermanent?: boolean }) => {
+    const params = new URLSearchParams()
+    if (opts?.category) params.set('category', opts.category)
+    if (opts?.skipPermanent === false) params.set('skip_permanent', 'false')
+    const q = params.toString()
+    return request<{ retried: number }>(`/queue/retry-failed${q ? `?${q}` : ''}`, {
+      method: 'POST',
+    })
+  },
   clearFinishedQueue: () =>
     request<{ cleared: number }>('/queue/clear-finished', { method: 'POST' }),
   history: () => request<HistoryEvent[]>('/history'),
@@ -219,6 +309,24 @@ export const api = {
       '/library/scan',
       { method: 'POST' },
     ),
+  importLibrary: (linkProviders = true) =>
+    request<{
+      files_seen: number
+      artists_created: number
+      albums_imported: number
+      tracks_linked: number
+      provider_linked: number
+      matched: number
+      unmatched: number
+      message: string
+    }>(`/library/import?link_providers=${linkProviders}`, { method: 'POST' }),
+  importReview: (suggest = true) =>
+    request<ImportReview>(`/library/review?suggest=${suggest}`),
+  linkImportArtist: (artistId: number, providerId: string, provider?: string) =>
+    request<Artist>(`/library/review/${artistId}/link`, {
+      method: 'POST',
+      body: JSON.stringify({ provider_id: providerId, provider }),
+    }),
   reorganize: () =>
     request<{ moved: number; skipped: number; message: string }>('/library/reorganize', {
       method: 'POST',
