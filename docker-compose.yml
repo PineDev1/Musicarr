@@ -1,0 +1,16 @@
+services:
+  musicarr:
+    build: .
+    image: musicarr:1.0
+    container_name: musicarr
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./data:/config
+      - ./music:/music
+    environment:
+      MUSICARR_DATA_DIR: /config
+      MUSICARR_MUSIC_DIR: /music
+      MUSICARR_HOST: 0.0.0.0
+      MUSICARR_PORT: 8787
+    restart: unless-stopped
