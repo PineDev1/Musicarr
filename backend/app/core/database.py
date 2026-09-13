@@ -73,6 +73,7 @@ def migrate_schema() -> None:
         "ssl_enabled": "BOOLEAN DEFAULT 0",
         "public_domain": "VARCHAR(512) DEFAULT ''",
         "player_enabled": "BOOLEAN DEFAULT 0",
+        "player_sharing_enabled": "BOOLEAN DEFAULT 1",
     }
     existing = _existing_columns("app_settings")
     for name, definition in settings_cols.items():
@@ -131,6 +132,16 @@ def migrate_schema() -> None:
         "wave_thickness": "REAL DEFAULT 3.0",
         "wave_color": "VARCHAR(32) DEFAULT '#3dba7a'",
         "wave_flatten_when_paused": "BOOLEAN DEFAULT 1",
+        "avatar_path": "VARCHAR(1024)",
+        "pinned_playlist_ids": "TEXT DEFAULT '[]'",
+        "crossfade_enabled": "BOOLEAN DEFAULT 0",
+        "show_recommended": "BOOLEAN DEFAULT 1",
+        "show_recently_added": "BOOLEAN DEFAULT 1",
+        "default_shuffle": "BOOLEAN DEFAULT 0",
+        "default_repeat": "VARCHAR(16) DEFAULT 'off'",
+        "continue_album_id": "INTEGER",
+        "continue_track_id": "INTEGER",
+        "continue_position": "REAL DEFAULT 0",
     }
     existing_pu = _existing_columns("player_users")
     for name, definition in player_user_cols.items():

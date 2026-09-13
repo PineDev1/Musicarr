@@ -1,10 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
+import { IconUser } from '../player/icons'
 import { playerApi } from '../player/playerApi'
 import { useToast } from '../Toast'
 
 export function NowPlayingPage() {
   const toast = useToast()
   const qc = useQueryClient()
+  // Presence rows carry no avatar field; the avatar endpoint 404s for users without one.
+  const [noAvatar, setNoAvatar] = useState<number[]>([])
   const { data, isLoading, error, isFetching } = useQuery({
     queryKey: ['admin-now-playing'],
     queryFn: playerApi.nowPlaying,
@@ -43,7 +47,24 @@ export function NowPlayingPage() {
               <div className="now-playing-ph" />
             )}
             <div className="now-playing-meta">
-              <strong>{row.display_name || row.username}</strong>
+              <strong className="now-playing-name">
+                <span className="player-avatar sm">
+                  {noAvatar.includes(row.user_id) ? (
+                    <IconUser size={14} />
+                  ) : (
+                    <img
+                      src={playerApi.avatarUrl(row.user_id)}
+                      alt=""
+                      onError={() =>
+                        setNoAvatar((ids) =>
+                          ids.includes(row.user_id) ? ids : [...ids, row.user_id],
+                        )
+                      }
+                    />
+                  )}
+                </span>
+                {row.display_name || row.username}
+              </strong>
               <div className="muted">@{row.username}</div>
               <div style={{ marginTop: '0.35rem' }}>
                 {row.title ? (

@@ -77,6 +77,7 @@ def settings_to_out(row: AppSettings, validate: bool = False) -> SettingsOut:
         ssl_enabled=bool(getattr(row, "ssl_enabled", False)),
         public_domain=(getattr(row, "public_domain", None) or ""),
         player_enabled=bool(getattr(row, "player_enabled", False)),
+        player_sharing_enabled=bool(getattr(row, "player_sharing_enabled", True)),
         download_concurrency=row.download_concurrency,
         max_retries=row.max_retries,
     )

@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import { playerApi } from './playerApi'
-import { formatTime, usePlayerQueue } from './PlayerQueueContext'
-import { IconHeart, IconPlay, IconPlus } from './icons'
+import { usePlayerQueue } from './PlayerQueueContext'
+import { SongRow } from './PlayerShelves'
+import { IconPlay, IconPlus } from './icons'
 
 export function PlayerPlaylistDetailPage() {
   const { id } = useParams()
@@ -17,7 +18,6 @@ export function PlayerPlaylistDetailPage() {
     enabled: !!id,
   })
 
-  const favIds = useQuery({ queryKey: ['player-favorite-ids'], queryFn: playerApi.favoriteIds })
   const suggestions = useQuery({
     queryKey: ['player-suggestions', playlistId],
     queryFn: () => playerApi.suggestions(playlistId),
@@ -48,18 +48,6 @@ export function PlayerPlaylistDetailPage() {
       qc.invalidateQueries({ queryKey: ['player-playlists'] })
     },
   })
-  const toggleFav = useMutation({
-    mutationFn: async (trackId: number) => {
-      const liked = (favIds.data?.ids || []).includes(trackId)
-      if (liked) await playerApi.removeFavorite(trackId)
-      else await playerApi.addFavorite(trackId)
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['player-favorite-ids'] })
-      qc.invalidateQueries({ queryKey: ['player-builtins'] })
-    },
-  })
-
   if (isLoading) return <p className="muted">Loading…</p>
   if (error) return <p className="error">{(error as Error).message}</p>
   if (!data) return null
@@ -90,7 +78,7 @@ export function PlayerPlaylistDetailPage() {
             className="btn"
             type="button"
             disabled={!data.tracks.length}
-            onClick={() => q.playTracks(data.tracks, 0)}
+            onClick={() => q.playTracks(data.tracks, 0, data.name)}
           >
             <IconPlay size={16} /> Play all
           </button>
@@ -148,46 +136,18 @@ export function PlayerPlaylistDetailPage() {
         </section>
       )}
 
-      <div className="track-list">
-        {data.tracks.map((t, i) => {
-          const liked = (favIds.data?.ids || []).includes(t.id)
-          return (
-            <div key={t.id} className="track-row">
-              <span className="track-no">{i + 1}</span>
-              {t.cover_url ? <img src={t.cover_url} alt="" className="track-art" /> : <div className="track-art q-art" />}
-              <div className="track-info">
-                <strong>{t.title}</strong>
-                <span className="muted">
-                  {t.artist_name}
-                  {(t.format === 'flac' || t.quality === 'flac') && (
-                    <span className="badge flac" style={{ marginLeft: 6 }}>
-                      FLAC
-                    </span>
-                  )}
-                </span>
-              </div>
-              <span className="muted tiny">{formatTime(t.duration)}</span>
-              <div className="row-actions">
-                <button type="button" className="pill-icon-btn" aria-label="Play" onClick={() => q.playTrack(t, data.tracks)}>
-                  <IconPlay size={16} />
-                </button>
-                <button
-                  type="button"
-                  className={`pill-icon-btn heart${liked ? ' on' : ''}`}
-                  aria-label="Like"
-                  onClick={() => toggleFav.mutate(t.id)}
-                >
-                  <IconHeart filled={liked} size={16} />
-                </button>
-                {!data.builtin && (
-                  <button type="button" className="pill-icon-btn" onClick={() => remove.mutate(t.id)}>
-                    ×
-                  </button>
-                )}
-              </div>
-            </div>
-          )
-        })}
+      <div className="am-song-list bordered">
+        {data.tracks.map((t, i) => (
+          <SongRow
+            key={t.id}
+            track={t}
+            queue={data.tracks}
+            sourceLabel={data.name}
+            number={i + 1}
+            onRemove={data.builtin ? undefined : () => remove.mutate(t.id)}
+            removeLabel="Remove from playlist"
+          />
+        ))}
       </div>
     </div>
   )

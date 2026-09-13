@@ -67,6 +67,7 @@ class AppSettings(Base):
     ssl_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     public_domain: Mapped[str] = mapped_column(String(512), default="")
     player_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    player_sharing_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     download_concurrency: Mapped[int] = mapped_column(Integer, default=1)
     max_retries: Mapped[int] = mapped_column(Integer, default=3)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -201,6 +202,20 @@ class PlayerUser(Base):
     wave_thickness: Mapped[float] = mapped_column(Float, default=3.0)
     wave_color: Mapped[str] = mapped_column(String(32), default="#3dba7a")
     wave_flatten_when_paused: Mapped[bool] = mapped_column(Boolean, default=True)
+    avatar_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    pinned_playlist_ids: Mapped[str] = mapped_column(Text, default="[]")
+    crossfade_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    show_recommended: Mapped[bool] = mapped_column(Boolean, default=True)
+    show_recently_added: Mapped[bool] = mapped_column(Boolean, default=True)
+    default_shuffle: Mapped[bool] = mapped_column(Boolean, default=False)
+    default_repeat: Mapped[str] = mapped_column(String(16), default="off")
+    continue_album_id: Mapped[int | None] = mapped_column(
+        ForeignKey("albums.id", ondelete="SET NULL"), nullable=True
+    )
+    continue_track_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tracks.id", ondelete="SET NULL"), nullable=True
+    )
+    continue_position: Mapped[float] = mapped_column(Float, default=0.0)
 
     playlists: Mapped[list["PlayerPlaylist"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
@@ -281,3 +296,23 @@ class PlayerPlayEvent(Base):
     played_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
     track: Mapped["Track"] = relationship()
+
+
+class PlayerShareLink(Base):
+    __tablename__ = "player_share_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    track_id: Mapped[int] = mapped_column(
+        ForeignKey("tracks.id", ondelete="CASCADE"), index=True
+    )
+    created_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("player_users.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    play_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    track: Mapped["Track"] = relationship()
+    created_by: Mapped["PlayerUser"] = relationship()

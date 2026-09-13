@@ -45,6 +45,7 @@ class SettingsOut(BaseModel):
     ssl_enabled: bool = False
     public_domain: str = ""
     player_enabled: bool = False
+    player_sharing_enabled: bool = True
     download_concurrency: int
     max_retries: int
     provider_ok: bool | None = None
@@ -87,6 +88,7 @@ class SettingsUpdate(BaseModel):
     ssl_enabled: bool | None = None
     public_domain: str | None = None
     player_enabled: bool | None = None
+    player_sharing_enabled: bool | None = None
     download_concurrency: int | None = Field(default=None, ge=1, le=4)
     max_retries: int | None = Field(default=None, ge=0, le=10)
 
@@ -319,6 +321,7 @@ class PlayerUserOut(BaseModel):
     display_name: str = ""
     is_active: bool = True
     created_at: datetime
+    avatar_url: str | None = None
 
     class Config:
         from_attributes = True
@@ -347,6 +350,7 @@ class PlayerAuthStatus(BaseModel):
     username: str | None = None
     user_id: int | None = None
     display_name: str | None = None
+    avatar_url: str | None = None
 
 
 class PlayerTrackOut(BaseModel):
@@ -423,6 +427,12 @@ class PlayerPrefsOut(BaseModel):
     wave_thickness: float = 3.0
     wave_color: str = "#3dba7a"
     wave_flatten_when_paused: bool = True
+    pinned_playlist_ids: list[int] = []
+    crossfade_enabled: bool = False
+    show_recommended: bool = True
+    show_recently_added: bool = True
+    default_shuffle: bool = False
+    default_repeat: str = "off"
 
 
 class PlayerPrefsUpdate(BaseModel):
@@ -434,6 +444,70 @@ class PlayerPrefsUpdate(BaseModel):
     wave_thickness: float | None = Field(default=None, ge=1, le=12)
     wave_color: str | None = Field(default=None, max_length=32)
     wave_flatten_when_paused: bool | None = None
+    pinned_playlist_ids: list[int] | None = None
+    crossfade_enabled: bool | None = None
+    show_recommended: bool | None = None
+    show_recently_added: bool | None = None
+    default_shuffle: bool | None = None
+    default_repeat: str | None = None
+
+
+class PlayerArtistDetailOut(BaseModel):
+    id: int
+    name: str
+    image_url: str | None = None
+    album_count: int = 0
+    featured_album: PlayerAlbumOut | None = None
+    top_songs: list[PlayerTrackOut] = []
+    essential_albums: list[PlayerAlbumOut] = []
+    albums: list[PlayerAlbumOut] = []
+
+
+class PlayerSearchGroupedOut(BaseModel):
+    top: PlayerTrackOut | None = None
+    songs: list[PlayerTrackOut] = []
+    albums: list[PlayerAlbumOut] = []
+    artists: list[PlayerArtistOut] = []
+
+
+class PlayerShareCreate(BaseModel):
+    track_id: int
+
+
+class PlayerShareOut(BaseModel):
+    token: str
+    url: str
+    expires_at: datetime
+    track_title: str = ""
+    artist_name: str = ""
+    cover_url: str | None = None
+    play_count: int = 0
+    revoked: bool = False
+    created_at: datetime
+
+
+class PlayerSharePublicOut(BaseModel):
+    title: str
+    artist: str
+    album: str = ""
+    cover_url: str | None = None
+    duration: int = 0
+    shared_by_display_name: str = ""
+    shared_by_avatar_url: str | None = None
+
+
+class PlayerContinueOut(BaseModel):
+    album: PlayerAlbumOut | None = None
+    track: PlayerTrackOut | None = None
+    position: float = 0
+    source_label: str = ""
+
+
+class PlayerLibrarySongsPage(BaseModel):
+    items: list[PlayerTrackOut]
+    total: int
+    offset: int
+    limit: int
 
 
 class PlayerPlayingUpdate(BaseModel):

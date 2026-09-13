@@ -275,9 +275,26 @@ def _upsert_track(
             track.isrc = isrc
         if title and not track.title:
             track.title = title
+        if not track.duration:
+            try:
+                audio = MutagenFile(path)
+                length = getattr(getattr(audio, "info", None), "length", None)
+                if length and length > 0:
+                    track.duration = int(round(float(length)))
+            except Exception:  # noqa: BLE001
+                pass
         return track
 
     from app.services.artists import _legacy_id
+
+    duration = 0
+    try:
+        audio = MutagenFile(path)
+        length = getattr(getattr(audio, "info", None), "length", None)
+        if length and length > 0:
+            duration = int(round(float(length)))
+    except Exception:  # noqa: BLE001
+        pass
 
     pid = f"{album.provider_id}-t{disc_no}-{track_no or len(tracks)+1}-{_slug_id(title)[:20]}"
     track = Track(
@@ -288,7 +305,7 @@ def _upsert_track(
         title=title,
         track_no=track_no or 0,
         disc_no=disc_no or 1,
-        duration=0,
+        duration=duration,
         isrc=isrc,
         path=path,
     )

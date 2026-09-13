@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   IconHeart,
+  IconMoon,
   IconNext,
   IconPause,
   IconPlay,
@@ -11,7 +12,13 @@ import {
   IconShuffle,
 } from './icons'
 import { DEFAULT_PREFS, playerApi } from './playerApi'
-import { formatTime, usePlayerQueue } from './PlayerQueueContext'
+import { ExpandedNowPlaying } from './ExpandedNowPlaying'
+import {
+  TOGGLE_LOVE_EVENT,
+  TOGGLE_QUEUE_EVENT,
+  formatTime,
+  usePlayerQueue,
+} from './PlayerQueueContext'
 import { QueueDrawer } from './QueueDrawer'
 import { WavySeekBar } from './WavySeekBar'
 
@@ -19,6 +26,7 @@ export function WavyPlayBar() {
   const q = usePlayerQueue()
   const qc = useQueryClient()
   const [queueOpen, setQueueOpen] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const track = q.tracks[q.index]
   const prefs = useQuery({
     queryKey: ['player-prefs'],
@@ -43,6 +51,22 @@ export function WavyPlayBar() {
     },
   })
 
+  const loveRef = useRef(toggleFav.mutate)
+  useEffect(() => {
+    loveRef.current = toggleFav.mutate
+  }, [toggleFav.mutate])
+
+  useEffect(() => {
+    const onToggleQueue = () => setQueueOpen((o) => !o)
+    const onToggleLove = () => loveRef.current()
+    window.addEventListener(TOGGLE_QUEUE_EVENT, onToggleQueue)
+    window.addEventListener(TOGGLE_LOVE_EVENT, onToggleLove)
+    return () => {
+      window.removeEventListener(TOGGLE_QUEUE_EVENT, onToggleQueue)
+      window.removeEventListener(TOGGLE_LOVE_EVENT, onToggleLove)
+    }
+  }, [])
+
   const wave = prefs.data || DEFAULT_PREFS
   const isFlac = track && (track.format === 'flac' || track.quality === 'flac')
 
@@ -52,17 +76,27 @@ export function WavyPlayBar() {
         {track ? (
           <>
             <div className="pill-meta">
-              {track.cover_url ? (
-                <img src={track.cover_url} alt="" className="pill-art" key={track.id} />
-              ) : (
-                <div className="pill-art placeholder" />
-              )}
+              <button
+                type="button"
+                className="pill-art-btn"
+                aria-label="Expand now playing"
+                onClick={() => setExpanded(true)}
+              >
+                {track.cover_url ? (
+                  <img src={track.cover_url} alt="" className="pill-art" key={track.id} />
+                ) : (
+                  <div className="pill-art placeholder" />
+                )}
+              </button>
               <div className="pill-text">
                 <div className="pill-title">{track.title}</div>
                 <div className="pill-sub">
                   {track.artist_name}
                   {isFlac && <span className="badge flac">FLAC</span>}
                 </div>
+                {q.sourceLabel && (
+                  <div className="pill-source">Playing from {q.sourceLabel}</div>
+                )}
               </div>
               <button
                 type="button"
@@ -129,6 +163,15 @@ export function WavyPlayBar() {
               />
               <button
                 type="button"
+                className={`pill-icon-btn${q.sleepMode != null ? ' on' : ''}`}
+                aria-label="Sleep timer"
+                title="Sleep timer"
+                onClick={() => setExpanded(true)}
+              >
+                <IconMoon size={18} />
+              </button>
+              <button
+                type="button"
                 className="pill-icon-btn"
                 aria-label="Queue"
                 onClick={() => setQueueOpen((o) => !o)}
@@ -143,6 +186,7 @@ export function WavyPlayBar() {
       </div>
 
       {queueOpen && <QueueDrawer onClose={() => setQueueOpen(false)} />}
+      {expanded && track && <ExpandedNowPlaying onClose={() => setExpanded(false)} />}
     </>
   )
 }

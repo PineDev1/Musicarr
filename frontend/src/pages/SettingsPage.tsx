@@ -91,6 +91,7 @@ export function SettingsPage() {
   const [sslEnabled, setSslEnabled] = useState(false)
   const [publicDomain, setPublicDomain] = useState('')
   const [playerEnabled, setPlayerEnabled] = useState(false)
+  const [playerSharingEnabled, setPlayerSharingEnabled] = useState(true)
   const [newPlayerUser, setNewPlayerUser] = useState('')
   const [newPlayerPass, setNewPlayerPass] = useState('')
   const [newPlayerDisplay, setNewPlayerDisplay] = useState('')
@@ -132,6 +133,7 @@ export function SettingsPage() {
     setSslEnabled(data.ssl_enabled ?? false)
     setPublicDomain(data.public_domain || '')
     setPlayerEnabled(data.player_enabled ?? false)
+    setPlayerSharingEnabled(data.player_sharing_enabled ?? true)
     setQobuzEmail(data.qobuz_email || '')
     setQobuzUserId(data.qobuz_user_id || '')
     setQobuzAppId(data.qobuz_app_id || '950096963')
@@ -171,6 +173,7 @@ export function SettingsPage() {
         ssl_enabled: sslEnabled,
         public_domain: publicDomain.trim(),
         player_enabled: playerEnabled,
+        player_sharing_enabled: playerSharingEnabled,
         qobuz_app_id: qobuzAppId,
       }
       if (arl.trim()) body.arl = arl.trim()
@@ -924,6 +927,15 @@ export function SettingsPage() {
                     onChange={(e) => setPlayerEnabled(e.target.checked)}
                   />
                   Enable music player (/player)
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={playerSharingEnabled}
+                    onChange={(e) => setPlayerSharingEnabled(e.target.checked)}
+                    disabled={!playerEnabled}
+                  />
+                  Allow listeners to create public share links (/s/…)
                 </label>
               </div>
             </div>

@@ -52,6 +52,7 @@ export type Settings = {
   ssl_enabled: boolean
   public_domain: string
   player_enabled: boolean
+  player_sharing_enabled: boolean
   download_concurrency: number
   max_retries: number
   provider_ok: boolean | null

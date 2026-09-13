@@ -4,6 +4,7 @@ export type PlayerAuthStatus = {
   username: string | null
   user_id: number | null
   display_name: string | null
+  avatar_url: string | null
 }
 
 export type PlayerUser = {
@@ -48,6 +49,58 @@ export type PlayerArtist = {
   album_count: number
 }
 
+export type PlayerArtistDetail = PlayerArtist & {
+  featured_album: PlayerAlbum | null
+  top_songs: PlayerTrack[]
+  essential_albums: PlayerAlbum[]
+  albums: PlayerAlbum[]
+}
+
+export type PlayerSearchGrouped = {
+  top: PlayerTrack | null
+  songs: PlayerTrack[]
+  albums: PlayerAlbum[]
+  artists: PlayerArtist[]
+}
+
+export type PlayerShare = {
+  token: string
+  url: string
+  expires_at: string
+  track_title: string
+  artist_name: string
+  cover_url: string | null
+  play_count: number
+  revoked: boolean
+  created_at: string
+}
+
+export type PlayerSharePublic = {
+  title: string
+  artist: string
+  album: string
+  cover_url: string | null
+  duration: number
+  shared_by_display_name: string
+  shared_by_avatar_url: string | null
+}
+
+export type PlayerContinue = {
+  album: PlayerAlbum | null
+  track: PlayerTrack | null
+  position: number
+  source_label: string
+}
+
+export type PlayerSongsPage = {
+  items: PlayerTrack[]
+  total: number
+  offset: number
+  limit: number
+}
+
+export type PlayerRepeatMode = 'off' | 'all' | 'one'
+
 export type PlayerPlaylist = {
   id: number | string
   name: string
@@ -69,6 +122,12 @@ export type PlayerPrefs = {
   wave_thickness: number
   wave_color: string
   wave_flatten_when_paused: boolean
+  pinned_playlist_ids: number[]
+  crossfade_enabled: boolean
+  show_recommended: boolean
+  show_recently_added: boolean
+  default_shuffle: boolean
+  default_repeat: PlayerRepeatMode
 }
 
 export type NowPlayingRow = {
@@ -113,6 +172,12 @@ export const DEFAULT_PREFS: PlayerPrefs = {
   wave_thickness: 3,
   wave_color: '#3dba7a',
   wave_flatten_when_paused: true,
+  pinned_playlist_ids: [],
+  crossfade_enabled: false,
+  show_recommended: true,
+  show_recently_added: true,
+  default_shuffle: false,
+  default_repeat: 'off',
 }
 
 export const playerApi = {
@@ -147,9 +212,22 @@ export const playerApi = {
     request<PlayerUser>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteUser: (id: number) => request<{ ok: boolean }>(`/users/${id}`, { method: 'DELETE' }),
   artists: () => request<PlayerArtist[]>('/artists'),
+  artistDetail: (id: number) => request<PlayerArtistDetail>(`/artists/${id}`),
   artistAlbums: (id: number) => request<PlayerAlbum[]>(`/artists/${id}/albums`),
   album: (id: number) => request<PlayerAlbum>(`/albums/${id}`),
   search: (q: string) => request<PlayerTrack[]>(`/search?q=${encodeURIComponent(q)}`),
+  searchGrouped: (q: string) =>
+    request<PlayerSearchGrouped>(`/search?grouped=1&q=${encodeURIComponent(q)}`),
+  recommended: () => request<PlayerTrack[]>('/library/recommended'),
+  libraryAlbums: (sort: 'recent' | 'name' | 'year' = 'recent') =>
+    request<PlayerAlbum[]>(`/library/albums?sort=${encodeURIComponent(sort)}`),
+  librarySongs: ({ q = '', offset = 0, limit = 50 }: { q?: string; offset?: number; limit?: number } = {}) =>
+    request<PlayerSongsPage>(
+      `/library/songs?q=${encodeURIComponent(q)}&offset=${offset}&limit=${limit}`,
+    ),
+  continueListening: () => request<PlayerContinue>('/library/continue'),
+  listenHistory: () => request<PlayerPlaylist>('/library/history'),
+  clearHistory: () => request<{ ok: boolean }>('/library/history', { method: 'DELETE' }),
   streamUrl: (trackId: number) => `/api/player/stream/${trackId}`,
   favoriteIds: () => request<{ ids: number[] }>('/favorites/ids'),
   addFavorite: (trackId: number) =>
@@ -180,6 +258,58 @@ export const playerApi = {
   removeFromPlaylist: (id: number, trackId: number) =>
     request<{ ok: boolean }>(`/playlists/${id}/tracks/${trackId}`, { method: 'DELETE' }),
   suggestions: (id: number) => request<PlayerTrack[]>(`/playlists/${id}/suggestions`),
+  uploadAvatar: async (file: File) => {
+    const body = new FormData()
+    body.append('file', file)
+    // Browser sets the multipart boundary — never send an explicit Content-Type here.
+    const res = await fetch('/api/player/me/avatar', {
+      method: 'POST',
+      credentials: 'include',
+      body,
+    })
+    if (!res.ok) {
+      let detail = res.statusText
+      try {
+        const payload = await res.json()
+        detail = payload.detail || JSON.stringify(payload)
+      } catch {
+        /* ignore */
+      }
+      throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+    }
+    return (await res.json()) as { ok: boolean; avatar_url: string | null }
+  },
+  deleteAvatar: () => request<{ ok: boolean }>('/me/avatar', { method: 'DELETE' }),
+  avatarUrl: (userId: number) => `/api/player/avatars/${userId}`,
+  createShare: (trackId: number) =>
+    request<PlayerShare>('/shares', {
+      method: 'POST',
+      body: JSON.stringify({ track_id: trackId }),
+    }),
+  listShares: () => request<PlayerShare[]>('/shares'),
+  revokeShare: (token: string) =>
+    request<{ ok: boolean }>(`/shares/${encodeURIComponent(token)}`, { method: 'DELETE' }),
+  /** Absolute share page URL for the host the user is currently on. */
+  sharePageUrl: (token: string) =>
+    `${typeof window !== 'undefined' ? window.location.origin : ''}/s/${encodeURIComponent(token)}`,
+  shareMeta: async (token: string) => {
+    // Public endpoint — no session cookies required (avoids auth-gate confusion).
+    const res = await fetch(`/api/player/share/${encodeURIComponent(token)}`, {
+      credentials: 'omit',
+    })
+    if (!res.ok) {
+      let detail = res.statusText
+      try {
+        const body = await res.json()
+        detail = body.detail || JSON.stringify(body)
+      } catch {
+        /* ignore */
+      }
+      throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+    }
+    return res.json() as Promise<PlayerSharePublic>
+  },
+  shareStreamUrl: (token: string) => `/api/player/share/${encodeURIComponent(token)}/stream`,
   nowPlaying: () => request<NowPlayingRow[]>('/admin/now-playing'),
   stopListener: (userId: number) =>
     request<{ ok: boolean }>(`/admin/now-playing/${userId}/stop`, { method: 'POST' }),
