@@ -6,6 +6,13 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
 from app.models import Album, Artist, HistoryEvent, Track  # noqa: F401 — register tables
+from app.models import (  # noqa: F401
+    AppSettings,
+    DownloadClient,
+    DownloadJob,
+    Indexer,
+    RemotePathMapping,
+)
 
 
 @pytest.fixture()

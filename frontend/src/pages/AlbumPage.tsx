@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useState } from 'react'
 import { api } from '../api'
 import { useToast } from '../Toast'
+import { ReleaseSearchModal } from './ReleaseSearchModal'
 
 function formatDuration(sec: number) {
   if (!sec) return '—'
@@ -16,17 +18,26 @@ export function AlbumPage() {
   const qc = useQueryClient()
   const toast = useToast()
   const navigate = useNavigate()
+  const [searchOpen, setSearchOpen] = useState(false)
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['album', albumId],
     queryFn: () => api.album(albumId),
     enabled: Number.isFinite(albumId),
   })
+  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.settings(false) })
+  const preferred = settings.data?.preferred_download_method || 'streaming'
+  const streamingMethod =
+    preferred === 'indexer' ? 'streaming' : preferred.startsWith('streaming') ? preferred : 'streaming'
 
   const download = useMutation({
-    mutationFn: (upgrade: boolean) => api.downloadAlbum(albumId, upgrade),
-    onSuccess: () => {
-      toast.push('Queued download', 'ok')
+    mutationFn: (upgrade: boolean) => api.downloadAlbum(albumId, upgrade, streamingMethod),
+    onSuccess: (res) => {
+      if (!res.queued) {
+        toast.push('Could not queue streaming download', 'error')
+        return
+      }
+      toast.push('Queued streaming download', 'ok')
       qc.invalidateQueries({ queryKey: ['queue'] })
       qc.invalidateQueries({ queryKey: ['album', albumId] })
       qc.invalidateQueries({ queryKey: ['upgradable'] })
@@ -113,6 +124,9 @@ export function AlbumPage() {
             Download
           </button>
         )}
+        <button className="btn secondary" type="button" onClick={() => setSearchOpen(true)}>
+          Search indexers
+        </button>
         {isDownloaded && data.upgrade_available && (
           <button className="btn" onClick={() => download.mutate(true)} disabled={download.isPending}>
             Upgrade quality
@@ -202,6 +216,14 @@ export function AlbumPage() {
           )}
         </tbody>
       </table>
+
+      {searchOpen && (
+        <ReleaseSearchModal
+          albumId={data.id}
+          albumLabel={`${data.artist_name || 'Artist'} – ${data.title}`}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
     </div>
   )
 }

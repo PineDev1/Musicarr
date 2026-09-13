@@ -1,27 +1,39 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
-from app.models import Album, DownloadClient, Indexer, RemotePathMapping
+from app.models import Album, DownloadClient, DownloadJob, Indexer, RemotePathMapping
 from app.models.schemas import (
+    AcquisitionStatusOut,
     DownloadClientCreate,
     DownloadClientOut,
+    DownloadClientTestDraft,
     DownloadClientUpdate,
     IndexerCreate,
     IndexerOut,
     IndexerUpdate,
     ReleaseCandidateOut,
+    ReleaseGrabRequest,
     RemotePathMappingCreate,
     RemotePathMappingOut,
     RemotePathMappingUpdate,
     TestResultOut,
 )
-from app.services.download_clients import DownloadClientError, get_client
+from app.services.download_clients import (
+    DownloadClientError,
+    base_url,
+    client_from_params,
+    get_client,
+    pick_client,
+)
+from app.services.history import add_history
 from app.services.indexers.newznab import test_indexer
 from app.services.indexers.search import parse_categories
 
@@ -43,20 +55,29 @@ def _indexer_out(row: Indexer) -> IndexerOut:
 
 
 def _client_out(row: DownloadClient) -> DownloadClientOut:
+    host = row.host or ""
+    port = int(row.port or 0)
+    use_ssl = bool(row.use_ssl)
+    try:
+        constructed = base_url(host, port, use_ssl)
+    except Exception:  # noqa: BLE001
+        constructed = f"{'https' if use_ssl else 'http'}://{host}:{port}"
     return DownloadClientOut(
         id=row.id,
         name=row.name or "",
         protocol=row.protocol or "torrent",
         implementation=row.implementation or "qbittorrent",
-        host=row.host or "",
-        port=int(row.port or 0),
-        use_ssl=bool(row.use_ssl),
+        host=host,
+        port=port,
+        use_ssl=use_ssl,
+        verify_ssl=bool(getattr(row, "verify_ssl", True)),
         username=row.username or "",
         password_set=bool((row.password or "").strip()),
         api_key_set=bool((row.api_key or "").strip()),
         category=row.category or "",
         enabled=bool(row.enabled),
         priority=int(row.priority or 1),
+        base_url=constructed,
     )
 
 
@@ -66,6 +87,62 @@ def _mapping_out(row: RemotePathMapping) -> RemotePathMappingOut:
         host=row.host or "",
         remote_path=row.remote_path or "",
         local_path=row.local_path or "",
+    )
+
+
+def _path_mapping_note(db: Session) -> str:
+    mappings = list(db.scalars(select(RemotePathMapping)).all())
+    if not mappings:
+        return (
+            " Connected, but no remote path mappings are configured — "
+            "completed downloads may not import until you map the client path "
+            "to a folder Musicarr can see."
+        )
+    unread: list[str] = []
+    for m in mappings:
+        local = Path((m.local_path or "").strip())
+        if local and not local.exists():
+            unread.append(str(local))
+    if unread:
+        return (
+            " Connected, but some mapped local paths are not visible here: "
+            + ", ".join(unread[:3])
+        )
+    return ""
+
+
+# -- status ----------------------------------------------------------------
+@router.get("/status", response_model=AcquisitionStatusOut)
+def acquisition_status(db: Session = Depends(get_db)):
+    indexers = list(
+        db.scalars(select(Indexer).where(Indexer.enabled.is_(True))).all()
+    )
+    clients = list(
+        db.scalars(select(DownloadClient).where(DownloadClient.enabled.is_(True))).all()
+    )
+    mappings = list(db.scalars(select(RemotePathMapping)).all())
+    torrent = any((c.protocol or "").lower() == "torrent" for c in clients)
+    usenet = any((c.protocol or "").lower() == "usenet" for c in clients)
+    messages: list[str] = []
+    if not indexers:
+        messages.append("No enabled indexers — add one under Settings → Indexers.")
+    if not torrent and not usenet:
+        messages.append("No enabled download clients — add qBittorrent or SABnzbd.")
+    elif not torrent:
+        messages.append("No torrent download client — torrent releases cannot be grabbed.")
+    elif not usenet:
+        messages.append("No Usenet download client — NZB releases cannot be grabbed.")
+    if clients and not mappings:
+        messages.append(
+            "No remote path mappings — mount the same download volume and map "
+            "client path → Musicarr path."
+        )
+    return AcquisitionStatusOut(
+        indexers_enabled=len(indexers),
+        torrent_client=torrent,
+        usenet_client=usenet,
+        path_mappings=len(mappings),
+        messages=messages,
     )
 
 
@@ -117,7 +194,6 @@ def update_indexer(
     if "categories" in data:
         row.categories = json.dumps(data.pop("categories") or [])
     if "api_key" in data:
-        # Empty string means "leave the stored key alone".
         api_key = (data.pop("api_key") or "").strip()
         if api_key:
             row.api_key = api_key
@@ -167,6 +243,7 @@ def create_download_client(payload: DownloadClientCreate, db: Session = Depends(
         host=(payload.host or "localhost").strip(),
         port=payload.port,
         use_ssl=payload.use_ssl,
+        verify_ssl=payload.verify_ssl,
         username=(payload.username or "").strip(),
         password=payload.password or "",
         api_key=(payload.api_key or "").strip(),
@@ -198,7 +275,6 @@ def update_download_client(
     if not row:
         raise HTTPException(status_code=404, detail="Download client not found")
     data = payload.model_dump(exclude_unset=True)
-    # Blank secrets mean "keep what is stored" so the masked UI can round-trip.
     for secret in ("password", "api_key"):
         if secret in data:
             value = (data.pop(secret) or "").strip()
@@ -230,6 +306,42 @@ def test_download_client(client_id: int, db: Session = Depends(get_db)):
         ok, message = get_client(row).test()
     except DownloadClientError as exc:
         return TestResultOut(ok=False, message=str(exc))
+    if ok:
+        message = message + _path_mapping_note(db)
+    return TestResultOut(ok=ok, message=message)
+
+
+@router.post("/download-clients/test-draft", response_model=TestResultOut)
+def test_download_client_draft(payload: DownloadClientTestDraft, db: Session = Depends(get_db)):
+    """Test host/creds from the form without requiring a save."""
+    password = payload.password or ""
+    api_key = (payload.api_key or "").strip()
+    username = (payload.username or "").strip()
+    if payload.client_id:
+        existing = db.get(DownloadClient, payload.client_id)
+        if existing:
+            if not password:
+                password = existing.password or ""
+            if not api_key:
+                api_key = existing.api_key or ""
+            if not username and existing.username:
+                username = existing.username or ""
+    try:
+        client = client_from_params(
+            implementation=payload.implementation,
+            host=payload.host,
+            port=payload.port,
+            use_ssl=payload.use_ssl,
+            verify_ssl=payload.verify_ssl,
+            username=username,
+            password=password,
+            api_key=api_key,
+        )
+        ok, message = client.test()
+    except DownloadClientError as exc:
+        return TestResultOut(ok=False, message=str(exc))
+    if ok:
+        message = message + _path_mapping_note(db)
     return TestResultOut(ok=ok, message=message)
 
 
@@ -279,7 +391,7 @@ def delete_path_mapping(mapping_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-# -- manual release search -------------------------------------------------
+# -- manual release search / grab -----------------------------------------
 @router.get("/releases/search", response_model=list[ReleaseCandidateOut])
 def search_releases(
     album_id: int = Query(...),
@@ -302,12 +414,124 @@ def search_releases(
             protocol=c.protocol,
             download_url=c.download_url,
             magnet_url=c.magnet_url,
+            grab_url=c.grab_url,
             indexer_id=c.indexer_id,
             indexer_name=c.indexer_name,
             score=c.score,
         )
         for c in candidates
     ]
+
+
+@router.post("/releases/grab")
+def grab_release(payload: ReleaseGrabRequest, db: Session = Depends(get_db)):
+    """Send a user-selected release to the matching download client."""
+    album = db.scalar(
+        select(Album).options(joinedload(Album.artist), joinedload(Album.tracks)).where(
+            Album.id == payload.album_id
+        )
+    )
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    grab_url = (payload.grab_url or "").strip()
+    if not grab_url:
+        raise HTTPException(status_code=400, detail="grab_url is required")
+
+    protocol = (payload.protocol or "torrent").lower()
+    client_row = pick_client(db, protocol)
+    if not client_row:
+        label = "qBittorrent" if protocol == "torrent" else "SABnzbd"
+        raise HTTPException(
+            status_code=400,
+            detail=f"No enabled {protocol} download client. Add {label} under Settings → Download clients.",
+        )
+
+    # Preflight: confirm the client still answers.
+    try:
+        ok, message = get_client(client_row).test()
+    except DownloadClientError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Download client '{client_row.name}' failed: {exc}",
+        ) from exc
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Download client '{client_row.name}' failed: {message}",
+        )
+
+    artist = album.artist
+    artist_name = artist.name if artist else ""
+
+    # Avoid duplicate active indexer jobs for the same album.
+    active = db.scalar(
+        select(DownloadJob).where(
+            DownloadJob.album_id == album.id,
+            DownloadJob.source == "indexer",
+            DownloadJob.state.in_(["grabbed", "downloading", "importing"]),
+        )
+    )
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail="An indexer download is already in progress for this album",
+        )
+
+    client = get_client(client_row)
+    try:
+        item_id = client.add_url(grab_url, client_row.category or "")
+    except DownloadClientError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        closer = getattr(client, "close", None)
+        if callable(closer):
+            closer()
+
+    try:
+        from app.services.artists import sync_album_tracks
+
+        if not album.tracks:
+            sync_album_tracks(db, album)
+    except Exception:  # noqa: BLE001
+        pass
+
+    job = DownloadJob(
+        target_type="album",
+        target_id=album.id,
+        album_id=album.id,
+        artist_name=artist_name,
+        album_title=album.title,
+        state="grabbed",
+        source="indexer",
+        indexer_id=payload.indexer_id,
+        client_id=client_row.id,
+        release_title=(payload.title or "").strip()[:1024],
+        download_url=grab_url,
+        client_item_id=item_id,
+        progress=1.0,
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    add_history(
+        db,
+        "grabbed",
+        f"Grabbed '{job.release_title or 'release'}' for {artist_name} – {album.title} "
+        f"(sent to {client_row.name})",
+    )
+    from app.services.download_queue import download_queue
+
+    download_queue.wake()
+
+    return {
+        "ok": True,
+        "job_id": job.id,
+        "client": client_row.name,
+        "client_item_id": item_id,
+    }
 
 
 @router.post("/completed/scan")

@@ -8,7 +8,7 @@ Self-hosted music library manager with a sharp web UI — grab discographies fro
   ♫  Musicarr  ·  library OS vibes  ·  port 8787
 ```
 
-**Author:** [PineDev1](https://github.com/PineDev1) · **Latest:** [v1.4](https://github.com/PineDev1/Musicarr/releases/tag/v1.4)
+**Author:** [PineDev1](https://github.com/PineDev1) · **Latest:** [v1.5](https://github.com/PineDev1/Musicarr/releases/tag/v1.5)
 
 ---
 
@@ -119,7 +119,7 @@ docker compose up -d --build
 Or pull the prebuilt image:
 
 ```bash
-docker pull ghcr.io/pinedev1/musicarr:1.4
+docker pull ghcr.io/pinedev1/musicarr:1.5
 ```
 
 ### 5. Logs / stop
@@ -168,7 +168,7 @@ Player users cannot download, manage Wanted/Queue, or change admin settings.
 ### Build locally
 
 ```bash
-docker build -t musicarr:1.4 .
+docker build -t musicarr:1.5 .
 ```
 
 Run without Compose:
@@ -181,21 +181,21 @@ docker run -d --name musicarr \
   -v "$(pwd)/music:/music" \
   -e MUSICARR_DATA_DIR=/config \
   -e MUSICARR_MUSIC_DIR=/music \
-  musicarr:1.4
+  musicarr:1.5
 ```
 
 ### GitHub Container Registry
 
 ```bash
 echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u PineDev1 --password-stdin
-docker pull ghcr.io/pinedev1/musicarr:1.4
+docker pull ghcr.io/pinedev1/musicarr:1.5
 docker pull ghcr.io/pinedev1/musicarr:latest
 ```
 
 ```bash
 docker run -d --name musicarr -p 8787:8787 \
   -v "$(pwd)/data:/config" -v "$(pwd)/music:/music" \
-  ghcr.io/pinedev1/musicarr:1.4
+  ghcr.io/pinedev1/musicarr:1.5
 ```
 
 ---
@@ -273,6 +273,13 @@ Supported audio: `.flac` `.mp3` `.m4a` `.ogg` `.opus` `.wav` `.aac` `.aiff`
 
 ## What's new
 
+### v1.5 — Lidarr-style release search
+
+- **Manual indexer grabs only** — Search indexers UI on Wanted / Artist / Album; pick a release, then Grab
+- **Download-client connectivity** — Docker-safe hosts, qBittorrent login/CSRF fixes, edit + draft Test, path-mapping readiness
+- **Acquisition health** — setup banner, grab preflight, Queue “Search again”
+- **Qobuz** — app ID/secret required in Settings (no hardcoded defaults)
+
 ### v1.4 — Indexers + artist identity
 
 - **Indexers + download clients** — Newznab/Torznab (Prowlarr), qBittorrent, and SABnzbd with remote path mapping and completed-download import
@@ -326,11 +333,12 @@ v2.0 moves Musicarr from a download manager toward a **library OS**.
 
 ## Releases
 
+- **[v1.5](https://github.com/PineDev1/Musicarr/releases/tag/v1.5)** — Lidarr-style release search + download-client fixes
 - **[v1.4](https://github.com/PineDev1/Musicarr/releases/tag/v1.4)** — indexers/download clients + same-name artist identity
 - **[v1.3](https://github.com/PineDev1/Musicarr/releases/tag/v1.3)** — multi-user player, Traefik SSL, Now Playing
 - **v1.0** — initial public release
 
-See [Releases](https://github.com/PineDev1/Musicarr/releases) for tags and notes. Images: `ghcr.io/pinedev1/musicarr:1.4` · `latest`
+See [Releases](https://github.com/PineDev1/Musicarr/releases) for tags and notes. Images: `ghcr.io/pinedev1/musicarr:1.5` · `latest`
 
 ---
 

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, type DownloadJob } from '../api'
 import { useToast } from '../Toast'
+import { ReleaseSearchModal } from './ReleaseSearchModal'
 
 type LiveJob = {
   id: number
@@ -24,12 +25,17 @@ export function ArtistPage() {
   const qc = useQueryClient()
   const toast = useToast()
   const [liveJobs, setLiveJobs] = useState<LiveJob[]>([])
+  const [searchAlbum, setSearchAlbum] = useState<{ id: number; label: string } | null>(null)
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['artist', artistId],
     queryFn: () => api.artist(artistId),
     enabled: Number.isFinite(artistId),
   })
+  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.settings(false) })
+  const preferred = settings.data?.preferred_download_method || 'streaming'
+  const streamingMethod =
+    preferred === 'indexer' ? 'streaming' : preferred.startsWith('streaming') ? preferred : 'streaming'
 
   const { data: queueJobs } = useQuery({
     queryKey: ['queue'],
@@ -120,10 +126,20 @@ export function ArtistPage() {
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const downloadMissing = useMutation({
-    mutationFn: () => api.downloadMissing(artistId),
+    mutationFn: () =>
+      preferred === 'indexer'
+        ? Promise.resolve({ queued: 0 })
+        : api.downloadMissing(artistId, streamingMethod),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['queue'] })
       qc.invalidateQueries({ queryKey: ['health'] })
+      if (preferred === 'indexer') {
+        toast.push(
+          'Preferred method is manual release search — use Search indexers on each album',
+          'ok',
+        )
+        return
+      }
       toast.push(`Queued ${res.queued} album(s)`, 'ok')
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
@@ -153,11 +169,16 @@ export function ArtistPage() {
   })
   const downloadAlbum = useMutation({
     mutationFn: ({ albumId, upgrade }: { albumId: number; upgrade?: boolean }) =>
-      api.downloadAlbum(albumId, upgrade),
-    onSuccess: () => {
+      api.downloadAlbum(albumId, upgrade, streamingMethod),
+    onSuccess: (res) => {
+      if (!res.queued) {
+        toast.push('Could not queue streaming download', 'error')
+        return
+      }
       qc.invalidateQueries({ queryKey: ['queue'] })
       qc.invalidateQueries({ queryKey: ['health'] })
       qc.invalidateQueries({ queryKey: ['upgradable'] })
+      toast.push('Queued streaming download', 'ok')
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
@@ -343,13 +364,27 @@ export function ArtistPage() {
                   </button>
                 )}
                 {!downloading && album.status !== 'downloaded' && (
-                  <button
-                    className="btn secondary"
-                    onClick={() => downloadAlbum.mutate({ albumId: album.id })}
-                    disabled={downloadAlbum.isPending}
-                  >
-                    {failed ? 'Retry' : 'Download'}
-                  </button>
+                  <>
+                    <button
+                      className="btn secondary"
+                      onClick={() => downloadAlbum.mutate({ albumId: album.id })}
+                      disabled={downloadAlbum.isPending}
+                    >
+                      {failed ? 'Retry' : 'Download'}
+                    </button>
+                    <button
+                      className="btn ghost"
+                      type="button"
+                      onClick={() =>
+                        setSearchAlbum({
+                          id: album.id,
+                          label: `${data.name} – ${album.title}`,
+                        })
+                      }
+                    >
+                      Search indexers
+                    </button>
+                  </>
                 )}
                 {album.status !== 'skipped' ? (
                   <button
@@ -382,6 +417,14 @@ export function ArtistPage() {
           )
         })}
       </div>
+
+      {searchAlbum && (
+        <ReleaseSearchModal
+          albumId={searchAlbum.id}
+          albumLabel={searchAlbum.label}
+          onClose={() => setSearchAlbum(null)}
+        />
+      )}
     </div>
   )
 }

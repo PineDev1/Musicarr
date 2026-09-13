@@ -8,10 +8,66 @@ import {
 } from '../api'
 import { useToast } from '../Toast'
 
-export function AcquisitionPanels({ panel }: { panel: 'indexers' | 'clients' | 'paths' }) {
-  if (panel === 'indexers') return <IndexersPanel />
-  if (panel === 'clients') return <ClientsPanel />
-  return <PathsPanel />
+export function AcquisitionReadinessBanner({
+  onGoTo,
+}: {
+  onGoTo?: (tab: 'indexers' | 'clients' | 'paths') => void
+}) {
+  const { data } = useQuery({
+    queryKey: ['acquisition-status'],
+    queryFn: api.acquisitionStatus,
+  })
+  if (!data?.messages?.length) return null
+  return (
+    <div className="banner warn" style={{ marginBottom: '1rem' }}>
+      <strong>Acquisition setup</strong>
+      <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.2rem' }}>
+        {data.messages.map((m) => (
+          <li key={m}>{m}</li>
+        ))}
+      </ul>
+      {onGoTo && (
+        <div className="toolbar" style={{ marginTop: '0.65rem', marginBottom: 0 }}>
+          {!data.indexers_enabled && (
+            <button type="button" className="btn secondary" onClick={() => onGoTo('indexers')}>
+              Indexers
+            </button>
+          )}
+          {(!data.torrent_client || !data.usenet_client) && (
+            <button type="button" className="btn secondary" onClick={() => onGoTo('clients')}>
+              Download clients
+            </button>
+          )}
+          {!data.path_mappings && (data.torrent_client || data.usenet_client) && (
+            <button type="button" className="btn secondary" onClick={() => onGoTo('paths')}>
+              Path mappings
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function AcquisitionPanels({
+  panel,
+  onGoTo,
+}: {
+  panel: 'indexers' | 'clients' | 'paths'
+  onGoTo?: (tab: 'indexers' | 'clients' | 'paths') => void
+}) {
+  return (
+    <>
+      <AcquisitionReadinessBanner onGoTo={onGoTo} />
+      {panel === 'indexers' ? (
+        <IndexersPanel />
+      ) : panel === 'clients' ? (
+        <ClientsPanel />
+      ) : (
+        <PathsPanel />
+      )}
+    </>
+  )
 }
 
 function IndexersPanel() {
@@ -42,6 +98,7 @@ function IndexersPanel() {
       setApiKey('')
       toast.push('Indexer added', 'ok')
       qc.invalidateQueries({ queryKey: ['indexers'] })
+      qc.invalidateQueries({ queryKey: ['acquisition-status'] })
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
@@ -56,6 +113,7 @@ function IndexersPanel() {
     onSuccess: () => {
       toast.push('Indexer removed', 'ok')
       qc.invalidateQueries({ queryKey: ['indexers'] })
+      qc.invalidateQueries({ queryKey: ['acquisition-status'] })
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
@@ -180,6 +238,32 @@ function IndexerTable({
   )
 }
 
+type ClientFormState = {
+  name: string
+  implementation: string
+  host: string
+  port: number
+  username: string
+  password: string
+  apiKey: string
+  category: string
+  useSsl: boolean
+  verifySsl: boolean
+}
+
+const EMPTY_CLIENT_FORM: ClientFormState = {
+  name: '',
+  implementation: 'qbittorrent',
+  host: 'host.docker.internal',
+  port: 8080,
+  username: 'admin',
+  password: '',
+  apiKey: '',
+  category: 'musicarr',
+  useSsl: false,
+  verifySsl: true,
+}
+
 function ClientsPanel() {
   const qc = useQueryClient()
   const toast = useToast()
@@ -187,81 +271,142 @@ function ClientsPanel() {
     queryKey: ['download-clients'],
     queryFn: api.downloadClients,
   })
-  const [name, setName] = useState('')
-  const [implementation, setImplementation] = useState('qbittorrent')
-  const [host, setHost] = useState('localhost')
-  const [port, setPort] = useState(8080)
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [apiKey, setApiKey] = useState('')
-  const [category, setCategory] = useState('musicarr')
-  const [useSsl, setUseSsl] = useState(false)
+  const [form, setForm] = useState<ClientFormState>(EMPTY_CLIENT_FORM)
+  const [editingId, setEditingId] = useState<number | null>(null)
 
-  const create = useMutation({
-    mutationFn: () =>
-      api.createDownloadClient({
-        name: name.trim(),
-        implementation,
-        protocol: implementation === 'sabnzbd' ? 'usenet' : 'torrent',
-        host: host.trim(),
-        port,
-        use_ssl: useSsl,
-        username: username.trim(),
-        password: password,
-        api_key: apiKey.trim(),
-        category: category.trim() || 'musicarr',
-        enabled: true,
-        priority: 1,
-      }),
-    onSuccess: () => {
-      setName('')
-      setPassword('')
-      setApiKey('')
-      toast.push('Download client added', 'ok')
+  const saveBody = () => {
+    const body: Record<string, unknown> = {
+      name: form.name.trim() || 'Draft',
+      implementation: form.implementation,
+      protocol: form.implementation === 'sabnzbd' ? 'usenet' : 'torrent',
+      host: form.host.trim(),
+      port: form.port,
+      use_ssl: form.useSsl,
+      verify_ssl: form.verifySsl,
+      username: form.username.trim(),
+      category: form.category.trim() || 'musicarr',
+      enabled: true,
+      priority: 1,
+    }
+    if (form.password) body.password = form.password
+    else if (!editingId) body.password = ''
+    if (form.apiKey) body.api_key = form.apiKey
+    else if (!editingId) body.api_key = ''
+    return body
+  }
+
+  const testDraftBody = () => ({
+    implementation: form.implementation,
+    host: form.host.trim(),
+    port: form.port,
+    use_ssl: form.useSsl,
+    verify_ssl: form.verifySsl,
+    username: form.username.trim(),
+    password: form.password,
+    api_key: form.apiKey.trim(),
+    ...(editingId ? { client_id: editingId } : {}),
+  })
+
+  const resetForm = () => {
+    setForm(EMPTY_CLIENT_FORM)
+    setEditingId(null)
+  }
+
+  const save = useMutation({
+    mutationFn: () => {
+      const body = saveBody()
+      if (editingId) return api.updateDownloadClient(editingId, body)
+      return api.createDownloadClient(body)
+    },
+    onSuccess: (row) => {
+      toast.push(
+        editingId
+          ? `Client updated · ${row.base_url || ''}`
+          : `Client added · ${row.base_url || ''}`,
+        'ok',
+      )
+      resetForm()
       qc.invalidateQueries({ queryKey: ['download-clients'] })
+      qc.invalidateQueries({ queryKey: ['acquisition-status'] })
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const update = useMutation({
     mutationFn: ({ id, body }: { id: number; body: Record<string, unknown> }) =>
       api.updateDownloadClient(id, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['download-clients'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['download-clients'] })
+      qc.invalidateQueries({ queryKey: ['acquisition-status'] })
+    },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const remove = useMutation({
     mutationFn: (id: number) => api.deleteDownloadClient(id),
     onSuccess: () => {
       toast.push('Client removed', 'ok')
+      if (editingId) resetForm()
       qc.invalidateQueries({ queryKey: ['download-clients'] })
+      qc.invalidateQueries({ queryKey: ['acquisition-status'] })
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
-  const test = useMutation({
+  const testSaved = useMutation({
     mutationFn: (id: number) => api.testDownloadClient(id),
     onSuccess: (res) => toast.push(res.message || (res.ok ? 'OK' : 'Failed'), res.ok ? 'ok' : 'error'),
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
+  const testDraft = useMutation({
+    mutationFn: () => api.testDownloadClientDraft(testDraftBody()),
+    onSuccess: (res) => toast.push(res.message || (res.ok ? 'OK' : 'Failed'), res.ok ? 'ok' : 'error'),
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+
+  const startEdit = (row: DownloadClientRow) => {
+    setEditingId(row.id)
+    setForm({
+      name: row.name,
+      implementation: row.implementation,
+      host: row.host,
+      port: row.port,
+      username: row.username || (row.implementation === 'qbittorrent' ? 'admin' : ''),
+      password: '',
+      apiKey: '',
+      category: row.category || 'musicarr',
+      useSsl: row.use_ssl,
+      verifySsl: row.verify_ssl !== false,
+    })
+  }
 
   return (
     <>
       <p className="muted">
         Musicarr sends grabs to the client and imports finished files from the path the client
-        reports — after remote path mapping.
+        reports — after remote path mapping. From Docker, <code>localhost</code> is the Musicarr
+        container itself — use <code>host.docker.internal</code>, a compose service name, or a LAN
+        IP. Share the completed-download volume with Musicarr and map it under Path mappings.
       </p>
       <div className="card" style={{ marginBottom: '1rem' }}>
-        <h3 style={{ marginTop: 0 }}>Add download client</h3>
+        <h3 style={{ marginTop: 0 }}>{editingId ? 'Edit download client' : 'Add download client'}</h3>
         <div className="field">
           <label>Name</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="qBittorrent" />
+          <input
+            value={form.name}
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            placeholder="qBittorrent"
+          />
         </div>
         <div className="field">
           <label>Type</label>
           <select
-            value={implementation}
+            value={form.implementation}
+            disabled={!!editingId}
             onChange={(e) => {
               const v = e.target.value
-              setImplementation(v)
-              setPort(v === 'sabnzbd' ? 8080 : 8080)
+              setForm((f) => ({
+                ...f,
+                implementation: v,
+                username: v === 'qbittorrent' ? f.username || 'admin' : f.username,
+              }))
             }}
           >
             <option value="qbittorrent">qBittorrent</option>
@@ -270,60 +415,125 @@ function ClientsPanel() {
         </div>
         <div className="field">
           <label>Host</label>
-          <input value={host} onChange={(e) => setHost(e.target.value)} />
+          <input
+            value={form.host}
+            onChange={(e) => setForm((f) => ({ ...f, host: e.target.value }))}
+            placeholder="host.docker.internal or qbittorrent"
+          />
+          <span className="muted tiny">
+            Examples: <code>host.docker.internal</code>, <code>qbittorrent</code>,{' '}
+            <code>192.168.1.10</code>, or <code>http://qbittorrent:8080/qbittorrent</code> (base
+            path).
+          </span>
         </div>
         <div className="field">
           <label>Port</label>
           <input
             type="number"
-            value={port}
-            onChange={(e) => setPort(Number(e.target.value))}
+            value={form.port}
+            onChange={(e) => setForm((f) => ({ ...f, port: Number(e.target.value) }))}
           />
         </div>
         <label className="checks">
-          <input type="checkbox" checked={useSsl} onChange={(e) => setUseSsl(e.target.checked)} />
+          <input
+            type="checkbox"
+            checked={form.useSsl}
+            onChange={(e) => setForm((f) => ({ ...f, useSsl: e.target.checked }))}
+          />
           Use SSL
         </label>
-        {implementation === 'qbittorrent' ? (
+        <label className="checks">
+          <input
+            type="checkbox"
+            checked={form.verifySsl}
+            onChange={(e) => setForm((f) => ({ ...f, verifySsl: e.target.checked }))}
+          />
+          Verify SSL certificate
+        </label>
+        {form.implementation === 'qbittorrent' ? (
           <>
             <div className="field">
               <label>Username</label>
-              <input value={username} onChange={(e) => setUsername(e.target.value)} />
+              <input
+                value={form.username}
+                onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
+                placeholder="admin"
+              />
             </div>
             <div className="field">
-              <label>Password</label>
+              <label>Password{editingId ? ' (leave blank to keep)' : ''}</label>
               <input
                 type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                value={form.password}
+                onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
               />
             </div>
           </>
         ) : (
-          <div className="field">
-            <label>API key</label>
-            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
-          </div>
+          <>
+            <div className="field">
+              <label>API key{editingId ? ' (leave blank to keep)' : ''}</label>
+              <input
+                type="password"
+                value={form.apiKey}
+                onChange={(e) => setForm((f) => ({ ...f, apiKey: e.target.value }))}
+              />
+            </div>
+            <div className="field">
+              <label>Username (optional)</label>
+              <input
+                value={form.username}
+                onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
+              />
+            </div>
+            <div className="field">
+              <label>Password (optional){editingId ? ' — leave blank to keep' : ''}</label>
+              <input
+                type="password"
+                value={form.password}
+                onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+              />
+            </div>
+          </>
         )}
         <div className="field">
           <label>Category</label>
-          <input value={category} onChange={(e) => setCategory(e.target.value)} />
+          <input
+            value={form.category}
+            onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
+          />
           <span className="muted tiny">Only this category is imported (default musicarr).</span>
         </div>
-        <button
-          className="btn"
-          type="button"
-          disabled={!name.trim() || !host.trim() || create.isPending}
-          onClick={() => create.mutate()}
-        >
-          Add client
-        </button>
+        <div className="toolbar" style={{ marginBottom: 0 }}>
+          <button
+            className="btn"
+            type="button"
+            disabled={!form.name.trim() || !form.host.trim() || save.isPending}
+            onClick={() => save.mutate()}
+          >
+            {editingId ? 'Save changes' : 'Add client'}
+          </button>
+          <button
+            className="btn secondary"
+            type="button"
+            disabled={!form.host.trim() || testDraft.isPending}
+            onClick={() => testDraft.mutate()}
+          >
+            Test connection
+          </button>
+          {editingId && (
+            <button className="btn ghost" type="button" onClick={resetForm}>
+              Cancel edit
+            </button>
+          )}
+        </div>
       </div>
       {isLoading && <p className="muted">Loading…</p>}
       <ClientTable
         rows={data || []}
         onToggle={(row) => update.mutate({ id: row.id, body: { enabled: !row.enabled } })}
-        onTest={(id) => test.mutate(id)}
+        onTest={(id) => testSaved.mutate(id)}
+        onEdit={startEdit}
         onDelete={(id) => {
           if (window.confirm('Remove this download client?')) remove.mutate(id)
         }}
@@ -336,11 +546,13 @@ function ClientTable({
   rows,
   onToggle,
   onTest,
+  onEdit,
   onDelete,
 }: {
   rows: DownloadClientRow[]
   onToggle: (row: DownloadClientRow) => void
   onTest: (id: number) => void
+  onEdit: (row: DownloadClientRow) => void
   onDelete: (id: number) => void
 }) {
   if (!rows.length) return <p className="muted">No download clients configured yet.</p>
@@ -363,13 +575,16 @@ function ClientTable({
               <div className="muted tiny">{row.enabled ? 'Enabled' : 'Disabled'}</div>
             </td>
             <td>{row.implementation}</td>
-            <td className="muted">
-              {row.use_ssl ? 'https' : 'http'}://{row.host}:{row.port}
+            <td className="muted" style={{ wordBreak: 'break-all' }}>
+              {row.base_url || `${row.use_ssl ? 'https' : 'http'}://${row.host}:${row.port}`}
             </td>
             <td>{row.category}</td>
             <td className="row-actions">
               <button className="btn ghost" type="button" onClick={() => onToggle(row)}>
                 {row.enabled ? 'Disable' : 'Enable'}
+              </button>
+              <button className="btn secondary" type="button" onClick={() => onEdit(row)}>
+                Edit
               </button>
               <button className="btn secondary" type="button" onClick={() => onTest(row.id)}>
                 Test
@@ -406,6 +621,7 @@ function PathsPanel() {
       setHost('')
       toast.push('Path mapping added', 'ok')
       qc.invalidateQueries({ queryKey: ['path-mappings'] })
+      qc.invalidateQueries({ queryKey: ['acquisition-status'] })
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
@@ -414,6 +630,7 @@ function PathsPanel() {
     onSuccess: () => {
       toast.push('Mapping removed', 'ok')
       qc.invalidateQueries({ queryKey: ['path-mappings'] })
+      qc.invalidateQueries({ queryKey: ['acquisition-status'] })
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })

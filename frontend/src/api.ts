@@ -206,12 +206,35 @@ export type DownloadClientRow = {
   host: string
   port: number
   use_ssl: boolean
+  verify_ssl?: boolean
   username: string
   password_set: boolean
   api_key_set: boolean
   category: string
   enabled: boolean
   priority: number
+  base_url?: string
+}
+
+export type ReleaseCandidate = {
+  title: string
+  size: number
+  seeders: number
+  protocol: string
+  download_url: string
+  magnet_url: string
+  grab_url: string
+  indexer_id: number
+  indexer_name: string
+  score: number
+}
+
+export type AcquisitionStatus = {
+  indexers_enabled: number
+  torrent_client: boolean
+  usenet_client: boolean
+  path_mappings: number
+  messages: string[]
 }
 
 export type PathMapping = {
@@ -307,8 +330,11 @@ export const api = {
     request<Artist>(`/artists/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   refreshArtist: (id: number) =>
     request<Artist>(`/artists/${id}/refresh`, { method: 'POST' }),
-  downloadMissing: (id: number) =>
-    request<{ queued: number }>(`/artists/${id}/download-missing`, { method: 'POST' }),
+  downloadMissing: (id: number, method?: string) =>
+    request<{ queued: number }>(
+      `/artists/${id}/download-missing${method ? `?method=${encodeURIComponent(method)}` : ''}`,
+      { method: 'POST' },
+    ),
   wanted: (albumType?: string) =>
     request<Album[]>(
       albumType ? `/albums/wanted?album_type=${encodeURIComponent(albumType)}` : '/albums/wanted',
@@ -397,7 +423,7 @@ export const api = {
   createIndexer: (body: Record<string, unknown>) =>
     request<Indexer>('/acquisition/indexers', { method: 'POST', body: JSON.stringify(body) }),
   updateIndexer: (id: number, body: Record<string, unknown>) =>
-    request<Indexer>(`/acquisition/indexers/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    request<Indexer>(`/acquisition/indexers/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteIndexer: (id: number) =>
     request<{ ok: boolean }>(`/acquisition/indexers/${id}`, { method: 'DELETE' }),
   testIndexer: (id: number) =>
@@ -410,13 +436,19 @@ export const api = {
     }),
   updateDownloadClient: (id: number, body: Record<string, unknown>) =>
     request<DownloadClientRow>(`/acquisition/download-clients/${id}`, {
-      method: 'PATCH',
+      method: 'PUT',
       body: JSON.stringify(body),
     }),
   deleteDownloadClient: (id: number) =>
     request<{ ok: boolean }>(`/acquisition/download-clients/${id}`, { method: 'DELETE' }),
   testDownloadClient: (id: number) =>
     request<TestResult>(`/acquisition/download-clients/${id}/test`, { method: 'POST' }),
+  testDownloadClientDraft: (body: Record<string, unknown>) =>
+    request<TestResult>('/acquisition/download-clients/test-draft', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  acquisitionStatus: () => request<AcquisitionStatus>('/acquisition/status'),
   pathMappings: () => request<PathMapping[]>('/acquisition/path-mappings'),
   createPathMapping: (body: Record<string, unknown>) =>
     request<PathMapping>('/acquisition/path-mappings', {
@@ -425,11 +457,24 @@ export const api = {
     }),
   updatePathMapping: (id: number, body: Record<string, unknown>) =>
     request<PathMapping>(`/acquisition/path-mappings/${id}`, {
-      method: 'PATCH',
+      method: 'PUT',
       body: JSON.stringify(body),
     }),
   deletePathMapping: (id: number) =>
     request<{ ok: boolean }>(`/acquisition/path-mappings/${id}`, { method: 'DELETE' }),
   searchReleases: (albumId: number) =>
-    request<unknown[]>(`/acquisition/releases/search?album_id=${albumId}`),
+    request<ReleaseCandidate[]>(`/acquisition/releases/search?album_id=${albumId}`),
+  grabRelease: (body: {
+    album_id: number
+    title?: string
+    grab_url: string
+    protocol: string
+    indexer_id?: number | null
+    size?: number
+    seeders?: number
+  }) =>
+    request<{ ok: boolean; job_id: number; client: string }>(
+      '/acquisition/releases/grab',
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
 }

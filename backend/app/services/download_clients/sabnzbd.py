@@ -29,12 +29,14 @@ class SabnzbdClient:
         category: str = "musicarr",
         username: str = "",
         password: str = "",
+        verify_ssl: bool = True,
     ) -> None:
         self.base = base_url(host, port, use_ssl)
         self.api_key = (api_key or "").strip()
         self.category = (category or "").strip()
         self.username = (username or "").strip()
         self.password = password or ""
+        self.verify_ssl = verify_ssl
         self._client: httpx.Client | None = None
 
     # -- plumbing ---------------------------------------------------------
@@ -44,7 +46,8 @@ class SabnzbdClient:
                 base_url=self.base,
                 timeout=TIMEOUT,
                 follow_redirects=True,
-                headers={"User-Agent": "Musicarr/1.2"},
+                verify=self.verify_ssl,
+                headers={"User-Agent": "Musicarr/1.4"},
             )
         return self._client
 
@@ -77,7 +80,11 @@ class SabnzbdClient:
                 f"SABnzbd returned HTTP {exc.response.status_code}"
             ) from exc
         except httpx.HTTPError as exc:
-            raise DownloadClientError(f"Cannot reach SABnzbd: {exc}") from exc
+            raise DownloadClientError(
+                f"Cannot reach SABnzbd at {self.base}. "
+                f"If Musicarr is in Docker, use host.docker.internal or the compose "
+                f"service name — not localhost. ({exc})"
+            ) from exc
         try:
             data = resp.json()
         except ValueError as exc:
