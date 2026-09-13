@@ -213,6 +213,19 @@ cd frontend && npm run build
 
 ---
 
+## What's coming
+
+The next release (shipping on the `dev` branch first) adds:
+
+- **Quality upgrades** — prefer FLAC, flag below-target albums, one-click Upgrade all
+- **Artist monitor profiles** — all albums / new-only / unmonitored, plus per-artist singles control
+- **Import review** — fix local-only artists and weakly tagged folders after importing a library
+- **Media server refresh** — Plex, Jellyfin, Navidrome, or webhook scan after downloads/imports
+- **Wanted & Queue polish** — junk filters, album detail, clearer rematch/auth failures, Discord webhooks
+- **Import existing library** — turn an on-disk collection into a managed Musicarr library
+
+---
+
 ## Releases
 
 - **v1.0** — initial public release of the multi-provider Musicarr app (Docker + web UI).
