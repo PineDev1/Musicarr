@@ -2,15 +2,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.schemas import ArtistCreate, ArtistOut, ArtistPatch, ArtistSearchResult
+from app.models.schemas import (
+    ArtistCreate,
+    ArtistOut,
+    ArtistPatch,
+    ArtistSearchResult,
+    DownloadMethod,
+)
 from app.services.artists import (
     add_artist,
-    delete_linked_artists,
+    delete_artist,
     find_linked_artists,
     get_artist_detail,
     grouped_artist_stats,
     list_artists_grouped,
     merge_album_rows,
+    name_collision_ids,
     sync_artist_albums,
 )
 from app.services.download_queue import download_queue
@@ -78,6 +85,7 @@ def _artist_group_out(
     active: str = "deezer",
     target_bitrate: str = "flac",
     upgrade_enabled: bool = True,
+    collision_ids: set[int] | None = None,
 ) -> ArtistOut:
     if not artists:
         raise ValueError("empty artist group")
@@ -101,6 +109,9 @@ def _artist_group_out(
                     upgrade_enabled=upgrade_enabled,
                 )
             )
+    collided = False
+    if collision_ids is not None:
+        collided = any(a.id in collision_ids for a in artists)
     return ArtistOut(
         id=primary.id,
         provider=primary.provider,
@@ -118,6 +129,7 @@ def _artist_group_out(
         wanted_count=wanted,
         providers=providers,
         linked_artist_ids=linked_ids,
+        name_collision=collided,
         albums=albums,
     )
 
@@ -150,6 +162,7 @@ def get_artists(db: Session = Depends(get_db)):
     active = (settings.active_provider or "deezer").lower()
     target = (settings.bitrate or "flac").lower()
     up_on = bool(getattr(settings, "upgrade_enabled", True))
+    collisions = name_collision_ids(db)
     return [
         _artist_group_out(
             group,
@@ -157,6 +170,7 @@ def get_artists(db: Session = Depends(get_db)):
             active=active,
             target_bitrate=target,
             upgrade_enabled=up_on,
+            collision_ids=collisions,
         )
         for group in list_artists_grouped(db)
     ]
@@ -189,6 +203,7 @@ def create_artist(payload: ArtistCreate, db: Session = Depends(get_db)):
         active=active,
         target_bitrate=(settings.bitrate or "flac").lower(),
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
+        collision_ids=name_collision_ids(db),
     )
 
 
@@ -206,6 +221,7 @@ def get_artist(artist_id: int, db: Session = Depends(get_db)):
         active=active,
         target_bitrate=(settings.bitrate or "flac").lower(),
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
+        collision_ids=name_collision_ids(db),
     )
 
 
@@ -237,12 +253,13 @@ def patch_artist(artist_id: int, payload: ArtistPatch, db: Session = Depends(get
         active=active,
         target_bitrate=(settings.bitrate or "flac").lower(),
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
+        collision_ids=name_collision_ids(db),
     )
 
 
 @router.delete("/{artist_id}")
 def remove_artist(artist_id: int, db: Session = Depends(get_db)):
-    if not delete_linked_artists(db, artist_id):
+    if not delete_artist(db, artist_id):
         raise HTTPException(status_code=404, detail="Artist not found")
     return {"ok": True}
 
@@ -278,6 +295,7 @@ def refresh_artist(artist_id: int, db: Session = Depends(get_db)):
         active=active,
         target_bitrate=(settings.bitrate or "flac").lower(),
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
+        collision_ids=name_collision_ids(db),
     )
     if errors and not any(True for _ in linked):
         raise HTTPException(status_code=400, detail="; ".join(errors))
@@ -285,7 +303,11 @@ def refresh_artist(artist_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{artist_id}/download-missing")
-def download_missing(artist_id: int, db: Session = Depends(get_db)):
+def download_missing(
+    artist_id: int,
+    db: Session = Depends(get_db),
+    method: DownloadMethod | None = Query(default=None),
+):
     artist = get_artist_detail(db, artist_id)
     if not artist:
         raise HTTPException(status_code=404, detail="Artist not found")
@@ -295,6 +317,6 @@ def download_missing(artist_id: int, db: Session = Depends(get_db)):
     for row in linked:
         if (row.provider or "").lower() != active:
             continue
-        jobs = download_queue.enqueue_artist_missing(db, row.id)
+        jobs = download_queue.enqueue_artist_missing(db, row.id, method=method)
         queued += len(jobs)
     return {"queued": queued}

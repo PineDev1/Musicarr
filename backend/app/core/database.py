@@ -74,6 +74,10 @@ def migrate_schema() -> None:
         "public_domain": "VARCHAR(512) DEFAULT ''",
         "player_enabled": "BOOLEAN DEFAULT 0",
         "player_sharing_enabled": "BOOLEAN DEFAULT 1",
+        "preferred_download_method": "VARCHAR(32) DEFAULT 'streaming'",
+        "completed_download_scan_interval_seconds": "INTEGER DEFAULT 60",
+        "import_mechanism": "VARCHAR(16) DEFAULT 'hardlink'",
+        "remove_completed_downloads": "BOOLEAN DEFAULT 0",
     }
     existing = _existing_columns("app_settings")
     for name, definition in settings_cols.items():
@@ -86,6 +90,8 @@ def migrate_schema() -> None:
             _add_column("artists", "monitor_mode VARCHAR(16) DEFAULT 'all'")
         if "include_singles" not in artist_cols:
             _add_column("artists", "include_singles BOOLEAN")
+        if "link_group_id" not in artist_cols:
+            _add_column("artists", "link_group_id VARCHAR(64)")
 
     album_cols = _existing_columns("albums")
     if album_cols and "quality" not in album_cols:
@@ -118,10 +124,20 @@ def migrate_schema() -> None:
             )
 
     job_cols = _existing_columns("download_jobs")
-    if job_cols and "target_provider_id" not in job_cols:
-        _add_column("download_jobs", "target_provider_id VARCHAR(64) DEFAULT ''")
-    if job_cols and "error_category" not in job_cols:
-        _add_column("download_jobs", "error_category VARCHAR(32) DEFAULT ''")
+    download_job_cols = {
+        "target_provider_id": "VARCHAR(64) DEFAULT ''",
+        "error_category": "VARCHAR(32) DEFAULT ''",
+        "source": "VARCHAR(32) DEFAULT 'streaming'",
+        "indexer_id": "INTEGER",
+        "client_id": "INTEGER",
+        "release_title": "VARCHAR(1024) DEFAULT ''",
+        "download_url": "TEXT DEFAULT ''",
+        "client_item_id": "VARCHAR(128) DEFAULT ''",
+        "output_path": "VARCHAR(2048) DEFAULT ''",
+    }
+    for name, definition in download_job_cols.items():
+        if job_cols and name not in job_cols:
+            _add_column("download_jobs", f"{name} {definition}")
 
     player_user_cols = {
         "show_recently_played": "BOOLEAN DEFAULT 1",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 from app.services.deezer_client import sanitize_filename
 
@@ -11,6 +12,41 @@ def _year_from_date(release_date: str | None) -> str:
         return "0000"
     m = re.match(r"(\d{4})", release_date)
     return m.group(1) if m else "0000"
+
+
+def _norm_artist_name(name: str) -> str:
+    return " ".join((name or "").strip().lower().split())
+
+
+def artist_folder_name(
+    artist: Any | None,
+    *,
+    collide: bool | None = None,
+    db: Any | None = None,
+) -> str:
+    """Display name, or disambiguated segment when another artist shares the name.
+
+    Pass collide=True/False to skip a DB lookup (tests / callers that already know).
+    """
+    if artist is None:
+        return "Unknown Artist"
+    name = (getattr(artist, "name", None) or "").strip() or "Unknown Artist"
+    needs_disambiguation = collide
+    if needs_disambiguation is None and db is not None:
+        key = _norm_artist_name(name)
+        artist_id = getattr(artist, "id", None)
+        from sqlalchemy import select
+        from app.models import Artist
+
+        others = db.scalars(select(Artist)).all()
+        needs_disambiguation = any(
+            _norm_artist_name(a.name) == key and a.id != artist_id for a in others
+        )
+    if not needs_disambiguation:
+        return name
+    provider = (getattr(artist, "provider", None) or "unknown").strip() or "unknown"
+    provider_id = (getattr(artist, "provider_id", None) or "").strip() or "0"
+    return f"{name} [{provider}-{provider_id}]"
 
 
 def render_template(template: str, values: dict[str, str | int]) -> str:

@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.models import Album, Artist, DownloadJob
 from app.models.schemas import HealthOut, SettingsOut, SettingsUpdate
 from app.services import app_auth
+from app.services.download_queue import ACTIVE_JOB_STATES
 from app.services.providers import get_provider
 from app.services.settings_service import (
     ensure_settings,
@@ -75,7 +76,7 @@ def health(db: Session = Depends(get_db)):
     queue = db.scalar(
         select(func.count())
         .select_from(DownloadJob)
-        .where(DownloadJob.state.in_(["queued", "running"]))
+        .where(DownloadJob.state.in_(ACTIVE_JOB_STATES))
     ) or 0
     return HealthOut(
         status="ok" if path_is_writable(lib) else "degraded",

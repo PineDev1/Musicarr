@@ -12,6 +12,11 @@ const CATEGORY_LABELS: Record<string, string> = {
   '': 'Uncategorized',
 }
 
+const SOURCE_LABELS: Record<string, string> = {
+  streaming: 'Streaming',
+  indexer: 'Indexer',
+}
+
 export function QueuePage() {
   const qc = useQueryClient()
   const toast = useToast()
@@ -36,6 +41,8 @@ export function QueuePage() {
           error: string | null
           error_category?: string
           retries: number
+          source?: string
+          release_title?: string
         }>
         setLive(
           snap.map((j) => ({
@@ -50,6 +57,8 @@ export function QueuePage() {
             error: j.error,
             error_category: j.error_category || '',
             retries: j.retries,
+            source: j.source || 'streaming',
+            release_title: j.release_title || '',
             created_at: '',
             started_at: null,
             finished_at: null,
@@ -97,6 +106,8 @@ export function QueuePage() {
           state: liveJob.state,
           error: liveJob.error,
           error_category: liveJob.error_category || j.error_category,
+          source: liveJob.source || j.source,
+          release_title: liveJob.release_title || j.release_title,
         }
       : j
   })
@@ -166,6 +177,7 @@ export function QueuePage() {
           <thead>
             <tr>
               <th>Album</th>
+              <th>Source</th>
               <th>State</th>
               <th>Progress</th>
               <th></th>
@@ -178,6 +190,11 @@ export function QueuePage() {
                   <strong>
                     {job.artist_name} – {job.album_title}
                   </strong>
+                  {job.release_title && (
+                    <div className="muted tiny" title={job.release_title}>
+                      {job.release_title}
+                    </div>
+                  )}
                   {job.error && <div className="error">{job.error}</div>}
                   {job.state === 'failed' && job.error_category && (
                     <div className="muted">
@@ -185,6 +202,11 @@ export function QueuePage() {
                     </div>
                   )}
                   {job.retries > 0 && <div className="muted">Retries: {job.retries}</div>}
+                </td>
+                <td>
+                  <span className="badge queued">
+                    {SOURCE_LABELS[job.source || 'streaming'] || job.source || 'Streaming'}
+                  </span>
                 </td>
                 <td>
                   <span className={`badge ${job.state}`}>{job.state}</span>
@@ -196,7 +218,12 @@ export function QueuePage() {
                   </div>
                 </td>
                 <td className="row-actions">
-                  {(job.state === 'queued' || job.state === 'running') && (
+                  {(job.state === 'queued' ||
+                    job.state === 'running' ||
+                    job.state === 'searching' ||
+                    job.state === 'grabbed' ||
+                    job.state === 'downloading' ||
+                    job.state === 'importing') && (
                     <button className="btn ghost" onClick={() => cancel.mutate(job.id)}>
                       Cancel
                     </button>

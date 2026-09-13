@@ -13,7 +13,7 @@ from app.models.schemas import (
     ReorganizeResult,
     ScanResult,
 )
-from app.services.download_queue import download_queue
+from app.services.download_queue import ACTIVE_JOB_STATES, download_queue
 from app.services.library import (
     build_import_review,
     import_existing_library,
@@ -30,12 +30,38 @@ from app.models.schemas import ArtistOut
 router = APIRouter(tags=["ops"])
 
 
+def _job_out(job: DownloadJob) -> DownloadJobOut:
+    """Serialize a job, defaulting fields that pre-date indexer support."""
+    return DownloadJobOut(
+        id=job.id,
+        target_type=job.target_type,
+        target_id=job.target_id,
+        album_id=job.album_id,
+        artist_name=job.artist_name or "",
+        album_title=job.album_title or "",
+        state=job.state,
+        progress=job.progress or 0.0,
+        error=job.error,
+        error_category=job.error_category or "",
+        retries=job.retries or 0,
+        source=getattr(job, "source", None) or "streaming",
+        indexer_id=getattr(job, "indexer_id", None),
+        client_id=getattr(job, "client_id", None),
+        release_title=getattr(job, "release_title", None) or "",
+        client_item_id=getattr(job, "client_item_id", None) or "",
+        output_path=getattr(job, "output_path", None) or "",
+        created_at=job.created_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+    )
+
+
 @router.get("/queue", response_model=list[DownloadJobOut])
 def get_queue(db: Session = Depends(get_db), all_jobs: bool = False):
     q = select(DownloadJob).order_by(DownloadJob.created_at.desc())
     if not all_jobs:
-        q = q.where(DownloadJob.state.in_(["queued", "running", "failed"]))
-    return list(db.scalars(q.limit(200)).all())
+        q = q.where(DownloadJob.state.in_([*ACTIVE_JOB_STATES, "failed"]))
+    return [_job_out(j) for j in db.scalars(q.limit(200)).all()]
 
 
 @router.post("/queue/{job_id}/cancel", response_model=DownloadJobOut)
@@ -43,7 +69,7 @@ def cancel_job(job_id: int, db: Session = Depends(get_db)):
     job = download_queue.cancel(db, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    return _job_out(job)
 
 
 @router.post("/queue/{job_id}/retry", response_model=DownloadJobOut)
@@ -51,7 +77,7 @@ def retry_job(job_id: int, db: Session = Depends(get_db)):
     job = download_queue.retry(db, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    return _job_out(job)
 
 
 @router.post("/queue/retry-failed")

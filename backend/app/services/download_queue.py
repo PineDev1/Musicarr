@@ -15,6 +15,7 @@ from app.core.database import SessionLocal
 from app.models import Album, Artist, DownloadJob
 from app.services.history import add_history
 from app.services.naming import (
+    artist_folder_name,
     build_album_folder,
     build_track_filename,
     year_from_release,
@@ -24,6 +25,38 @@ from app.services.providers.base import ProviderError
 from app.services.settings_service import ensure_settings, library_root
 
 logger = logging.getLogger("musicarr.download")
+
+# States that mean "this album is already being worked on". Indexer jobs stay
+# active while the download client works, so they must count as busy too.
+ACTIVE_JOB_STATES = [
+    "queued",
+    "running",
+    "searching",
+    "grabbed",
+    "downloading",
+    "importing",
+]
+DOWNLOAD_METHODS = {"streaming", "indexer", "streaming_then_indexer"}
+
+
+def pick_unique_artist_search_hit(artist_name: str, hits: list) -> object | None:
+    """Return the provider search hit only when exactly one exact name match exists."""
+    key = " ".join((artist_name or "").strip().lower().split())
+    if not key or not hits:
+        return None
+    exact = [
+        h
+        for h in hits
+        if " ".join((getattr(h, "name", None) or "").strip().lower().split()) == key
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    return None
+
+
+def resolve_download_method(settings, method: str | None = None) -> str:
+    requested = (method or getattr(settings, "preferred_download_method", None) or "").lower()
+    return requested if requested in DOWNLOAD_METHODS else "streaming"
 
 
 def classify_download_error(message: str) -> str:
@@ -61,7 +94,14 @@ class DownloadQueue:
     def wake(self) -> None:
         self._wake.set()
 
-    def enqueue_album(self, db: Session, album_id: int, *, allow_upgrade: bool = False) -> DownloadJob | None:
+    def enqueue_album(
+        self,
+        db: Session,
+        album_id: int,
+        *,
+        allow_upgrade: bool = False,
+        method: str | None = None,
+    ) -> DownloadJob | None:
         album = db.get(Album, album_id)
         if not album:
             return None
@@ -74,11 +114,15 @@ class DownloadQueue:
         existing = db.scalar(
             select(DownloadJob).where(
                 DownloadJob.album_id == album_id,
-                DownloadJob.state.in_(["queued", "running"]),
+                DownloadJob.state.in_(ACTIVE_JOB_STATES),
             )
         )
         if existing:
             return existing
+        settings = ensure_settings(db)
+        resolved = resolve_download_method(settings, method)
+        # streaming_then_indexer starts on streaming and falls back on failure.
+        source = "indexer" if resolved == "indexer" else "streaming"
         artist = db.get(Artist, album.artist_id)
         job = DownloadJob(
             target_type="album",
@@ -87,17 +131,25 @@ class DownloadQueue:
             album_id=album.id,
             artist_name=artist.name if artist else "",
             album_title=album.title,
-            state="queued",
+            state="searching" if source == "indexer" else "queued",
+            source=source,
             progress=0.0,
         )
         db.add(job)
         db.commit()
         db.refresh(job)
-        add_history(db, "queued", f"Queued {job.artist_name} – {job.album_title}")
+        label = "Searching indexers for" if source == "indexer" else "Queued"
+        add_history(db, "queued", f"{label} {job.artist_name} – {job.album_title}")
         self.wake()
         return job
 
-    def enqueue_artist_missing(self, db: Session, artist_id: int) -> list[DownloadJob]:
+    def enqueue_artist_missing(
+        self,
+        db: Session,
+        artist_id: int,
+        *,
+        method: str | None = None,
+    ) -> list[DownloadJob]:
         albums = db.scalars(
             select(Album).where(
                 Album.artist_id == artist_id,
@@ -107,7 +159,7 @@ class DownloadQueue:
         ).all()
         jobs = []
         for album in albums:
-            job = self.enqueue_album(db, album.id)
+            job = self.enqueue_album(db, album.id, method=method)
             if job:
                 jobs.append(job)
         return jobs
@@ -118,6 +170,8 @@ class DownloadQueue:
             return None
         if job.state in {"completed", "failed", "cancelled"}:
             return job
+        if job.source == "indexer" and job.client_item_id:
+            self._abort_client_item(db, job)
         job.state = "cancelled"
         job.finished_at = datetime.now(timezone.utc)
         db.commit()
@@ -130,7 +184,12 @@ class DownloadQueue:
         job = db.get(DownloadJob, job_id)
         if not job or not job.album_id:
             return None
-        job.state = "queued"
+        if job.source == "indexer":
+            job.state = "searching"
+            job.client_item_id = ""
+            job.output_path = ""
+        else:
+            job.state = "queued"
         job.progress = 0.0
         job.error = None
         job.error_category = ""
@@ -189,9 +248,39 @@ class DownloadQueue:
             except Exception:  # noqa: BLE001
                 logger.exception("Unhandled download error for job %s", job_id)
 
+    def _abort_client_item(self, db: Session, job: DownloadJob) -> None:
+        """Remove a grabbed release from its download client."""
+        from app.models import DownloadClient
+        from app.services.download_clients import get_client
+
+        client_row = db.get(DownloadClient, job.client_id) if job.client_id else None
+        if not client_row:
+            return
+        try:
+            client = get_client(client_row)
+        except Exception:  # noqa: BLE001
+            return
+        try:
+            client.remove(job.client_item_id, delete_data=True)
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not remove %s from %s", job.client_item_id, client_row.name)
+        finally:
+            closer = getattr(client, "close", None)
+            if callable(closer):
+                closer()
+
     def _next_job_id(self) -> int | None:
         db = SessionLocal()
         try:
+            # Indexer searches are quick, so they are allowed to jump a
+            # long-running streaming download.
+            job = db.scalar(
+                select(DownloadJob)
+                .where(DownloadJob.state == "searching", DownloadJob.source == "indexer")
+                .order_by(DownloadJob.created_at.asc())
+            )
+            if job:
+                return job.id
             running = db.scalar(select(DownloadJob).where(DownloadJob.state == "running"))
             if running:
                 return None
@@ -208,7 +297,21 @@ class DownloadQueue:
         db = SessionLocal()
         try:
             job = db.get(DownloadJob, job_id)
-            if not job or job.state != "queued":
+            if not job:
+                return
+            if job.source == "indexer":
+                if job.state != "searching":
+                    return
+                try:
+                    self._process_indexer_job(db, job)
+                except Exception as exc:  # noqa: BLE001
+                    # A job left in "searching" would be picked up again on the
+                    # next loop, so always land on a terminal state.
+                    logger.exception("Indexer job %s failed", job_id)
+                    db.rollback()
+                    self._fail_indexer_job(db, job, f"Indexer job failed: {exc}", "other")
+                return
+            if job.state != "queued":
                 return
             settings = ensure_settings(db)
             job.state = "running"
@@ -282,6 +385,7 @@ class DownloadQueue:
                     f"{job.artist_name} – {job.album_title}\n{exc}",
                     kind="auth" if category == "auth" else "failure",
                 )
+                self._maybe_fallback_to_indexer(db, job)
                 return
 
             from app.services.artists import sync_album_tracks
@@ -363,6 +467,7 @@ class DownloadQueue:
                     kind="failure",
                 )
                 shutil.rmtree(staging, ignore_errors=True)
+                self._maybe_fallback_to_indexer(db, job)
                 return
 
             if self._is_cancelled(job_id):
@@ -373,10 +478,11 @@ class DownloadQueue:
                 return
 
             year = year_from_release(album.release_date)
+            folder_artist = artist_folder_name(artist, db=db) if artist else "Unknown Artist"
             dest_folder = build_album_folder(
                 root,
                 settings.folder_template,
-                artist=artist.name if artist else "Unknown Artist",
+                artist=folder_artist,
                 album=album.title,
                 year=year,
                 album_type=album.album_type,
@@ -447,6 +553,187 @@ class DownloadQueue:
                 self._cancel_ids.discard(job_id)
             db.close()
 
+    def _process_indexer_job(self, db: Session, job: DownloadJob) -> None:
+        """Search indexers and hand the best release to a download client.
+
+        Only the search and grab happen here so the worker stays free; the
+        completed download handler imports the files once the client is done.
+        """
+        from app.services.download_clients import DownloadClientError, get_client, pick_client
+        from app.services.indexers.base import IndexerError
+        from app.services.indexers.search import pick_best, search_album
+
+        job_id = job.id
+        job.started_at = job.started_at or datetime.now(timezone.utc)
+        job.progress = 0.0
+        db.commit()
+
+        album = db.get(Album, job.album_id) if job.album_id else None
+        if not album:
+            self._fail_indexer_job(db, job, "Album not found", "other")
+            return
+        artist = db.get(Artist, album.artist_id)
+        artist_name = artist.name if artist else (job.artist_name or "")
+
+        if self._is_cancelled(job_id):
+            job.state = "cancelled"
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return
+
+        try:
+            candidates = search_album(
+                db,
+                artist_name,
+                album.title,
+                year=album.release_date,
+            )
+        except IndexerError as exc:
+            self._fail_indexer_job(db, job, str(exc), "network")
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Indexer search failed for job %s", job_id)
+            self._fail_indexer_job(db, job, f"Indexer search failed: {exc}", "other")
+            return
+
+        best = pick_best(candidates)
+        if not best:
+            detail = (
+                f"No usable release found across enabled indexers "
+                f"({len(candidates)} candidate(s) scored too low)"
+                if candidates
+                else "No indexer results. Check that an indexer is enabled and reachable."
+            )
+            self._fail_indexer_job(db, job, detail, "unavailable")
+            return
+
+        client_row = pick_client(db, best.protocol)
+        if not client_row:
+            self._fail_indexer_job(
+                db,
+                job,
+                f"No enabled {best.protocol} download client is configured",
+                "config",
+            )
+            return
+
+        job.indexer_id = best.indexer_id
+        job.client_id = client_row.id
+        job.release_title = best.title
+        job.download_url = best.grab_url
+        db.commit()
+
+        client = get_client(client_row)
+        try:
+            item_id = client.add_url(best.grab_url, client_row.category or "")
+        except DownloadClientError as exc:
+            self._fail_indexer_job(db, job, str(exc), "network")
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Grab failed for job %s", job_id)
+            self._fail_indexer_job(db, job, f"Grab failed: {exc}", "other")
+            return
+        finally:
+            closer = getattr(client, "close", None)
+            if callable(closer):
+                closer()
+
+        # Track metadata is what the importer matches files against.
+        try:
+            from app.services.artists import sync_album_tracks
+
+            if not album.tracks:
+                sync_album_tracks(db, album)
+        except Exception:  # noqa: BLE001
+            logger.info("Could not sync tracks for album %s before import", album.id)
+
+        job.client_item_id = item_id
+        job.state = "grabbed"
+        job.progress = 1.0
+        job.error = None
+        job.error_category = ""
+        db.commit()
+        add_history(
+            db,
+            "grabbed",
+            f"Grabbed '{best.title}' from {best.indexer_name} for "
+            f"{artist_name} – {album.title} (sent to {client_row.name})",
+        )
+        logger.info(
+            "Grabbed '%s' (score %.1f) via %s → %s",
+            best.title,
+            best.score,
+            best.indexer_name,
+            client_row.name,
+        )
+
+    def _fail_indexer_job(
+        self,
+        db: Session,
+        job: DownloadJob,
+        message: str,
+        category: str,
+    ) -> None:
+        job.state = "failed"
+        job.error = message
+        job.error_category = category
+        job.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        add_history(
+            db,
+            "download_failed",
+            f"Failed {job.artist_name} – {job.album_title}: {message}",
+        )
+        from app.services.notifications import send_notification
+
+        send_notification(
+            db,
+            "Download failed",
+            f"{job.artist_name} – {job.album_title}\n{message}",
+            kind="failure",
+        )
+
+    def _maybe_fallback_to_indexer(self, db: Session, job: DownloadJob) -> None:
+        """After a streaming failure, retry through indexers when configured."""
+        if job.source != "streaming" or not job.album_id:
+            return
+        settings = ensure_settings(db)
+        if resolve_download_method(settings) != "streaming_then_indexer":
+            return
+        from app.models import Indexer
+
+        has_indexer = db.scalar(select(Indexer).where(Indexer.enabled.is_(True)))
+        if not has_indexer:
+            return
+        already = db.scalar(
+            select(DownloadJob).where(
+                DownloadJob.album_id == job.album_id,
+                DownloadJob.source == "indexer",
+                DownloadJob.state.notin_(["failed", "cancelled"]),
+            )
+        )
+        if already:
+            return
+        fallback = DownloadJob(
+            target_type=job.target_type,
+            target_id=job.target_id,
+            target_provider_id=job.target_provider_id,
+            album_id=job.album_id,
+            artist_name=job.artist_name,
+            album_title=job.album_title,
+            state="searching",
+            source="indexer",
+            progress=0.0,
+        )
+        db.add(fallback)
+        db.commit()
+        add_history(
+            db,
+            "queued",
+            f"Streaming failed for {job.artist_name} – {job.album_title}; searching indexers",
+        )
+        self.wake()
+
     def _rematch_album_to_active(
         self,
         db: Session,
@@ -481,7 +768,15 @@ class DownloadQueue:
             if not hits:
                 logger.warning("Rematch: no %s artists for %s", active, artist_name)
                 return None
-            match = next((h for h in hits if h.name.lower() == artist_name.lower()), hits[0])
+            match = pick_unique_artist_search_hit(artist_name, hits)
+            if match is None:
+                logger.warning(
+                    "Rematch: ambiguous or missing exact name match for %s on %s (%d hits)",
+                    artist_name,
+                    active,
+                    len(hits),
+                )
+                return None
             existing = db.scalar(
                 select(Artist)
                 .options(joinedload(Artist.albums))

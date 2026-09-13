@@ -6,9 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import albums, artists, auth, events, ops, player, settings
+from app.api import acquisition, albums, artists, auth, events, ops, player, settings
 from app.core.database import SessionLocal, ensure_dirs, init_db
 from app.services import app_auth, player_auth
+from app.services.completed_download_handler import completed_download_handler
 from app.services.download_queue import download_queue
 from app.services.monitor import release_monitor
 from app.services.settings_service import ensure_settings
@@ -37,9 +38,11 @@ async def lifespan(_: FastAPI):
         db.close()
     download_queue.start()
     release_monitor.start()
+    completed_download_handler.start()
     yield
     download_queue.stop()
     release_monitor.stop()
+    completed_download_handler.stop()
 
 
 app = FastAPI(title="Musicarr", version="0.1.0", lifespan=lifespan)
@@ -108,6 +111,7 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(artists.router, prefix="/api")
 app.include_router(albums.router, prefix="/api")
 app.include_router(ops.router, prefix="/api")
+app.include_router(acquisition.router, prefix="/api")
 app.include_router(events.router, prefix="/api")
 app.include_router(player.router, prefix="/api")
 

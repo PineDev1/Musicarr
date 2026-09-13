@@ -4,11 +4,15 @@ import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { playerApi } from '../player/playerApi'
 import { useToast } from '../Toast'
+import { AcquisitionPanels } from './AcquisitionPanels'
 
 type TabId =
   | 'sources'
   | 'library'
   | 'downloads'
+  | 'indexers'
+  | 'clients'
+  | 'paths'
   | 'notifications'
   | 'media'
   | 'security'
@@ -19,6 +23,9 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'sources', label: 'Sources' },
   { id: 'library', label: 'Library' },
   { id: 'downloads', label: 'Downloads' },
+  { id: 'indexers', label: 'Indexers' },
+  { id: 'clients', label: 'Download clients' },
+  { id: 'paths', label: 'Path mappings' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'media', label: 'Media servers' },
   { id: 'security', label: 'Security' },
@@ -92,6 +99,10 @@ export function SettingsPage() {
   const [publicDomain, setPublicDomain] = useState('')
   const [playerEnabled, setPlayerEnabled] = useState(false)
   const [playerSharingEnabled, setPlayerSharingEnabled] = useState(true)
+  const [preferredMethod, setPreferredMethod] = useState('streaming')
+  const [importMechanism, setImportMechanism] = useState('hardlink')
+  const [scanInterval, setScanInterval] = useState(60)
+  const [removeCompleted, setRemoveCompleted] = useState(false)
   const [newPlayerUser, setNewPlayerUser] = useState('')
   const [newPlayerPass, setNewPlayerPass] = useState('')
   const [newPlayerDisplay, setNewPlayerDisplay] = useState('')
@@ -134,6 +145,10 @@ export function SettingsPage() {
     setPublicDomain(data.public_domain || '')
     setPlayerEnabled(data.player_enabled ?? false)
     setPlayerSharingEnabled(data.player_sharing_enabled ?? true)
+    setPreferredMethod(data.preferred_download_method || 'streaming')
+    setImportMechanism(data.import_mechanism || 'hardlink')
+    setScanInterval(data.completed_download_scan_interval_seconds ?? 60)
+    setRemoveCompleted(data.remove_completed_downloads ?? false)
     setQobuzEmail(data.qobuz_email || '')
     setQobuzUserId(data.qobuz_user_id || '')
     setQobuzAppId(data.qobuz_app_id || '950096963')
@@ -174,6 +189,10 @@ export function SettingsPage() {
         public_domain: publicDomain.trim(),
         player_enabled: playerEnabled,
         player_sharing_enabled: playerSharingEnabled,
+        preferred_download_method: preferredMethod,
+        import_mechanism: importMechanism,
+        completed_download_scan_interval_seconds: scanInterval,
+        remove_completed_downloads: removeCompleted,
         qobuz_app_id: qobuzAppId,
       }
       if (arl.trim()) body.arl = arl.trim()
@@ -687,8 +706,46 @@ export function SettingsPage() {
                 onChange={(e) => setMaxRetries(Number(e.target.value))}
               />
             </div>
+            <div className="field">
+              <label>Preferred download method</label>
+              <select value={preferredMethod} onChange={(e) => setPreferredMethod(e.target.value)}>
+                <option value="streaming">Streaming provider (Deezer / Tidal / Qobuz)</option>
+                <option value="indexer">Indexers → download client</option>
+                <option value="streaming_then_indexer">Streaming, then indexer on failure</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Import mechanism (indexer downloads)</label>
+              <select value={importMechanism} onChange={(e) => setImportMechanism(e.target.value)}>
+                <option value="hardlink">Hardlink (best for seeding)</option>
+                <option value="copy">Copy</option>
+                <option value="move">Move (breaks torrents)</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Completed download scan interval (seconds)</label>
+              <input
+                type="number"
+                min={15}
+                max={3600}
+                value={scanInterval}
+                onChange={(e) => setScanInterval(Number(e.target.value))}
+              />
+            </div>
+            <label className="checks">
+              <input
+                type="checkbox"
+                checked={removeCompleted}
+                onChange={(e) => setRemoveCompleted(e.target.checked)}
+              />
+              Remove from download client after import
+            </label>
           </>
         )}
+
+        {tab === 'indexers' && <AcquisitionPanels panel="indexers" />}
+        {tab === 'clients' && <AcquisitionPanels panel="clients" />}
+        {tab === 'paths' && <AcquisitionPanels panel="paths" />}
 
         {tab === 'notifications' && (
           <>
