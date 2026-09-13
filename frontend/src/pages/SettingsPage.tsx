@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { useToast } from '../Toast'
 
@@ -23,6 +24,16 @@ export function SettingsPage() {
   const [includeEps, setIncludeEps] = useState(true)
   const [includeSingles, setIncludeSingles] = useState(false)
   const [includeCompilations, setIncludeCompilations] = useState(false)
+  const [minTrackCount, setMinTrackCount] = useState(0)
+  const [ignoreJunk, setIgnoreJunk] = useState(true)
+  const [ignoreLive, setIgnoreLive] = useState(false)
+  const [notifyUrl, setNotifyUrl] = useState('')
+  const [notifyComplete, setNotifyComplete] = useState(true)
+  const [notifyFailure, setNotifyFailure] = useState(true)
+  const [upgradeEnabled, setUpgradeEnabled] = useState(true)
+  const [mediaRefreshUrl, setMediaRefreshUrl] = useState('')
+  const [mediaRefreshToken, setMediaRefreshToken] = useState('')
+  const [mediaRefreshType, setMediaRefreshType] = useState('webhook')
   const [qobuzEmail, setQobuzEmail] = useState('')
   const [qobuzPassword, setQobuzPassword] = useState('')
   const [qobuzToken, setQobuzToken] = useState('')
@@ -45,6 +56,15 @@ export function SettingsPage() {
     setIncludeEps(data.include_eps)
     setIncludeSingles(data.include_singles)
     setIncludeCompilations(data.include_compilations)
+    setMinTrackCount(data.min_track_count ?? 0)
+    setIgnoreJunk(data.ignore_junk_titles ?? true)
+    setIgnoreLive(data.ignore_live_releases ?? false)
+    setNotifyUrl(data.notify_webhook_url || '')
+    setNotifyComplete(data.notify_on_complete ?? true)
+    setNotifyFailure(data.notify_on_failure ?? true)
+    setUpgradeEnabled(data.upgrade_enabled ?? true)
+    setMediaRefreshUrl(data.media_refresh_url || '')
+    setMediaRefreshType(data.media_refresh_type || 'webhook')
     setQobuzEmail(data.qobuz_email || '')
     setQobuzUserId(data.qobuz_user_id || '')
     setQobuzAppId(data.qobuz_app_id || '950096963')
@@ -64,15 +84,26 @@ export function SettingsPage() {
         include_eps: includeEps,
         include_singles: includeSingles,
         include_compilations: includeCompilations,
+        min_track_count: minTrackCount,
+        ignore_junk_titles: ignoreJunk,
+        ignore_live_releases: ignoreLive,
+        notify_webhook_url: notifyUrl.trim(),
+        notify_on_complete: notifyComplete,
+        notify_on_failure: notifyFailure,
+        upgrade_enabled: upgradeEnabled,
+        media_refresh_url: mediaRefreshUrl.trim(),
+        media_refresh_type: mediaRefreshType,
         qobuz_app_id: qobuzAppId,
       }
       if (arl.trim()) body.arl = arl.trim()
       if (qobuzAppSecret.trim()) body.qobuz_app_secret = qobuzAppSecret.trim()
+      if (mediaRefreshToken.trim()) body.media_refresh_token = mediaRefreshToken.trim()
       return api.updateSettings(body)
     },
     onSuccess: () => {
       setArl('')
       setQobuzAppSecret('')
+      setMediaRefreshToken('')
       toast.push('Settings saved', 'ok')
       qc.invalidateQueries({ queryKey: ['settings'] })
       qc.invalidateQueries({ queryKey: ['health'] })
@@ -156,15 +187,30 @@ export function SettingsPage() {
   const scan = useMutation({
     mutationFn: api.scan,
     onSuccess: (res) => toast.push(res.message, 'ok'),
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  const importLib = useMutation({
+    mutationFn: () => api.importLibrary(true),
+    onSuccess: (res) => {
+      toast.push(res.message, 'ok')
+      qc.invalidateQueries({ queryKey: ['artists'] })
+      qc.invalidateQueries({ queryKey: ['wanted'] })
+      qc.invalidateQueries({ queryKey: ['health'] })
+      qc.invalidateQueries({ queryKey: ['import-review'] })
+      qc.invalidateQueries({ queryKey: ['upgradable'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const reorganize = useMutation({
     mutationFn: api.reorganize,
     onSuccess: (res) => toast.push(res.message, 'ok'),
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const monitor = useMutation({
     mutationFn: api.runMonitor,
     onSuccess: (res) =>
       toast.push(`Monitor: ${res.artists_checked} artists, ${res.new_albums} new`, 'ok'),
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
   function onSubmit(e: FormEvent) {
@@ -387,6 +433,19 @@ export function SettingsPage() {
           </select>
         </div>
         <div className="field">
+          <label>Quality upgrades</label>
+          <div className="checks">
+            <label>
+              <input
+                type="checkbox"
+                checked={upgradeEnabled}
+                onChange={(e) => setUpgradeEnabled(e.target.checked)}
+              />
+              Flag albums below target quality and allow Upgrade all
+            </label>
+          </div>
+        </div>
+        <div className="field">
           <label>Folder template</label>
           <input type="text" value={folderTemplate} onChange={(e) => setFolderTemplate(e.target.value)} />
         </div>
@@ -438,6 +497,97 @@ export function SettingsPage() {
             </label>
           </div>
         </div>
+        <div className="field">
+          <label>Skip junk titles (karaoke, instrumental, tribute…)</label>
+          <div className="checks">
+            <label>
+              <input type="checkbox" checked={ignoreJunk} onChange={(e) => setIgnoreJunk(e.target.checked)} />
+              Ignore junk titles on import
+            </label>
+            <label>
+              <input type="checkbox" checked={ignoreLive} onChange={(e) => setIgnoreLive(e.target.checked)} />
+              Ignore live releases on import
+            </label>
+          </div>
+        </div>
+        <div className="field">
+          <label>Minimum tracks (albums/EPs; 0 = off)</label>
+          <input
+            type="number"
+            min={0}
+            max={100}
+            value={minTrackCount}
+            onChange={(e) => setMinTrackCount(Number(e.target.value))}
+          />
+        </div>
+        <div className="field">
+          <label>Notification webhook URL (Discord or generic)</label>
+          <input
+            type="url"
+            placeholder="https://discord.com/api/webhooks/…"
+            value={notifyUrl}
+            onChange={(e) => setNotifyUrl(e.target.value)}
+          />
+        </div>
+        <div className="field">
+          <label>Notify when</label>
+          <div className="checks">
+            <label>
+              <input
+                type="checkbox"
+                checked={notifyComplete}
+                onChange={(e) => setNotifyComplete(e.target.checked)}
+              />
+              Download complete
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={notifyFailure}
+                onChange={(e) => setNotifyFailure(e.target.checked)}
+              />
+              Download / auth failure
+            </label>
+          </div>
+        </div>
+        <div className="field">
+          <label>Media server refresh</label>
+          <select value={mediaRefreshType} onChange={(e) => setMediaRefreshType(e.target.value)}>
+            <option value="webhook">Generic webhook</option>
+            <option value="plex">Plex</option>
+            <option value="jellyfin">Jellyfin</option>
+            <option value="navidrome">Navidrome</option>
+          </select>
+        </div>
+        <div className="field">
+          <label>Media refresh URL</label>
+          <input
+            type="url"
+            placeholder={
+              mediaRefreshType === 'jellyfin'
+                ? 'https://jellyfin.example'
+                : mediaRefreshType === 'plex'
+                  ? 'http://plex:32400/library/sections/X/refresh'
+                  : 'https://…'
+            }
+            value={mediaRefreshUrl}
+            onChange={(e) => setMediaRefreshUrl(e.target.value)}
+          />
+        </div>
+        <div className="field">
+          <label>
+            Media refresh token {data?.media_refresh_token_set ? '(saved)' : ''}
+          </label>
+          <input
+            type="password"
+            placeholder={
+              data?.media_refresh_token_set ? 'Leave blank to keep' : 'Optional API token'
+            }
+            value={mediaRefreshToken}
+            onChange={(e) => setMediaRefreshToken(e.target.value)}
+            autoComplete="off"
+          />
+        </div>
         <div className="toolbar">
           <button className="btn" type="submit" disabled={save.isPending}>
             Save settings
@@ -448,12 +598,33 @@ export function SettingsPage() {
       <div className="page-header" style={{ marginTop: '2.5rem' }}>
         <div>
           <h1 style={{ fontSize: '1.8rem' }}>Library tools</h1>
-          <p>Scan existing files or re-apply naming templates.</p>
+          <p>
+            Point Library path at your music folder, then import an existing collection or match
+            files to artists you already added.
+          </p>
         </div>
       </div>
-      <div className="toolbar">
+      <div className="toolbar" style={{ flexWrap: 'wrap' }}>
+        <button
+          className="btn"
+          onClick={() => {
+            if (
+              window.confirm(
+                'Import everything under your library path into Musicarr? Artists/albums will be created from tags and folders. Matching names may link to your active download source.',
+              )
+            ) {
+              importLib.mutate()
+            }
+          }}
+          disabled={importLib.isPending}
+        >
+          {importLib.isPending ? 'Importing…' : 'Import existing library'}
+        </button>
+        <Link className="btn secondary" to="/import-review">
+          Review imports
+        </Link>
         <button className="btn secondary" onClick={() => scan.mutate()} disabled={scan.isPending}>
-          Scan library
+          {scan.isPending ? 'Scanning…' : 'Match files to library'}
         </button>
         <button className="btn secondary" onClick={() => reorganize.mutate()} disabled={reorganize.isPending}>
           Reorganize files
@@ -462,6 +633,12 @@ export function SettingsPage() {
           Check for new releases
         </button>
       </div>
+      <p className="muted" style={{ marginTop: '0.75rem', maxWidth: 640 }}>
+        <strong>Import existing library</strong> creates artists/albums from what’s already on disk
+        (tags + Artist/Album/folders). <strong>Review imports</strong> links local-only artists and
+        flags weak tags. <strong>Match files</strong> only links files to releases already in
+        Musicarr.
+      </p>
     </div>
   )
 }

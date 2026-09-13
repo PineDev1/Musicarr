@@ -56,11 +56,32 @@ def migrate_schema() -> None:
         "qobuz_user_auth_token": "TEXT DEFAULT ''",
         "qobuz_app_id": "VARCHAR(64) DEFAULT ''",
         "qobuz_app_secret": "VARCHAR(128) DEFAULT ''",
+        "min_track_count": "INTEGER DEFAULT 0",
+        "ignore_junk_titles": "BOOLEAN DEFAULT 1",
+        "ignore_live_releases": "BOOLEAN DEFAULT 0",
+        "notify_webhook_url": "TEXT DEFAULT ''",
+        "notify_on_complete": "BOOLEAN DEFAULT 1",
+        "notify_on_failure": "BOOLEAN DEFAULT 1",
+        "upgrade_enabled": "BOOLEAN DEFAULT 1",
+        "media_refresh_url": "TEXT DEFAULT ''",
+        "media_refresh_token": "TEXT DEFAULT ''",
+        "media_refresh_type": "VARCHAR(32) DEFAULT 'webhook'",
     }
     existing = _existing_columns("app_settings")
     for name, definition in settings_cols.items():
         if existing and name not in existing:
             _add_column("app_settings", f"{name} {definition}")
+
+    artist_cols = _existing_columns("artists")
+    if artist_cols:
+        if "monitor_mode" not in artist_cols:
+            _add_column("artists", "monitor_mode VARCHAR(16) DEFAULT 'all'")
+        if "include_singles" not in artist_cols:
+            _add_column("artists", "include_singles BOOLEAN")
+
+    album_cols = _existing_columns("albums")
+    if album_cols and "quality" not in album_cols:
+        _add_column("albums", "quality VARCHAR(16) DEFAULT ''")
 
     for table, id_col in (
         ("artists", "deezer_id"),
@@ -91,6 +112,8 @@ def migrate_schema() -> None:
     job_cols = _existing_columns("download_jobs")
     if job_cols and "target_provider_id" not in job_cols:
         _add_column("download_jobs", "target_provider_id VARCHAR(64) DEFAULT ''")
+    if job_cols and "error_category" not in job_cols:
+        _add_column("download_jobs", "error_category VARCHAR(32) DEFAULT ''")
 
 
 def init_db() -> None:

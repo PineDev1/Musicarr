@@ -29,6 +29,7 @@ def _queue_snapshot() -> list[dict]:
                 "state": j.state,
                 "progress": j.progress,
                 "error": j.error,
+                "error_category": getattr(j, "error_category", "") or "",
                 "retries": j.retries,
             }
             for j in jobs

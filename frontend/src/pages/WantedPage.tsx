@@ -1,19 +1,37 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
+import { useMemo, useState } from 'react'
 import { api } from '../api'
 import { useToast } from '../Toast'
 
 export function WantedPage() {
   const qc = useQueryClient()
   const toast = useToast()
+  const [typeFilter, setTypeFilter] = useState<string>('')
   const health = useQuery({ queryKey: ['health'], queryFn: api.health })
   const active = health.data?.active_provider || 'deezer'
   const { data, isLoading, error } = useQuery({
     queryKey: ['wanted', active],
-    queryFn: api.wanted,
+    queryFn: () => api.wanted(),
     refetchInterval: 10000,
   })
+
+  const filtered = useMemo(() => {
+    if (!data) return []
+    if (!typeFilter) return data
+    return data.filter((a) => (a.album_type || '').toLowerCase() === typeFilter)
+  }, [data, typeFilter])
+
+  const counts = useMemo(() => {
+    const all = data || []
+    return {
+      album: all.filter((a) => a.album_type === 'album').length,
+      ep: all.filter((a) => a.album_type === 'ep').length,
+      single: all.filter((a) => a.album_type === 'single').length,
+      compilation: all.filter((a) => a.album_type === 'compilation').length,
+    }
+  }, [data])
 
   const download = useMutation({
     mutationFn: (id: number) => api.downloadAlbum(id),
@@ -43,6 +61,22 @@ export function WantedPage() {
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
+  const skipSingles = useMutation({
+    mutationFn: api.skipWantedSingles,
+    onSuccess: (res) => {
+      toast.push(`Skipped ${res.skipped} single(s)`, 'ok')
+      qc.invalidateQueries({ queryKey: ['wanted'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  const skipJunk = useMutation({
+    mutationFn: api.skipWantedJunk,
+    onSuccess: (res) => {
+      toast.push(`Skipped ${res.skipped} junk release(s)`, 'ok')
+      qc.invalidateQueries({ queryKey: ['wanted'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
 
   return (
     <div>
@@ -55,9 +89,15 @@ export function WantedPage() {
           </p>
         </div>
         {data && data.length > 0 && (
-          <div className="toolbar" style={{ marginBottom: 0 }}>
+          <div className="toolbar" style={{ marginBottom: 0, flexWrap: 'wrap' }}>
             <button className="btn" onClick={() => downloadAll.mutate()} disabled={downloadAll.isPending}>
               Download all
+            </button>
+            <button className="btn ghost" onClick={() => skipSingles.mutate()} disabled={skipSingles.isPending}>
+              Skip all singles
+            </button>
+            <button className="btn ghost" onClick={() => skipJunk.mutate()} disabled={skipJunk.isPending}>
+              Skip junk
             </button>
             <button className="btn ghost" onClick={() => skipAll.mutate()} disabled={skipAll.isPending}>
               Skip all
@@ -65,16 +105,30 @@ export function WantedPage() {
           </div>
         )}
       </div>
+
+      <div className="toolbar">
+        <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          Type
+          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+            <option value="">All ({data?.length || 0})</option>
+            <option value="album">Albums ({counts.album})</option>
+            <option value="ep">EPs ({counts.ep})</option>
+            <option value="single">Singles ({counts.single})</option>
+            <option value="compilation">Compilations ({counts.compilation})</option>
+          </select>
+        </label>
+      </div>
+
       {isLoading && <p className="muted">Loading…</p>}
       {error && <p className="error">{(error as Error).message}</p>}
-      {data && data.length === 0 && (
+      {data && filtered.length === 0 && (
         <div className="empty-state">
           <h2>You’re caught up</h2>
           <p className="muted">Nothing wanted right now.</p>
         </div>
       )}
       <div className="album-list">
-        {data?.map((album, i) => (
+        {filtered.map((album, i) => (
           <motion.div
             key={album.id}
             className="album-row"
@@ -89,15 +143,18 @@ export function WantedPage() {
             )}
             <div>
               <div>
-                <strong>{album.title}</strong>{' '}
+                <Link to={`/albums/${album.id}`}>
+                  <strong>{album.title}</strong>
+                </Link>{' '}
                 <span className="badge wanted">wanted</span>{' '}
-                <span className="badge queued">{album.provider}</span>
+                <span className="badge queued">{album.album_type}</span>
               </div>
               <div className="muted">
                 <Link to={`/artists/${album.artist_id}`}>
                   {album.artist_name || `Artist #${album.artist_id}`}
                 </Link>
                 {album.release_date ? ` · ${album.release_date}` : ''}
+                {album.track_count ? ` · ${album.track_count} tracks` : ''}
               </div>
             </div>
             <div className="row-actions">

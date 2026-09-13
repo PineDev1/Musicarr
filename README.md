@@ -28,9 +28,12 @@ By using this software you acknowledge and agree that:
 - **Artist library** — search, add, and monitor artists; same artist across sources is merged into one library entry.
 - **Wanted / Queue / Activity** — track missing albums, live download progress, and history.
 - **In-artist progress** — download bars appear under albums on the artist page.
-- **Quality & naming** — FLAC / 320 / 128 and custom folder/track templates.
+- **Quality & naming** — FLAC / 320 / 128, upgrade flags when below target, and custom folder/track templates.
+- **Artist monitor profiles** — all albums, new-only, or unmonitored; per-artist singles override.
+- **Import review** — after importing a library, link local-only artists and review weak tags.
+- **Media server hooks** — refresh Plex / Jellyfin / Navidrome (or a generic webhook) after downloads/imports.
 - **Release monitor** — scheduled + manual “Scan for new music”.
-- **Library tools** — scan existing files and reorganize by template.
+- **Library tools** — import existing collections, match files, and reorganize by template.
 - **Per-provider logout** — clear credentials without wiping the rest of your settings.
 - **Docker-first deploy** — single container, web UI on port `8787`.
 
@@ -206,10 +209,42 @@ cd frontend && npm run build
 
 ---
 
-## Default naming
+## Import an existing library
+
+1. In **Settings**, set **Library path** to the folder that already contains your music
+   (e.g. `Artist/Album/01 - Track.flac`).
+2. Click **Import existing library**.
+3. Musicarr reads tags (and folder names as fallback), creates artists/albums/tracks, marks them
+   downloaded, and when possible links artists to your **active** download source so you can
+   grab missing releases later.
+4. Open **Review imports** to link local-only artists to your active source and check weakly tagged
+   albums.
+5. Use **Match files to library** anytime to re-link files to artists you already added in Musicarr
+   without creating new entries.
+
+Supported audio: `.flac` `.mp3` `.m4a` `.ogg` `.opus` `.wav` `.aac` `.aiff`
 
 - Folders: `{artist}/{album} ({year})`
 - Tracks: `{track:02d} - {title}`
+
+---
+
+## What's new
+
+### v1.2 (on `dev`)
+
+- **Quality upgrades** — track album quality, flag below-target releases, and **Upgrade all**
+- **Artist monitor profiles** — all albums, new-only, or unmonitored; per-artist singles override
+- **Import review** — link local-only artists and review weakly tagged folders after import
+- **Media server refresh** — notify Plex, Jellyfin, Navidrome, or a generic webhook after download/import
+
+### v1.1 (on `dev`)
+
+- **Wanted filters** — skip singles/junk/live noise; minimum track count
+- **Album detail** — tracks, re-download, delete (± files)
+- **Queue failures** — clearer rematch/auth errors, grouped retry
+- **Discord / webhook notifications** on download complete or failure
+- **Import existing library** — build your library from files already on disk
 
 ---
 

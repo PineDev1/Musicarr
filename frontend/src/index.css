@@ -344,6 +344,11 @@ textarea:focus {
   color: #f0b4af;
 }
 
+.badge.upgrade {
+  background: color-mix(in srgb, var(--wanted) 30%, transparent);
+  color: var(--wanted);
+}
+
 .progress {
   height: 6px;
   background: var(--bg-soft);

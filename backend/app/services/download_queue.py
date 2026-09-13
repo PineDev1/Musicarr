@@ -26,6 +26,19 @@ from app.services.settings_service import ensure_settings, library_root
 logger = logging.getLogger("musicarr.download")
 
 
+def classify_download_error(message: str) -> str:
+    text = (message or "").lower()
+    if "not logged in" in text or "arl" in text or "not connected" in text or "not authenticated" in text:
+        return "auth"
+    if "could not find a matching release" in text or "rematch" in text or "active source is" in text:
+        return "rematch"
+    if "not available" in text or "unavailable" in text or "404" in text or "geo" in text:
+        return "unavailable"
+    if "timeout" in text or "timed out" in text or "connection" in text or "network" in text:
+        return "network"
+    return "other"
+
+
 class DownloadQueue:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -48,12 +61,16 @@ class DownloadQueue:
     def wake(self) -> None:
         self._wake.set()
 
-    def enqueue_album(self, db: Session, album_id: int) -> DownloadJob | None:
+    def enqueue_album(self, db: Session, album_id: int, *, allow_upgrade: bool = False) -> DownloadJob | None:
         album = db.get(Album, album_id)
         if not album:
             return None
-        if album.status == "skipped":
+        if album.status == "skipped" and not allow_upgrade:
             return None
+        if allow_upgrade and album.status == "downloaded":
+            album.status = "wanted"
+            album.monitored = True
+            db.commit()
         existing = db.scalar(
             select(DownloadJob).where(
                 DownloadJob.album_id == album_id,
@@ -116,6 +133,7 @@ class DownloadQueue:
         job.state = "queued"
         job.progress = 0.0
         job.error = None
+        job.error_category = ""
         job.started_at = None
         job.finished_at = None
         job.retries = (job.retries or 0) + 1
@@ -123,6 +141,27 @@ class DownloadQueue:
         db.refresh(job)
         self.wake()
         return job
+
+    def retry_failed(
+        self,
+        db: Session,
+        *,
+        category: str | None = None,
+        exclude_categories: list[str] | None = None,
+    ) -> int:
+        q = select(DownloadJob).where(DownloadJob.state == "failed")
+        jobs = list(db.scalars(q).all())
+        exclude = set(exclude_categories or [])
+        count = 0
+        for job in jobs:
+            cat = (job.error_category or classify_download_error(job.error or "")).lower()
+            if category and cat != category.lower():
+                continue
+            if cat in exclude:
+                continue
+            if self.retry(db, job.id):
+                count += 1
+        return count
 
     def clear_finished(self, db: Session) -> int:
         jobs = db.scalars(
@@ -227,12 +266,22 @@ class DownloadQueue:
                     album.provider_id,
                 )
             except ProviderError as exc:
-                logger.error("Download auth failed for job %s: %s", job_id, exc)
+                logger.error("Download auth/rematch failed for job %s: %s", job_id, exc)
+                category = classify_download_error(str(exc))
                 job.state = "failed"
                 job.error = str(exc)
+                job.error_category = category
                 job.finished_at = datetime.now(timezone.utc)
                 db.commit()
-                add_history(db, "auth_error", str(exc))
+                add_history(db, "auth_error" if category == "auth" else "download_failed", str(exc))
+                from app.services.notifications import send_notification
+
+                send_notification(
+                    db,
+                    "Download failed",
+                    f"{job.artist_name} – {job.album_title}\n{exc}",
+                    kind="auth" if category == "auth" else "failure",
+                )
                 return
 
             from app.services.artists import sync_album_tracks
@@ -274,11 +323,15 @@ class DownloadQueue:
                     db.commit()
                     shutil.rmtree(staging, ignore_errors=True)
                     return
+                category = classify_download_error(str(exc))
+                # Never auto-retry auth/rematch misses — user must fix source or re-add.
+                retryable = category not in {"auth", "rematch", "unavailable"}
                 max_retries = settings.max_retries or 0
-                if (job.retries or 0) < max_retries:
+                if retryable and (job.retries or 0) < max_retries:
                     job.state = "queued"
                     job.retries = (job.retries or 0) + 1
                     job.error = str(exc)
+                    job.error_category = category
                     job.progress = 0.0
                     job.started_at = None
                     db.commit()
@@ -293,12 +346,21 @@ class DownloadQueue:
                     return
                 job.state = "failed"
                 job.error = str(exc)
+                job.error_category = category
                 job.finished_at = datetime.now(timezone.utc)
                 db.commit()
                 add_history(
                     db,
                     "download_failed",
                     f"Failed {artist.name if artist else ''} – {album.title}: {exc}",
+                )
+                from app.services.notifications import send_notification
+
+                send_notification(
+                    db,
+                    "Download failed",
+                    f"{artist.name if artist else ''} – {album.title}\n{exc}",
+                    kind="failure",
                 )
                 shutil.rmtree(staging, ignore_errors=True)
                 return
@@ -357,16 +419,28 @@ class DownloadQueue:
             album.path = str(dest_folder)
             if matched > 0 or downloaded_files:
                 album.status = "downloaded"
+                album.quality = (settings.bitrate or "flac").lower()
             job.state = "completed"
             job.progress = 100.0
             job.finished_at = datetime.now(timezone.utc)
             job.error = None
+            job.error_category = ""
             db.commit()
             add_history(
                 db,
                 "downloaded",
                 f"Downloaded {artist.name if artist else ''} – {album.title} ({len(downloaded_files)} files)",
             )
+            from app.services.notifications import send_notification
+            from app.services.media_refresh import trigger_media_refresh
+
+            send_notification(
+                db,
+                "Download complete",
+                f"{artist.name if artist else ''} – {album.title} ({len(downloaded_files)} files)",
+                kind="complete",
+            )
+            trigger_media_refresh(db, reason="download")
             shutil.rmtree(staging, ignore_errors=True)
         finally:
             with self._lock:
@@ -437,16 +511,32 @@ class DownloadQueue:
 
             target = norm(album.title)
             albums = list(existing.albums or [])
-            candidate = next((a for a in albums if norm(a.title) == target), None)
-            if not candidate:
-                candidate = next(
-                    (
-                        a
-                        for a in albums
-                        if target and (target in norm(a.title) or norm(a.title) in target)
-                    ),
-                    None,
+            from app.services.filters import is_junk_title, is_live_title
+
+            def rank(a: Album) -> tuple:
+                type_rank = {"album": 0, "ep": 1, "single": 2, "compilation": 3}.get(
+                    (a.album_type or "").lower(), 9
                 )
+                return (
+                    1 if is_junk_title(a.title or "") else 0,
+                    1 if is_live_title(a.title or "") else 0,
+                    type_rank,
+                    -(a.track_count or 0),
+                    a.id,
+                )
+
+            exact = [a for a in albums if norm(a.title) == target]
+            if exact:
+                candidate = sorted(exact, key=rank)[0]
+            else:
+                fuzzy = [
+                    a
+                    for a in albums
+                    if target
+                    and (target in norm(a.title) or norm(a.title) in target)
+                    and not is_junk_title(a.title or "")
+                ]
+                candidate = sorted(fuzzy, key=rank)[0] if fuzzy else None
 
             # Fallback: provider album search (catches singles missing from discography lists)
             if not candidate:
@@ -473,12 +563,12 @@ class DownloadQueue:
                             None,
                         )
                         if not candidate:
+                            from app.services.artists import _legacy_id
+
                             candidate = Album(
                                 provider=active,
                                 provider_id=hit.provider_id,
-                                deezer_id=int(hit.provider_id)
-                                if active == "deezer" and hit.provider_id.isdigit()
-                                else None,
+                                deezer_id=_legacy_id(active, hit.provider_id),
                                 artist_id=existing.id,
                                 title=hit.title,
                                 album_type=hit.album_type or "album",

@@ -29,6 +29,16 @@ class SettingsOut(BaseModel):
     include_eps: bool
     include_singles: bool
     include_compilations: bool
+    min_track_count: int = 0
+    ignore_junk_titles: bool = True
+    ignore_live_releases: bool = False
+    notify_webhook_url: str = ""
+    notify_on_complete: bool = True
+    notify_on_failure: bool = True
+    upgrade_enabled: bool = True
+    media_refresh_url: str = ""
+    media_refresh_token_set: bool = False
+    media_refresh_type: str = "webhook"
     download_concurrency: int
     max_retries: int
     provider_ok: bool | None = None
@@ -55,6 +65,16 @@ class SettingsUpdate(BaseModel):
     include_eps: bool | None = None
     include_singles: bool | None = None
     include_compilations: bool | None = None
+    min_track_count: int | None = Field(default=None, ge=0, le=100)
+    ignore_junk_titles: bool | None = None
+    ignore_live_releases: bool | None = None
+    notify_webhook_url: str | None = None
+    notify_on_complete: bool | None = None
+    notify_on_failure: bool | None = None
+    upgrade_enabled: bool | None = None
+    media_refresh_url: str | None = None
+    media_refresh_token: str | None = None
+    media_refresh_type: Literal["webhook", "plex", "jellyfin", "navidrome"] | None = None
     download_concurrency: int | None = Field(default=None, ge=1, le=4)
     max_retries: int | None = Field(default=None, ge=0, le=10)
 
@@ -116,6 +136,8 @@ class AlbumOut(BaseModel):
     monitored: bool
     status: str
     path: str | None
+    quality: str = ""
+    upgrade_available: bool = False
     artist_name: str | None = None
     sources: list[str] = []
     tracks: list[TrackOut] = []
@@ -132,6 +154,8 @@ class ArtistOut(BaseModel):
     name: str
     image_url: str | None
     monitored: bool
+    monitor_mode: str = "all"
+    include_singles: bool | None = None
     added_at: datetime
     last_synced_at: datetime | None
     album_count: int = 0
@@ -153,6 +177,12 @@ class ArtistCreate(BaseModel):
     download_missing: bool = True
 
 
+class ArtistPatch(BaseModel):
+    monitored: bool | None = None
+    monitor_mode: Literal["all", "new", "none"] | None = None
+    include_singles: bool | None = None
+
+
 class AlbumPatch(BaseModel):
     monitored: bool | None = None
     status: AlbumStatus | None = None
@@ -168,6 +198,7 @@ class DownloadJobOut(BaseModel):
     state: str
     progress: float
     error: str | None
+    error_category: str = ""
     retries: int
     created_at: datetime
     started_at: datetime | None
@@ -192,6 +223,45 @@ class ScanResult(BaseModel):
     matched: int
     unmatched: int
     message: str
+
+
+class ImportResult(BaseModel):
+    files_seen: int
+    artists_created: int = 0
+    albums_imported: int = 0
+    tracks_linked: int = 0
+    provider_linked: int = 0
+    matched: int = 0
+    unmatched: int = 0
+    message: str
+
+
+class ImportReviewArtist(BaseModel):
+    id: int
+    name: str
+    provider: str
+    album_count: int
+    reason: str
+    suggestions: list[ArtistSearchResult] = []
+
+
+class ImportReviewAlbum(BaseModel):
+    id: int
+    title: str
+    artist_id: int
+    artist_name: str
+    reason: str
+
+
+class ImportReviewOut(BaseModel):
+    local_artists: list[ImportReviewArtist] = []
+    weak_albums: list[ImportReviewAlbum] = []
+    message: str = ""
+
+
+class LinkArtistRequest(BaseModel):
+    provider_id: str
+    provider: ProviderName | None = None
 
 
 class ReorganizeResult(BaseModel):

@@ -4,7 +4,9 @@ import { Layout } from './Layout'
 import { ToastProvider } from './Toast'
 import { ActivityPage } from './pages/ActivityPage'
 import { AddArtistPage } from './pages/AddArtistPage'
+import { AlbumPage } from './pages/AlbumPage'
 import { ArtistPage } from './pages/ArtistPage'
+import { ImportReviewPage } from './pages/ImportReviewPage'
 import { LibraryPage } from './pages/LibraryPage'
 import { QueuePage } from './pages/QueuePage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -29,10 +31,12 @@ export default function App() {
               <Route index element={<LibraryPage />} />
               <Route path="add" element={<AddArtistPage />} />
               <Route path="artists/:id" element={<ArtistPage />} />
+              <Route path="albums/:id" element={<AlbumPage />} />
               <Route path="wanted" element={<WantedPage />} />
               <Route path="queue" element={<QueuePage />} />
               <Route path="activity" element={<ActivityPage />} />
               <Route path="settings" element={<SettingsPage />} />
+              <Route path="import-review" element={<ImportReviewPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>
