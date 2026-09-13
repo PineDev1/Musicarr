@@ -46,6 +46,12 @@ export type Settings = {
   media_refresh_url: string
   media_refresh_token_set: boolean
   media_refresh_type: string
+  auth_enabled: boolean
+  auth_username: string
+  auth_password_set: boolean
+  ssl_enabled: boolean
+  public_domain: string
+  player_enabled: boolean
   download_concurrency: number
   max_retries: number
   provider_ok: boolean | null
@@ -56,6 +62,13 @@ export type Settings = {
   tidal_error: string | null
   qobuz_ok: boolean | null
   qobuz_error: string | null
+}
+
+export type AppAuthStatus = {
+  enabled: boolean
+  authenticated: boolean
+  username: string | null
+  password_set: boolean
 }
 
 export type ArtistSearchResult = {
@@ -170,6 +183,7 @@ export type HistoryEvent = {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
     ...init,
   })
@@ -188,6 +202,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  authStatus: () => request<AppAuthStatus>('/auth/status'),
+  appLogin: (username: string, password: string) =>
+    request<AppAuthStatus>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  appLogout: () =>
+    request<AppAuthStatus>('/auth/logout-session', { method: 'POST' }),
   health: () => request<Health>('/health'),
   settings: (validate = false) => request<Settings>(`/settings?validate=${validate}`),
   updateSettings: (body: Record<string, unknown>) =>

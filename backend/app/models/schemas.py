@@ -39,6 +39,12 @@ class SettingsOut(BaseModel):
     media_refresh_url: str = ""
     media_refresh_token_set: bool = False
     media_refresh_type: str = "webhook"
+    auth_enabled: bool = False
+    auth_username: str = "admin"
+    auth_password_set: bool = False
+    ssl_enabled: bool = False
+    public_domain: str = ""
+    player_enabled: bool = False
     download_concurrency: int
     max_retries: int
     provider_ok: bool | None = None
@@ -75,6 +81,12 @@ class SettingsUpdate(BaseModel):
     media_refresh_url: str | None = None
     media_refresh_token: str | None = None
     media_refresh_type: Literal["webhook", "plex", "jellyfin", "navidrome"] | None = None
+    auth_enabled: bool | None = None
+    auth_username: str | None = None
+    auth_password: str | None = None
+    ssl_enabled: bool | None = None
+    public_domain: str | None = None
+    player_enabled: bool | None = None
     download_concurrency: int | None = Field(default=None, ge=1, le=4)
     max_retries: int | None = Field(default=None, ge=0, le=10)
 
@@ -287,3 +299,164 @@ class TidalDeviceOut(BaseModel):
     verification_uri: str
     verification_uri_complete: str | None = None
     expires_in: int = 300
+
+
+class AppLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class AppAuthStatus(BaseModel):
+    enabled: bool
+    authenticated: bool
+    username: str | None = None
+    password_set: bool = False
+
+
+class PlayerUserOut(BaseModel):
+    id: int
+    username: str
+    display_name: str = ""
+    is_active: bool = True
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class PlayerUserCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=4, max_length=256)
+    display_name: str = ""
+
+
+class PlayerUserUpdate(BaseModel):
+    password: str | None = Field(default=None, min_length=4, max_length=256)
+    display_name: str | None = None
+    is_active: bool | None = None
+
+
+class PlayerLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class PlayerAuthStatus(BaseModel):
+    enabled: bool
+    authenticated: bool
+    username: str | None = None
+    user_id: int | None = None
+    display_name: str | None = None
+
+
+class PlayerTrackOut(BaseModel):
+    id: int
+    title: str
+    track_no: int = 0
+    disc_no: int = 1
+    duration: int = 0
+    album_id: int
+    album_title: str = ""
+    artist_id: int = 0
+    artist_name: str = ""
+    cover_url: str | None = None
+    quality: str = ""
+    format: str = ""
+
+
+class PlayerAlbumOut(BaseModel):
+    id: int
+    title: str
+    artist_id: int
+    artist_name: str = ""
+    cover_url: str | None = None
+    release_date: str | None = None
+    track_count: int = 0
+    quality: str = ""
+    tracks: list[PlayerTrackOut] = []
+
+
+class PlayerArtistOut(BaseModel):
+    id: int
+    name: str
+    image_url: str | None = None
+    album_count: int = 0
+
+
+class PlayerPlaylistOut(BaseModel):
+    id: int | str
+    name: str
+    track_count: int = 0
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    tracks: list[PlayerTrackOut] = []
+    is_smart: bool = False
+    builtin: bool = False
+    kind: str | None = None
+
+
+class PlayerPlaylistCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=256)
+    is_smart: bool = False
+
+
+class PlayerPlaylistUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=256)
+    is_smart: bool | None = None
+
+
+class PlayerPlaylistAddTracks(BaseModel):
+    track_ids: list[int]
+
+
+class PlayerPasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=4, max_length=256)
+
+
+class PlayerPrefsOut(BaseModel):
+    show_recently_played: bool = True
+    show_shuffle_mix: bool = True
+    wave_height: float = 6.0
+    wave_length: float = 20.0
+    wave_speed: float = 12.0
+    wave_thickness: float = 3.0
+    wave_color: str = "#3dba7a"
+    wave_flatten_when_paused: bool = True
+
+
+class PlayerPrefsUpdate(BaseModel):
+    show_recently_played: bool | None = None
+    show_shuffle_mix: bool | None = None
+    wave_height: float | None = Field(default=None, ge=0, le=24)
+    wave_length: float | None = Field(default=None, ge=4, le=80)
+    wave_speed: float | None = Field(default=None, ge=0, le=60)
+    wave_thickness: float | None = Field(default=None, ge=1, le=12)
+    wave_color: str | None = Field(default=None, max_length=32)
+    wave_flatten_when_paused: bool | None = None
+
+
+class PlayerPlayingUpdate(BaseModel):
+    track_id: int | None = None
+    position: float = 0
+    playing: bool = False
+    title: str | None = None
+    artist_name: str | None = None
+    cover_url: str | None = None
+
+
+class PlayerNowPlayingOut(BaseModel):
+    user_id: int
+    username: str
+    display_name: str = ""
+    track_id: int | None = None
+    title: str | None = None
+    artist_name: str | None = None
+    cover_url: str | None = None
+    playing: bool = False
+    position: float = 0
+    updated_at: float
+
+
+class PlayerCommandsOut(BaseModel):
+    stop: bool = False

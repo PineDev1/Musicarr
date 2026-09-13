@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import { api } from './api'
 
@@ -8,14 +8,22 @@ const links = [
   { to: '/add', label: 'Add Artist' },
   { to: '/wanted', label: 'Wanted' },
   { to: '/queue', label: 'Queue' },
+  { to: '/now-playing', label: 'Now Playing' },
   { to: '/activity', label: 'Activity' },
   { to: '/settings', label: 'Settings' },
 ]
 
 export function Layout() {
+  const qc = useQueryClient()
   const health = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 15000 })
+  const auth = useQuery({ queryKey: ['auth-status'], queryFn: api.authStatus })
   const location = useLocation()
   const provider = health.data?.active_provider || 'deezer'
+
+  const signOut = useMutation({
+    mutationFn: api.appLogout,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['auth-status'] }),
+  })
 
   return (
     <div className="app-shell">
@@ -48,6 +56,17 @@ export function Layout() {
           <div className="muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
             {health.data?.provider_ok ? 'Connected' : 'Not ready'}
           </div>
+          {auth.data?.enabled && auth.data.authenticated && (
+            <button
+              type="button"
+              className="btn ghost"
+              style={{ marginTop: '0.75rem', width: '100%' }}
+              onClick={() => signOut.mutate()}
+              disabled={signOut.isPending}
+            >
+              Sign out
+            </button>
+          )}
           <div className="pindev">Produced by Pindev</div>
         </div>
       </aside>

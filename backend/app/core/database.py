@@ -66,6 +66,13 @@ def migrate_schema() -> None:
         "media_refresh_url": "TEXT DEFAULT ''",
         "media_refresh_token": "TEXT DEFAULT ''",
         "media_refresh_type": "VARCHAR(32) DEFAULT 'webhook'",
+        "auth_enabled": "BOOLEAN DEFAULT 0",
+        "auth_username": "VARCHAR(128) DEFAULT 'admin'",
+        "auth_password_hash": "TEXT DEFAULT ''",
+        "auth_secret": "TEXT DEFAULT ''",
+        "ssl_enabled": "BOOLEAN DEFAULT 0",
+        "public_domain": "VARCHAR(512) DEFAULT ''",
+        "player_enabled": "BOOLEAN DEFAULT 0",
     }
     existing = _existing_columns("app_settings")
     for name, definition in settings_cols.items():
@@ -114,6 +121,25 @@ def migrate_schema() -> None:
         _add_column("download_jobs", "target_provider_id VARCHAR(64) DEFAULT ''")
     if job_cols and "error_category" not in job_cols:
         _add_column("download_jobs", "error_category VARCHAR(32) DEFAULT ''")
+
+    player_user_cols = {
+        "show_recently_played": "BOOLEAN DEFAULT 1",
+        "show_shuffle_mix": "BOOLEAN DEFAULT 1",
+        "wave_height": "REAL DEFAULT 6.0",
+        "wave_length": "REAL DEFAULT 20.0",
+        "wave_speed": "REAL DEFAULT 12.0",
+        "wave_thickness": "REAL DEFAULT 3.0",
+        "wave_color": "VARCHAR(32) DEFAULT '#3dba7a'",
+        "wave_flatten_when_paused": "BOOLEAN DEFAULT 1",
+    }
+    existing_pu = _existing_columns("player_users")
+    for name, definition in player_user_cols.items():
+        if existing_pu and name not in existing_pu:
+            _add_column("player_users", f"{name} {definition}")
+
+    pl_cols = _existing_columns("player_playlists")
+    if pl_cols and "is_smart" not in pl_cols:
+        _add_column("player_playlists", "is_smart BOOLEAN DEFAULT 0")
 
 
 def init_db() -> None:

@@ -58,6 +58,15 @@ class AppSettings(Base):
     media_refresh_url: Mapped[str] = mapped_column(Text, default="")
     media_refresh_token: Mapped[str] = mapped_column(Text, default="")
     media_refresh_type: Mapped[str] = mapped_column(String(32), default="webhook")
+    # Optional UI/API login gate (disabled by default)
+    auth_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    auth_username: Mapped[str] = mapped_column(String(128), default="admin")
+    auth_password_hash: Mapped[str] = mapped_column(Text, default="")
+    auth_secret: Mapped[str] = mapped_column(Text, default="")
+    # Behind Traefik / HTTPS reverse proxy (Musicarr still listens on HTTP)
+    ssl_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    public_domain: Mapped[str] = mapped_column(String(512), default="")
+    player_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     download_concurrency: Mapped[int] = mapped_column(Integer, default=1)
     max_retries: Mapped[int] = mapped_column(Integer, default=3)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -173,3 +182,102 @@ class HistoryEvent(Base):
     event_type: Mapped[str] = mapped_column(String(64))
     message: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PlayerUser(Base):
+    __tablename__ = "player_users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(Text, default="")
+    display_name: Mapped[str] = mapped_column(String(256), default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    show_recently_played: Mapped[bool] = mapped_column(Boolean, default=True)
+    show_shuffle_mix: Mapped[bool] = mapped_column(Boolean, default=True)
+    wave_height: Mapped[float] = mapped_column(Float, default=6.0)
+    wave_length: Mapped[float] = mapped_column(Float, default=20.0)
+    wave_speed: Mapped[float] = mapped_column(Float, default=12.0)
+    wave_thickness: Mapped[float] = mapped_column(Float, default=3.0)
+    wave_color: Mapped[str] = mapped_column(String(32), default="#3dba7a")
+    wave_flatten_when_paused: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    playlists: Mapped[list["PlayerPlaylist"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    favorites: Mapped[list["PlayerFavorite"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class PlayerPlaylist(Base):
+    __tablename__ = "player_playlists"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("player_users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(256))
+    is_smart: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped["PlayerUser"] = relationship(back_populates="playlists")
+    tracks: Mapped[list["PlayerPlaylistTrack"]] = relationship(
+        back_populates="playlist",
+        cascade="all, delete-orphan",
+        order_by="PlayerPlaylistTrack.position",
+    )
+
+
+class PlayerPlaylistTrack(Base):
+    __tablename__ = "player_playlist_tracks"
+    __table_args__ = (
+        UniqueConstraint("playlist_id", "track_id", name="uq_playlist_track"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    playlist_id: Mapped[int] = mapped_column(
+        ForeignKey("player_playlists.id", ondelete="CASCADE"), index=True
+    )
+    track_id: Mapped[int] = mapped_column(
+        ForeignKey("tracks.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, default=0)
+
+    playlist: Mapped["PlayerPlaylist"] = relationship(back_populates="tracks")
+    track: Mapped["Track"] = relationship()
+
+
+class PlayerFavorite(Base):
+    __tablename__ = "player_favorites"
+    __table_args__ = (
+        UniqueConstraint("user_id", "track_id", name="uq_player_favorite"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("player_users.id", ondelete="CASCADE"), index=True
+    )
+    track_id: Mapped[int] = mapped_column(
+        ForeignKey("tracks.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped["PlayerUser"] = relationship(back_populates="favorites")
+    track: Mapped["Track"] = relationship()
+
+
+class PlayerPlayEvent(Base):
+    __tablename__ = "player_play_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("player_users.id", ondelete="CASCADE"), index=True
+    )
+    track_id: Mapped[int] = mapped_column(
+        ForeignKey("tracks.id", ondelete="CASCADE"), index=True
+    )
+    played_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+    track: Mapped["Track"] = relationship()

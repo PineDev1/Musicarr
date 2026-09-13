@@ -71,6 +71,12 @@ def settings_to_out(row: AppSettings, validate: bool = False) -> SettingsOut:
         media_refresh_url=getattr(row, "media_refresh_url", "") or "",
         media_refresh_token_set=bool(getattr(row, "media_refresh_token", "") or ""),
         media_refresh_type=getattr(row, "media_refresh_type", None) or "webhook",
+        auth_enabled=bool(getattr(row, "auth_enabled", False)),
+        auth_username=(getattr(row, "auth_username", None) or "admin"),
+        auth_password_set=bool((getattr(row, "auth_password_hash", None) or "").strip()),
+        ssl_enabled=bool(getattr(row, "ssl_enabled", False)),
+        public_domain=(getattr(row, "public_domain", None) or ""),
+        player_enabled=bool(getattr(row, "player_enabled", False)),
         download_concurrency=row.download_concurrency,
         max_retries=row.max_retries,
     )
@@ -115,8 +121,24 @@ def update_settings(db: Session, payload: SettingsUpdate) -> AppSettings:
         token = (data.pop("media_refresh_token") or "").strip()
         if token:
             row.media_refresh_token = token
+    if "auth_password" in data:
+        password = (data.pop("auth_password") or "").strip()
+        if password:
+            from app.services.app_auth import hash_password
+
+            row.auth_password_hash = hash_password(password)
+    if "auth_username" in data:
+        username = (data.pop("auth_username") or "").strip() or "admin"
+        row.auth_username = username[:128]
+    if "public_domain" in data:
+        from app.services.proxy import normalize_public_domain
+
+        row.public_domain = normalize_public_domain(data.pop("public_domain") or "")
+    enabling = data.get("auth_enabled") is True
     for key, value in data.items():
         setattr(row, key, value)
+    if enabling and not (row.auth_password_hash or "").strip():
+        raise ValueError("Set a login password before enabling authentication")
     if row.library_path:
         Path(row.library_path).mkdir(parents=True, exist_ok=True)
     db.commit()

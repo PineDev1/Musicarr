@@ -1,12 +1,13 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models import Album, Artist, DownloadJob
 from app.models.schemas import HealthOut, SettingsOut, SettingsUpdate
+from app.services import app_auth
 from app.services.providers import get_provider
 from app.services.settings_service import (
     ensure_settings,
@@ -28,9 +29,25 @@ def get_settings(db: Session = Depends(get_db), validate: bool = False):
 
 
 @router.put("/settings", response_model=SettingsOut)
-def put_settings(payload: SettingsUpdate, db: Session = Depends(get_db)):
-    row = update_settings(db, payload)
-    return settings_to_out_validated(db, row)
+def put_settings(
+    payload: SettingsUpdate,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    was_enabled = app_auth.auth_enabled(db)
+    try:
+        row = update_settings(db, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    out = settings_to_out_validated(db, row)
+    # When turning auth on, keep the current browser signed in
+    if row.auth_enabled and (not was_enabled or payload.auth_password or payload.auth_username):
+        username = (row.auth_username or "admin").strip() or "admin"
+        token = app_auth.create_session_token(db, username)
+        app_auth.set_session_cookie(response, token, db)
+    if was_enabled and not row.auth_enabled:
+        app_auth.clear_session_cookie(response, db)
+    return out
 
 
 @router.get("/health", response_model=HealthOut)
