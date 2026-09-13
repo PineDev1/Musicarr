@@ -8,7 +8,7 @@ Self-hosted music library manager with a sharp web UI — grab discographies fro
   ♫  Musicarr  ·  library OS vibes  ·  port 8787
 ```
 
-**Author:** [PineDev1](https://github.com/PineDev1) · **Latest:** [v1.3](https://github.com/PineDev1/Musicarr/releases/tag/v1.3)
+**Author:** [PineDev1](https://github.com/PineDev1) · **Latest:** [v1.4](https://github.com/PineDev1/Musicarr/releases/tag/v1.4)
 
 ---
 
@@ -25,7 +25,8 @@ Self-hosted music library manager with a sharp web UI — grab discographies fro
 ## Features
 
 - **Multi-source downloads** — Deezer (ARL), Tidal (device login), or Qobuz (token / app credentials). One active source at a time.
-- **Artist library** — search, add, and monitor artists; same artist across sources is merged into one library entry.
+- **Indexers + download clients** — Newznab/Torznab (Prowlarr-friendly) search, grab to **qBittorrent** or **SABnzbd**, then import into your library with remote path mapping.
+- **Artist library** — search, add, and monitor artists. Each provider artist is its own library entry (same display names stay separate). Cross-source merge is only via an explicit link later — not by name.
 - **Wanted / Queue / Activity** — track missing albums, live download progress, and history.
 - **In-artist progress** — download bars appear under albums on the artist page.
 - **Quality & naming** — FLAC / 320 / 128, upgrade flags when below target, and custom folder/track templates.
@@ -81,13 +82,32 @@ Open **http://localhost:8787**.
 |-----------|-----------|---------|
 | `./data`  | `/config` | SQLite DB, settings, download staging |
 | `./music` | `/music`  | Your music library |
+| `./downloads` (optional) | `/downloads` | Shared completed folder from qBittorrent / SABnzbd |
 
 Point Musicarr’s library path at `/music` inside the container (default), or mount a different host folder:
 
 ```yaml
 volumes:
   - /path/on/host/Music:/music
+  - /path/on/host/downloads:/downloads
 ```
+
+### Indexers + download clients (path mapping)
+
+Musicarr does **not** control where qBittorrent or SABnzbd write files. Those clients use their own save paths. For seamless import:
+
+1. Mount the **same** completed-download volume into Musicarr and the client.
+2. In Settings → **Path mappings**, map the client’s path to Musicarr’s path.
+
+Example:
+
+| Role | Path |
+|------|------|
+| qBittorrent (in Docker) | `/data/completed` |
+| Musicarr volume | `/downloads` ← same host folder |
+| Path mapping | remote `/data/completed` → local `/downloads` |
+
+Also set the client **category** to `musicarr` (default) so Musicarr only imports its own grabs. Configure indexers under Settings → Indexers (Prowlarr Torznab/Newznab URL works) and clients under Settings → Download clients. Prefer grab method under Settings → Downloads.
 
 ### 4. Update
 
@@ -99,7 +119,7 @@ docker compose up -d --build
 Or pull the prebuilt image:
 
 ```bash
-docker pull ghcr.io/pinedev1/musicarr:1.3
+docker pull ghcr.io/pinedev1/musicarr:1.4
 ```
 
 ### 5. Logs / stop
@@ -148,7 +168,7 @@ Player users cannot download, manage Wanted/Queue, or change admin settings.
 ### Build locally
 
 ```bash
-docker build -t musicarr:1.3 .
+docker build -t musicarr:1.4 .
 ```
 
 Run without Compose:
@@ -161,21 +181,21 @@ docker run -d --name musicarr \
   -v "$(pwd)/music:/music" \
   -e MUSICARR_DATA_DIR=/config \
   -e MUSICARR_MUSIC_DIR=/music \
-  musicarr:1.3
+  musicarr:1.4
 ```
 
 ### GitHub Container Registry
 
 ```bash
 echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u PineDev1 --password-stdin
-docker pull ghcr.io/pinedev1/musicarr:1.3
+docker pull ghcr.io/pinedev1/musicarr:1.4
 docker pull ghcr.io/pinedev1/musicarr:latest
 ```
 
 ```bash
 docker run -d --name musicarr -p 8787:8787 \
   -v "$(pwd)/data:/config" -v "$(pwd)/music:/music" \
-  ghcr.io/pinedev1/musicarr:1.3
+  ghcr.io/pinedev1/musicarr:1.4
 ```
 
 ---
@@ -253,6 +273,13 @@ Supported audio: `.flac` `.mp3` `.m4a` `.ogg` `.opus` `.wav` `.aac` `.aiff`
 
 ## What's new
 
+### v1.4 — Indexers + artist identity
+
+- **Indexers + download clients** — Newznab/Torznab (Prowlarr), qBittorrent, and SABnzbd with remote path mapping and completed-download import
+- **Preferred grab method** — streaming, indexer, or streaming-then-indexer fallback
+- **Same-name artists stay separate** — identity by provider ID; folders disambiguate on collision; wrong-artist indexer imports are rejected
+- **pytest coverage** for artist identity guards
+
 ### v1.3 — Player + remote-ready
 
 - **Multi-user `/player`** — separate logins, playlists, drag-and-drop queue, Liked Songs & mixes
@@ -299,10 +326,11 @@ v2.0 moves Musicarr from a download manager toward a **library OS**.
 
 ## Releases
 
+- **[v1.4](https://github.com/PineDev1/Musicarr/releases/tag/v1.4)** — indexers/download clients + same-name artist identity
 - **[v1.3](https://github.com/PineDev1/Musicarr/releases/tag/v1.3)** — multi-user player, Traefik SSL, Now Playing
 - **v1.0** — initial public release
 
-See [Releases](https://github.com/PineDev1/Musicarr/releases) for tags and notes. Images: `ghcr.io/pinedev1/musicarr:1.3` · `latest`
+See [Releases](https://github.com/PineDev1/Musicarr/releases) for tags and notes. Images: `ghcr.io/pinedev1/musicarr:1.4` · `latest`
 
 ---
 

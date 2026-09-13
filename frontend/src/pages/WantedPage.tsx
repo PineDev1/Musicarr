@@ -33,19 +33,28 @@ export function WantedPage() {
     }
   }, [data])
 
+  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.settings(false) })
+  const preferred = settings.data?.preferred_download_method || 'streaming'
+
   const download = useMutation({
-    mutationFn: (id: number) => api.downloadAlbum(id),
-    onSuccess: () => {
+    mutationFn: ({ id, method }: { id: number; method?: string }) =>
+      api.downloadAlbum(id, false, method),
+    onSuccess: (res) => {
+      toast.push(
+        res.source === 'indexer' ? 'Searching indexers…' : 'Queued streaming download',
+        'ok',
+      )
       qc.invalidateQueries({ queryKey: ['wanted'] })
       qc.invalidateQueries({ queryKey: ['queue'] })
     },
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const skip = useMutation({
     mutationFn: (id: number) => api.patchAlbum(id, { status: 'skipped', monitored: false }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['wanted'] }),
   })
   const downloadAll = useMutation({
-    mutationFn: api.downloadAllWanted,
+    mutationFn: (method?: string) => api.downloadAllWanted(method),
     onSuccess: (res) => {
       toast.push(`Queued ${res.queued} album(s)`, 'ok')
       qc.invalidateQueries({ queryKey: ['wanted'] })
@@ -85,13 +94,21 @@ export function WantedPage() {
           <h1>Wanted</h1>
           <p>
             Missing releases from <strong style={{ textTransform: 'capitalize' }}>{active}</strong>.
-            Switch source in Settings to see another catalog.
+            Default grab method: <strong>{preferred.replaceAll('_', ' ')}</strong> (Settings →
+            Downloads).
           </p>
         </div>
         {data && data.length > 0 && (
           <div className="toolbar" style={{ marginBottom: 0, flexWrap: 'wrap' }}>
-            <button className="btn" onClick={() => downloadAll.mutate()} disabled={downloadAll.isPending}>
+            <button className="btn" onClick={() => downloadAll.mutate(undefined)} disabled={downloadAll.isPending}>
               Download all
+            </button>
+            <button
+              className="btn secondary"
+              onClick={() => downloadAll.mutate('indexer')}
+              disabled={downloadAll.isPending}
+            >
+              Grab all via indexers
             </button>
             <button className="btn ghost" onClick={() => skipSingles.mutate()} disabled={skipSingles.isPending}>
               Skip all singles
@@ -158,8 +175,14 @@ export function WantedPage() {
               </div>
             </div>
             <div className="row-actions">
-              <button className="btn" onClick={() => download.mutate(album.id)}>
+              <button className="btn" onClick={() => download.mutate({ id: album.id })}>
                 Download
+              </button>
+              <button
+                className="btn secondary"
+                onClick={() => download.mutate({ id: album.id, method: 'indexer' })}
+              >
+                Indexer
               </button>
               <button className="btn ghost" onClick={() => skip.mutate(album.id)}>
                 Skip

@@ -16,7 +16,19 @@ def _queue_snapshot() -> list[dict]:
     try:
         jobs = db.scalars(
             select(DownloadJob)
-            .where(DownloadJob.state.in_(["queued", "running", "failed"]))
+            .where(
+                DownloadJob.state.in_(
+                    [
+                        "queued",
+                        "running",
+                        "searching",
+                        "grabbed",
+                        "downloading",
+                        "importing",
+                        "failed",
+                    ]
+                )
+            )
             .order_by(DownloadJob.created_at.desc())
             .limit(100)
         ).all()
@@ -31,6 +43,9 @@ def _queue_snapshot() -> list[dict]:
                 "error": j.error,
                 "error_category": getattr(j, "error_category", "") or "",
                 "retries": j.retries,
+                "source": getattr(j, "source", None) or "streaming",
+                "release_title": getattr(j, "release_title", None) or "",
+                "client_item_id": getattr(j, "client_item_id", None) or "",
             }
             for j in jobs
         ]

@@ -1,7 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { PlayerAlbumPage } from './PlayerAlbumPage'
+import { PlayerAlbumsPage } from './PlayerAlbumsPage'
 import { PlayerArtistPage } from './PlayerArtistPage'
+import { PlayerArtistsPage } from './PlayerArtistsPage'
 import { PlayerHomePage } from './PlayerHomePage'
 import { PlayerLayout } from './PlayerLayout'
 import { PlayerLoginPage } from './PlayerLoginPage'
@@ -9,6 +11,8 @@ import { PlayerPlaylistDetailPage } from './PlayerPlaylistDetailPage'
 import { PlayerPlaylistsPage } from './PlayerPlaylistsPage'
 import { PlayerQueueProvider } from './PlayerQueueContext'
 import { PlayerSearchPage } from './PlayerSearchPage'
+import { PlayerSongsPage } from './PlayerSongsPage'
+import { PlayerHistoryPage } from './PlayerHistoryPage'
 import { playerApi } from './playerApi'
 
 export function PlayerApp() {
@@ -68,10 +72,22 @@ export function PlayerApp() {
   return (
     <PlayerQueueProvider userId={status.data.user_id}>
       <Routes>
-        <Route element={<PlayerLayout displayName={status.data.display_name || status.data.username || ''} />}>
+        <Route
+          element={
+            <PlayerLayout
+              displayName={status.data.display_name || status.data.username || ''}
+              avatarUrl={status.data.avatar_url}
+              userId={status.data.user_id}
+            />
+          }
+        >
           <Route index element={<PlayerHomePage />} />
+          <Route path="artists" element={<PlayerArtistsPage />} />
           <Route path="artists/:id" element={<PlayerArtistPage />} />
+          <Route path="albums" element={<PlayerAlbumsPage />} />
           <Route path="albums/:id" element={<PlayerAlbumPage />} />
+          <Route path="songs" element={<PlayerSongsPage />} />
+          <Route path="history" element={<PlayerHistoryPage />} />
           <Route path="playlists" element={<PlayerPlaylistsPage />} />
           <Route path="playlists/:id" element={<PlayerPlaylistDetailPage />} />
           <Route path="search" element={<PlayerSearchPage />} />

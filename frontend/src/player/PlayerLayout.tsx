@@ -1,13 +1,46 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState, type FormEvent } from 'react'
-import { IconClose, IconPlus, IconSettings } from './icons'
-import { DEFAULT_PREFS, playerApi, type PlayerPrefs } from './playerApi'
+import { useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useToast } from '../Toast'
+import {
+  IconBack,
+  IconClose,
+  IconForward,
+  IconHeart,
+  IconHome,
+  IconLibrary,
+  IconMusic,
+  IconPlus,
+  IconQueue,
+  IconSearch,
+  IconSettings,
+  IconUser,
+} from './icons'
+import { DEFAULT_PREFS, playerApi, type PlayerPrefs, type PlayerRepeatMode } from './playerApi'
+import { copyToClipboard } from './TrackMenu'
 import { WavyPlayBar } from './WavyPlayBar'
 
-export function PlayerLayout({ displayName }: { displayName: string }) {
+type Props = {
+  displayName: string
+  avatarUrl: string | null
+  userId: number | null
+}
+
+const LIBRARY_LINKS = [
+  { to: '/player', label: 'Home', icon: IconHome, end: true },
+  { to: '/player/playlists/recently-added', label: 'Recently Added', icon: IconQueue },
+  { to: '/player/history', label: 'History', icon: IconQueue },
+  { to: '/player/artists', label: 'Artists', icon: IconUser },
+  { to: '/player/albums', label: 'Albums', icon: IconLibrary },
+  { to: '/player/songs', label: 'Songs', icon: IconMusic },
+]
+
+export function PlayerLayout({ displayName, avatarUrl, userId }: Props) {
   const qc = useQueryClient()
   const navigate = useNavigate()
+  const location = useLocation()
+  const toast = useToast()
+  const fileRef = useRef<HTMLInputElement | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [plName, setPlName] = useState('')
@@ -15,9 +48,18 @@ export function PlayerLayout({ displayName }: { displayName: string }) {
   const [currentPw, setCurrentPw] = useState('')
   const [newPw, setNewPw] = useState('')
   const [pwMsg, setPwMsg] = useState<string | null>(null)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [avatarVersion, setAvatarVersion] = useState(0)
 
   const prefsQ = useQuery({ queryKey: ['player-prefs'], queryFn: playerApi.prefs })
   const prefs = prefsQ.data || DEFAULT_PREFS
+  const playlists = useQuery({ queryKey: ['player-playlists'], queryFn: playerApi.playlists })
+  const shares = useQuery({
+    queryKey: ['player-shares'],
+    queryFn: playerApi.listShares,
+    enabled: settingsOpen,
+    retry: false,
+  })
 
   const logout = useMutation({
     mutationFn: playerApi.logout,
@@ -49,6 +91,31 @@ export function PlayerLayout({ displayName }: { displayName: string }) {
       navigate(`/player/playlists/${pl.id}`)
     },
   })
+  const uploadAvatar = useMutation({
+    mutationFn: (file: File) => playerApi.uploadAvatar(file),
+    onSuccess: () => {
+      toast.push('Photo updated', 'ok')
+      setAvatarVersion((v) => v + 1)
+      qc.invalidateQueries({ queryKey: ['player-status'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  const removeAvatar = useMutation({
+    mutationFn: playerApi.deleteAvatar,
+    onSuccess: () => {
+      toast.push('Photo removed', 'ok')
+      qc.invalidateQueries({ queryKey: ['player-status'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  const revokeShare = useMutation({
+    mutationFn: (token: string) => playerApi.revokeShare(token),
+    onSuccess: () => {
+      toast.push('Share revoked', 'ok')
+      qc.invalidateQueries({ queryKey: ['player-shares'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
 
   function patchPref<K extends keyof PlayerPrefs>(key: K, value: PlayerPrefs[K]) {
     const next = { ...prefs, [key]: value }
@@ -56,38 +123,167 @@ export function PlayerLayout({ displayName }: { displayName: string }) {
     savePrefs.mutate({ [key]: value })
   }
 
+  function togglePin(playlistId: number) {
+    const pinned = prefs.pinned_playlist_ids || []
+    const next = pinned.includes(playlistId)
+      ? pinned.filter((id) => id !== playlistId)
+      : [...pinned, playlistId]
+    patchPref('pinned_playlist_ids', next)
+  }
+
+  function onAvatarPicked(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (file) uploadAvatar.mutate(file)
+    e.target.value = ''
+  }
+
+  const pinned = prefs.pinned_playlist_ids || []
+  const sortedPlaylists = [...(playlists.data || [])].sort((a, b) => {
+    const aPinned = pinned.includes(Number(a.id)) ? 0 : 1
+    const bPinned = pinned.includes(Number(b.id)) ? 0 : 1
+    if (aPinned !== bPinned) return aPinned - bPinned
+    return a.name.localeCompare(b.name)
+  })
+
+  // Avatar URLs are stable per user, so bump a version after uploads to dodge the image cache.
+  const avatar =
+    avatarUrl && userId != null ? `${playerApi.avatarUrl(userId)}?v=${avatarVersion}` : avatarUrl
+
+  function goBack() {
+    if (location.key !== 'default') navigate(-1)
+    else navigate('/player')
+  }
+
   return (
     <div className="player-shell">
-      <header className="player-top">
-        <div className="brand">
-          Music<span>arr</span> <span className="player-tag">Player</span>
+      <aside className="player-sidebar">
+        <div className="player-sidebar-brand">
+          <div className="brand">
+            Music<span>arr</span>
+          </div>
+          <span className="player-tag">Player</span>
         </div>
-        <nav className="player-nav">
-          <NavLink to="/player" end>
-            Library
-          </NavLink>
-          <NavLink to="/player/playlists">Playlists</NavLink>
-          <NavLink to="/player/search">Search</NavLink>
+
+        <form
+          className="player-sidebar-search"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault()
+            navigate(`/player/search?q=${encodeURIComponent(searchTerm.trim())}`)
+          }}
+        >
+          <IconSearch size={16} />
+          <input
+            type="search"
+            placeholder="Search"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            onFocus={() => {
+              if (!location.pathname.startsWith('/player/search')) navigate('/player/search')
+            }}
+          />
+        </form>
+
+        <nav className="player-side-nav">
+          <div className="player-side-label">Library</div>
+          {LIBRARY_LINKS.map(({ to, label, icon: Icon, end }) => (
+            <NavLink key={to} to={to} end={end}>
+              <Icon size={17} />
+              {label}
+            </NavLink>
+          ))}
         </nav>
-        <div className="player-user">
-          <span className="muted">{displayName}</span>
+
+        <nav className="player-side-nav playlists">
+          <div className="player-side-label">
+            Playlists
+            <button
+              type="button"
+              className="pill-icon-btn small"
+              aria-label="Create playlist"
+              onClick={() => setCreateOpen(true)}
+            >
+              <IconPlus size={14} />
+            </button>
+          </div>
+          <NavLink to="/player/playlists/liked">
+            <IconHeart filled size={16} />
+            Liked Songs
+          </NavLink>
+          {sortedPlaylists.map((pl) => (
+            <NavLink key={pl.id} to={`/player/playlists/${pl.id}`}>
+              <IconMusic size={16} />
+              <span className="truncate">{pl.name}</span>
+              {pinned.includes(Number(pl.id)) && <span className="pin-dot" aria-label="Pinned" />}
+            </NavLink>
+          ))}
+          <NavLink to="/player/playlists" end className="player-side-all">
+            All playlists
+          </NavLink>
+        </nav>
+
+        <div className="player-user-chip">
+          <span className="player-avatar">
+            {avatar ? <img src={avatar} alt="" /> : <IconUser size={18} />}
+          </span>
+          <span className="truncate">{displayName}</span>
           <button
             type="button"
-            className="pill-icon-btn"
+            className="pill-icon-btn small"
             aria-label="Settings"
             onClick={() => setSettingsOpen(true)}
           >
-            <IconSettings size={18} />
+            <IconSettings size={16} />
           </button>
-          <button type="button" className="btn ghost" onClick={() => logout.mutate()} disabled={logout.isPending}>
-            Sign out
+          <button
+            type="button"
+            className="pill-icon-btn small"
+            aria-label="Sign out"
+            title="Sign out"
+            onClick={() => logout.mutate()}
+            disabled={logout.isPending}
+          >
+            <IconClose size={16} />
           </button>
         </div>
-      </header>
+      </aside>
 
-      <main className="player-main">
-        <Outlet />
-      </main>
+      <div className="player-content">
+        <div className="player-content-top">
+          <button type="button" className="pill-icon-btn" aria-label="Back" onClick={goBack}>
+            <IconBack size={18} />
+          </button>
+          <button
+            type="button"
+            className="pill-icon-btn"
+            aria-label="Forward"
+            onClick={() => navigate(1)}
+          >
+            <IconForward size={18} />
+          </button>
+        </div>
+        <main className="player-main">
+          <Outlet />
+        </main>
+      </div>
+
+      <nav className="player-bottom-tabs">
+        <NavLink to="/player" end>
+          <IconHome size={20} />
+          Home
+        </NavLink>
+        <NavLink to="/player/search">
+          <IconSearch size={20} />
+          Search
+        </NavLink>
+        <NavLink to="/player/albums">
+          <IconLibrary size={20} />
+          Library
+        </NavLink>
+        <NavLink to="/player/playlists" end>
+          <IconMusic size={20} />
+          Playlists
+        </NavLink>
+      </nav>
 
       <button
         type="button"
@@ -133,7 +329,7 @@ export function PlayerLayout({ displayName }: { displayName: string }) {
 
       {settingsOpen && (
         <div className="player-modal-backdrop" onClick={() => setSettingsOpen(false)}>
-          <div className="player-modal wide" onClick={(e) => e.stopPropagation()}>
+          <div className="player-modal wide scroll" onClick={(e) => e.stopPropagation()}>
             <div className="player-modal-head">
               <h2>Personal settings</h2>
               <button type="button" className="pill-icon-btn" onClick={() => setSettingsOpen(false)}>
@@ -141,7 +337,60 @@ export function PlayerLayout({ displayName }: { displayName: string }) {
               </button>
             </div>
 
-            <h3>Built-in playlists</h3>
+            <h3>Profile photo</h3>
+            <div className="avatar-row">
+              <span className="player-avatar lg">
+                {avatar ? <img src={avatar} alt="" /> : <IconUser size={28} />}
+              </span>
+              <div className="toolbar">
+                <button
+                  type="button"
+                  className="btn secondary"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={uploadAvatar.isPending}
+                >
+                  {avatar ? 'Change photo' : 'Upload photo'}
+                </button>
+                {avatar && (
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    onClick={() => removeAvatar.mutate()}
+                    disabled={removeAvatar.isPending}
+                  >
+                    Remove
+                  </button>
+                )}
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  hidden
+                  onChange={onAvatarPicked}
+                />
+              </div>
+            </div>
+            <p className="muted tiny" style={{ marginTop: 0 }}>
+              JPEG, PNG, or WebP up to 2MB.
+            </p>
+
+            <h3>Home shelves</h3>
+            <label className="checks">
+              <input
+                type="checkbox"
+                checked={prefs.show_recommended}
+                onChange={(e) => patchPref('show_recommended', e.target.checked)}
+              />
+              Show Recommended for you
+            </label>
+            <label className="checks">
+              <input
+                type="checkbox"
+                checked={prefs.show_recently_added}
+                onChange={(e) => patchPref('show_recently_added', e.target.checked)}
+              />
+              Show Recently Added
+            </label>
             <label className="checks">
               <input
                 type="checkbox"
@@ -158,6 +407,98 @@ export function PlayerLayout({ displayName }: { displayName: string }) {
               />
               Show Shuffle Mix
             </label>
+
+            <h3>Playback</h3>
+            <label className="checks">
+              <input
+                type="checkbox"
+                checked={prefs.crossfade_enabled}
+                onChange={(e) => patchPref('crossfade_enabled', e.target.checked)}
+              />
+              Crossfade between tracks
+            </label>
+            <label className="checks">
+              <input
+                type="checkbox"
+                checked={prefs.default_shuffle}
+                onChange={(e) => patchPref('default_shuffle', e.target.checked)}
+              />
+              Start new sessions with shuffle on
+            </label>
+            <div className="field">
+              <label>Default repeat</label>
+              <select
+                value={prefs.default_repeat}
+                onChange={(e) => patchPref('default_repeat', e.target.value as PlayerRepeatMode)}
+              >
+                <option value="off">Off</option>
+                <option value="all">Repeat all</option>
+                <option value="one">Repeat one</option>
+              </select>
+            </div>
+
+            <h3>Pinned playlists</h3>
+            <p className="muted tiny" style={{ marginTop: 0 }}>
+              Pinned playlists sort to the top of the sidebar.
+            </p>
+            <div className="pin-list">
+              {sortedPlaylists.map((pl) => (
+                <label key={pl.id} className="checks">
+                  <input
+                    type="checkbox"
+                    checked={pinned.includes(Number(pl.id))}
+                    onChange={() => togglePin(Number(pl.id))}
+                  />
+                  {pl.name}
+                </label>
+              ))}
+              {!sortedPlaylists.length && <span className="muted tiny">No playlists yet.</span>}
+            </div>
+
+            <h3>Shared songs</h3>
+            {shares.isLoading && <p className="muted tiny">Loading…</p>}
+            {shares.isError && <p className="muted tiny">{(shares.error as Error).message}</p>}
+            {shares.isSuccess && !shares.data.length && (
+              <p className="muted tiny" style={{ marginTop: 0 }}>
+                You haven’t shared anything yet.
+              </p>
+            )}
+            <div className="share-list">
+              {shares.data?.map((s) => (
+                <div key={s.token} className={`share-row${s.revoked ? ' revoked' : ''}`}>
+                  <div className="share-meta">
+                    <strong>{s.track_title}</strong>
+                    <span className="muted tiny">
+                      {s.artist_name} · {s.play_count} play{s.play_count === 1 ? '' : 's'}
+                      {s.revoked ? ' · revoked' : ''}
+                    </span>
+                  </div>
+                  {!s.revoked && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        onClick={async () => {
+                          const url = playerApi.sharePageUrl(s.token)
+                          const ok = await copyToClipboard(url)
+                          toast.push(ok ? 'Link copied' : url, 'ok')
+                        }}
+                      >
+                        Copy
+                      </button>
+                      <button
+                        type="button"
+                        className="btn ghost danger"
+                        onClick={() => revokeShare.mutate(s.token)}
+                        disabled={revokeShare.isPending}
+                      >
+                        Revoke
+                      </button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
 
             <h3>Wavy seek bar</h3>
             <p className="muted" style={{ marginTop: 0 }}>
@@ -251,6 +592,11 @@ export function PlayerLayout({ displayName }: { displayName: string }) {
               </button>
               {pwMsg && <span className="muted">{pwMsg}</span>}
             </form>
+
+            <h3>Keyboard shortcuts</h3>
+            <p className="muted tiny" style={{ marginTop: 0 }}>
+              Space play/pause · ← → seek 5s · ↑ ↓ volume · N/P next/previous · L love · Q queue
+            </p>
           </div>
         </div>
       )}

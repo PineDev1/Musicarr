@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import PlayerUser
+from app.models.schemas import PlayerUserOut
 from app.services.app_auth import hash_password, verify_password
 from app.services.proxy import cookie_domain_for_settings, ssl_enabled
 from app.services.settings_service import ensure_settings
@@ -20,6 +21,26 @@ SESSION_DAYS = 30
 
 def player_enabled(db: Session) -> bool:
     return bool(getattr(ensure_settings(db), "player_enabled", False))
+
+
+def avatar_url_for_user(user: PlayerUser | None) -> str | None:
+    if not user:
+        return None
+    path = getattr(user, "avatar_path", None)
+    if path:
+        return f"/api/player/avatars/{user.id}"
+    return None
+
+
+def player_user_out(user: PlayerUser) -> PlayerUserOut:
+    return PlayerUserOut(
+        id=user.id,
+        username=user.username,
+        display_name=user.display_name or "",
+        is_active=bool(user.is_active),
+        created_at=user.created_at,
+        avatar_url=avatar_url_for_user(user),
+    )
 
 
 def ensure_player_secret(db: Session) -> str:
@@ -105,6 +126,7 @@ def auth_status(db: Session, token: str | None) -> dict[str, Any]:
         "username": user.username if user else None,
         "user_id": user.id if user else None,
         "display_name": (user.display_name or user.username) if user else None,
+        "avatar_url": avatar_url_for_user(user),
     }
 
 

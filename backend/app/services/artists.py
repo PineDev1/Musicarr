@@ -219,17 +219,6 @@ def list_artists(db: Session) -> list[Artist]:
     )
 
 
-def delete_artist(db: Session, artist_id: int) -> bool:
-    artist = db.get(Artist, artist_id)
-    if not artist:
-        return False
-    name = artist.name
-    db.delete(artist)
-    db.commit()
-    add_history(db, "artist_removed", f"Removed artist {name}")
-    return True
-
-
 def artist_stats(artist: Artist) -> tuple[int, int, int]:
     albums = artist.albums or []
     total = len(albums)
@@ -253,18 +242,25 @@ def _norm_album_title(title: str) -> str:
 
 
 def find_linked_artists(db: Session, artist: Artist) -> list[Artist]:
-    """All local artist rows that share the same display name (any provider)."""
-    key = _norm_artist_name(artist.name)
+    """Artists explicitly linked via link_group_id, otherwise just this row.
+
+    Display-name twins are never auto-linked.
+    """
+    group_id = (getattr(artist, "link_group_id", None) or "").strip()
+    if not group_id:
+        detail = get_artist_detail(db, artist.id)
+        return [detail or artist]
     rows = (
         db.scalars(
             select(Artist)
             .options(joinedload(Artist.albums).joinedload(Album.tracks))
+            .where(Artist.link_group_id == group_id)
             .order_by(Artist.id)
         )
         .unique()
         .all()
     )
-    return [a for a in rows if _norm_artist_name(a.name) == key]
+    return list(rows) if rows else [artist]
 
 
 def _status_rank(status: str) -> int:
@@ -276,7 +272,7 @@ def merge_album_rows(
     *,
     active_provider: str = "deezer",
 ) -> list[tuple[Album, list[str]]]:
-    """Collapse same-title albums across providers; keep best status row + source list."""
+    """Collapse same-title albums within an explicit link group; keep best status row + source list."""
     groups: dict[str, list[Album]] = {}
     for album in albums:
         groups.setdefault(_norm_album_title(album.title) or f"id:{album.id}", []).append(album)
@@ -310,11 +306,13 @@ def grouped_artist_stats(artists: list[Artist], active_provider: str = "deezer")
 
 
 def list_artists_grouped(db: Session) -> list[list[Artist]]:
+    """One group per artist, or per explicit link_group_id when set."""
     artists = list_artists(db)
     buckets: dict[str, list[Artist]] = {}
     order: list[str] = []
     for artist in artists:
-        key = _norm_artist_name(artist.name) or f"id:{artist.id}"
+        group_id = (getattr(artist, "link_group_id", None) or "").strip()
+        key = f"link:{group_id}" if group_id else f"id:{artist.id}"
         if key not in buckets:
             buckets[key] = []
             order.append(key)
@@ -322,14 +320,34 @@ def list_artists_grouped(db: Session) -> list[list[Artist]]:
     return [buckets[k] for k in order]
 
 
-def delete_linked_artists(db: Session, artist_id: int) -> bool:
+def name_collision_ids(db: Session) -> set[int]:
+    """Artist ids whose normalized display name is shared by another row."""
+    artists = db.scalars(select(Artist)).all()
+    by_name: dict[str, list[int]] = {}
+    for artist in artists:
+        key = _norm_artist_name(artist.name)
+        if not key:
+            continue
+        by_name.setdefault(key, []).append(artist.id)
+    collided: set[int] = set()
+    for ids in by_name.values():
+        if len(ids) > 1:
+            collided.update(ids)
+    return collided
+
+
+def delete_artist(db: Session, artist_id: int) -> bool:
+    """Delete only the requested artist row (never same-name strangers)."""
     artist = db.get(Artist, artist_id)
     if not artist:
         return False
-    linked = find_linked_artists(db, artist)
     name = artist.name
-    for row in linked:
-        db.delete(row)
+    db.delete(artist)
     db.commit()
-    add_history(db, "artist_removed", f"Removed artist {name} ({len(linked)} source(s))")
+    add_history(db, "artist_removed", f"Removed artist {name}")
     return True
+
+
+# Back-compat alias used by older call sites / tests
+def delete_linked_artists(db: Session, artist_id: int) -> bool:
+    return delete_artist(db, artist_id)

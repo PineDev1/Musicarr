@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.models import Album, Artist, Track
 from app.services.history import add_history
 from app.services.naming import (
+    artist_folder_name,
     build_album_folder,
     build_track_filename,
     year_from_release,
@@ -129,33 +130,42 @@ def _collect_files(root: Path) -> list[dict]:
 
 
 def _find_artist_by_name(db: Session, name: str) -> Artist | None:
+    """Exact normalized name match only. Ambiguous same-name rows return None."""
     key = _norm(name)
+    if not key:
+        return None
     artists = db.scalars(select(Artist)).all()
-    exact = next((a for a in artists if _norm(a.name) == key), None)
-    if exact:
-        return exact
-    return next((a for a in artists if key and key in _norm(a.name)), None)
+    exact = [a for a in artists if _norm(a.name) == key]
+    if len(exact) == 1:
+        return exact[0]
+    return None
 
 
-def _ensure_local_artist(db: Session, name: str) -> Artist:
+def _ensure_local_artist(db: Session, name: str, *, uniq_key: str | None = None) -> Artist:
+    slug = _slug_id(name)
+    if uniq_key:
+        import hashlib
+
+        digest = hashlib.sha1(uniq_key.encode("utf-8")).hexdigest()[:8]
+        slug = f"{slug}-{digest}"[:60]
     existing = db.scalar(
         select(Artist).where(
             Artist.provider == "local",
-            Artist.provider_id == _slug_id(name),
+            Artist.provider_id == slug,
         )
     )
     if existing:
         return existing
-    # Also reuse any provider artist with same name
+    # Reuse only when the name uniquely identifies one row
     by_name = _find_artist_by_name(db, name)
-    if by_name:
+    if by_name and not uniq_key:
         return by_name
     from app.services.artists import _legacy_id
 
     artist = Artist(
         provider="local",
-        provider_id=_slug_id(name),
-        deezer_id=_legacy_id("local", _slug_id(name)),
+        provider_id=slug,
+        deezer_id=_legacy_id("local", slug),
         name=name,
         image_url=None,
         monitored=True,
@@ -174,6 +184,7 @@ def _try_link_provider_artist(db: Session, name: str) -> Artist | None:
     try:
         from app.services.providers import get_provider
         from app.services.artists import add_artist
+        from app.services.download_queue import pick_unique_artist_search_hit
 
         provider = get_provider(db, active)
         ok, _ = provider.validate_session()
@@ -182,11 +193,9 @@ def _try_link_provider_artist(db: Session, name: str) -> Artist | None:
         hits = provider.search_artists(name, limit=8)
         if not hits:
             return None
-        match = next((h for h in hits if _norm(h.name) == _norm(name)), hits[0])
-        if _norm(match.name) != _norm(name) and _norm(name) not in _norm(match.name):
-            # Too loose — skip provider link
-            if abs(len(_norm(match.name)) - len(_norm(name))) > 4:
-                return None
+        match = pick_unique_artist_search_hit(name, hits)
+        if match is None:
+            return None
         return add_artist(
             db,
             match.provider_id,
@@ -207,14 +216,16 @@ def _find_or_create_album(
     track_count: int,
 ) -> Album:
     albums = list(artist.albums or [])
-    # Also check name-linked artists
-    linked = [
-        a
-        for a in db.scalars(select(Artist).options(joinedload(Artist.albums))).unique().all()
-        if _norm(a.name) == _norm(artist.name)
-    ]
-    for a in linked:
-        albums.extend(a.albums or [])
+    # Only scan explicitly linked artists (link_group_id), never name twins
+    group_id = (getattr(artist, "link_group_id", None) or "").strip()
+    if group_id:
+        linked = db.scalars(
+            select(Artist)
+            .options(joinedload(Artist.albums))
+            .where(Artist.link_group_id == group_id, Artist.id != artist.id)
+        ).unique().all()
+        for a in linked:
+            albums.extend(a.albums or [])
 
     target = _norm(album_title)
     candidate = next((a for a in albums if _norm(a.title) == target), None)
@@ -275,9 +286,26 @@ def _upsert_track(
             track.isrc = isrc
         if title and not track.title:
             track.title = title
+        if not track.duration:
+            try:
+                audio = MutagenFile(path)
+                length = getattr(getattr(audio, "info", None), "length", None)
+                if length and length > 0:
+                    track.duration = int(round(float(length)))
+            except Exception:  # noqa: BLE001
+                pass
         return track
 
     from app.services.artists import _legacy_id
+
+    duration = 0
+    try:
+        audio = MutagenFile(path)
+        length = getattr(getattr(audio, "info", None), "length", None)
+        if length and length > 0:
+            duration = int(round(float(length)))
+    except Exception:  # noqa: BLE001
+        pass
 
     pid = f"{album.provider_id}-t{disc_no}-{track_no or len(tracks)+1}-{_slug_id(title)[:20]}"
     track = Track(
@@ -288,7 +316,7 @@ def _upsert_track(
         title=title,
         track_no=track_no or 0,
         disc_no=disc_no or 1,
-        duration=0,
+        duration=duration,
         isrc=isrc,
         path=path,
     )
@@ -336,13 +364,20 @@ def import_existing_library(db: Session, *, link_providers: bool = True) -> dict
                 # Refresh albums from provider without downloading
                 db.refresh(artist)
         if not artist:
-            before = len(known_artists_before)
-            artist = _ensure_local_artist(db, artist_name)
+            # Ambiguous same-name or unknown: create a distinct local row
+            sample_path = ""
+            for album_files in albums_map.values():
+                if album_files:
+                    sample_path = str(album_files[0].get("path") or "")
+                    break
+            artist = _ensure_local_artist(
+                db,
+                artist_name,
+                uniq_key=sample_path or f"{artist_name}:{sorted(albums_map.keys())[0]}",
+            )
             if artist.id not in known_artists_before:
                 artists_created += 1
                 known_artists_before.add(artist.id)
-            elif before:
-                pass
 
         # Reload albums relationship
         artist = db.scalar(
@@ -739,7 +774,7 @@ def reorganize_library(db: Session) -> dict:
         if not tracks:
             skipped += 1
             continue
-        artist_name = album.artist.name if album.artist else "Unknown Artist"
+        artist_name = artist_folder_name(album.artist, db=db) if album.artist else "Unknown Artist"
         dest_folder = build_album_folder(
             root,
             settings.folder_template,

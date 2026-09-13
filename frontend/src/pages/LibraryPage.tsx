@@ -133,6 +133,11 @@ export function LibraryPage() {
                 <div className="meta">
                   {artist.downloaded_count}/{artist.album_count} albums
                   {artist.wanted_count > 0 ? ` · ${artist.wanted_count} wanted` : ''}
+                  {artist.name_collision
+                    ? ` · ${(artist.provider || 'source').toLowerCase()} ${artist.provider_id}`
+                    : artist.providers && artist.providers.length > 1
+                      ? ` · ${artist.providers.join(' + ')}`
+                      : ''}
                 </div>
               </Link>
             </motion.div>

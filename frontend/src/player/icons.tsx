@@ -137,3 +137,113 @@ export function IconClose(p: IconProps) {
     </svg>
   )
 }
+
+export function IconBack(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <line x1="19" y1="12" x2="5" y2="12" />
+      <polyline points="12 19 5 12 12 5" />
+    </svg>
+  )
+}
+
+export function IconForward(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <line x1="5" y1="12" x2="19" y2="12" />
+      <polyline points="12 5 19 12 12 19" />
+    </svg>
+  )
+}
+
+export function IconChevronLeft(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <polyline points="15 18 9 12 15 6" />
+    </svg>
+  )
+}
+
+export function IconChevronRight(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  )
+}
+
+export function IconHome(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M3 10.5 12 3l9 7.5" />
+      <path d="M5 9.5V21h14V9.5" />
+    </svg>
+  )
+}
+
+export function IconSearch(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <circle cx="11" cy="11" r="7" />
+      <line x1="16.5" y1="16.5" x2="21" y2="21" />
+    </svg>
+  )
+}
+
+export function IconLibrary(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <line x1="4" y1="4" x2="4" y2="20" />
+      <line x1="9" y1="4" x2="9" y2="20" />
+      <path d="M13.5 5.2l4.4-1.2 3 14.6-4.4 1.2z" />
+    </svg>
+  )
+}
+
+export function IconMusic(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <circle cx="7" cy="18" r="3" />
+      <circle cx="18" cy="16" r="3" />
+      <path d="M10 18V6l11-2v12" />
+    </svg>
+  )
+}
+
+export function IconShare(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7" />
+      <polyline points="8 7 12 3 16 7" />
+      <line x1="12" y1="3" x2="12" y2="15" />
+    </svg>
+  )
+}
+
+export function IconMore(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+export function IconUser(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5" />
+    </svg>
+  )
+}
+
+/** Sleep timer. */
+export function IconMoon(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.8 6.8 0 0 0 9.8 9.8z" />
+    </svg>
+  )
+}

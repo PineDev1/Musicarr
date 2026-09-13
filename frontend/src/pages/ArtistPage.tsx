@@ -186,12 +186,17 @@ export function ArtistPage() {
             total
           </p>
           <p className="muted" style={{ marginTop: '0.35rem' }}>
-            Linked sources:{' '}
+            Source:{' '}
             {sources.map((p) => (
               <span key={p} className="badge queued" style={{ marginRight: 6, textTransform: 'capitalize' }}>
                 {p}
               </span>
             ))}
+            {data.name_collision ? (
+              <span className="muted" title="Another artist in your library shares this name">
+                · id {data.provider_id} (same name as another artist — kept separate)
+              </span>
+            ) : null}
           </p>
         </div>
         {data.image_url && (

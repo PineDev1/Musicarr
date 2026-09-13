@@ -15,6 +15,7 @@ import { SettingsPage } from './pages/SettingsPage'
 import { WantedPage } from './pages/WantedPage'
 import { NowPlayingPage } from './pages/NowPlayingPage'
 import { PlayerApp } from './player/PlayerApp'
+import { ShareSongPage } from './player/ShareSongPage'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -77,6 +78,7 @@ export default function App() {
       <ToastProvider>
         <BrowserRouter>
           <Routes>
+            <Route path="/s/:token" element={<ShareSongPage />} />
             <Route path="/player/*" element={<PlayerApp />} />
             <Route path="/*" element={<AdminApp />} />
           </Routes>

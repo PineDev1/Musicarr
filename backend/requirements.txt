@@ -41,3 +41,4 @@ typing_extensions==4.16.0
 tzlocal==5.4.4
 urllib3==2.7.0
 uvicorn==0.52.4
+pytest==9.1.1

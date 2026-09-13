@@ -8,9 +8,17 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { playerApi, type PlayerTrack } from './playerApi'
+import { useQuery } from '@tanstack/react-query'
+import { DEFAULT_PREFS, playerApi, type PlayerTrack } from './playerApi'
 
 type RepeatMode = 'off' | 'all' | 'one'
+
+export type SleepMode = number | 'end'
+
+/** Fired by keyboard shortcut `q`; WavyPlayBar listens and toggles the queue drawer. */
+export const TOGGLE_QUEUE_EVENT = 'musicarr-toggle-queue'
+/** Fired by keyboard shortcut `l`; WavyPlayBar listens and likes the current track. */
+export const TOGGLE_LOVE_EVENT = 'musicarr-toggle-love'
 
 type QueueState = {
   tracks: PlayerTrack[]
@@ -23,11 +31,24 @@ type QueueState = {
   volume: number
   analyser: AnalyserNode | null
   audioEl: HTMLAudioElement | null
+  sourceLabel: string | null
+  sleepMode: SleepMode | null
+  sleepUntil: number | null
 }
 
 type QueueApi = QueueState & {
-  playTracks: (tracks: PlayerTrack[], startIndex?: number) => void
-  playTrack: (track: PlayerTrack, queue?: PlayerTrack[]) => void
+  playTracks: (
+    tracks: PlayerTrack[],
+    startIndex?: number,
+    sourceLabel?: string,
+    startAt?: number,
+  ) => void
+  playTrack: (
+    track: PlayerTrack,
+    queue?: PlayerTrack[],
+    sourceLabel?: string,
+    startAt?: number,
+  ) => void
   addNext: (track: PlayerTrack) => void
   addEnd: (track: PlayerTrack) => void
   togglePlay: () => void
@@ -42,9 +63,13 @@ type QueueApi = QueueState & {
   removeAt: (index: number) => void
   reorder: (from: number, to: number) => void
   forceStop: () => void
+  setSleepMinutes: (mode: SleepMode) => void
+  clearSleep: () => void
 }
 
 const Ctx = createContext<QueueApi | null>(null)
+
+const CROSSFADE_MS = 700
 
 function storageKey(userId: number | null) {
   return `musicarr-player-queue-v1-${userId ?? 'anon'}`
@@ -70,8 +95,27 @@ export function PlayerQueueProvider({
   const [duration, setDuration] = useState(0)
   const [volume, setVolumeState] = useState(0.9)
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null)
+  const [sourceLabel, setSourceLabel] = useState<string | null>(null)
+  const [sleepMode, setSleepMode] = useState<SleepMode | null>(null)
+  const [sleepUntil, setSleepUntil] = useState<number | null>(null)
   const orderRef = useRef<number[]>([])
   const skipAutoPlayRef = useRef(false)
+  const volumeRef = useRef(volume)
+  const fadeRef = useRef<number | null>(null)
+  const sleepAtEndRef = useRef(false)
+  const defaultsAppliedRef = useRef(false)
+  const pendingSeekRef = useRef<number | null>(null)
+
+  volumeRef.current = volume
+
+  const prefsQ = useQuery({
+    queryKey: ['player-prefs'],
+    queryFn: playerApi.prefs,
+    staleTime: 30_000,
+  })
+  const prefs = prefsQ.data || DEFAULT_PREFS
+  const crossfadeRef = useRef(prefs.crossfade_enabled)
+  crossfadeRef.current = prefs.crossfade_enabled
 
   const ensureAudioGraph = useCallback(() => {
     const audio = audioRef.current
@@ -92,6 +136,31 @@ export function PlayerQueueProvider({
     }
   }, [])
 
+  /** Ramp element volume from 0 to the user level so track changes don't hard-cut. */
+  const fadeIn = useCallback(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    if (fadeRef.current) window.clearInterval(fadeRef.current)
+    const target = volumeRef.current
+    const started = performance.now()
+    audio.volume = 0
+    fadeRef.current = window.setInterval(() => {
+      const el = audioRef.current
+      if (!el) {
+        if (fadeRef.current) window.clearInterval(fadeRef.current)
+        fadeRef.current = null
+        return
+      }
+      const ratio = Math.min(1, (performance.now() - started) / CROSSFADE_MS)
+      el.volume = Math.max(0, Math.min(1, volumeRef.current * ratio))
+      if (ratio >= 1) {
+        window.clearInterval(fadeRef.current!)
+        fadeRef.current = null
+        el.volume = Math.max(0, Math.min(1, target))
+      }
+    }, 40)
+  }, [])
+
   useEffect(() => {
     const audio = new Audio()
     audio.preload = 'metadata'
@@ -102,22 +171,17 @@ export function PlayerQueueProvider({
     const onMeta = () => setDuration(audio.duration || 0)
     const onPlay = () => setPlaying(true)
     const onPause = () => setPlaying(false)
-    const onEnded = () => {
-      setPlaying(false)
-      // handled via effect below through ended listener that calls next
-    }
     audio.addEventListener('timeupdate', onTime)
     audio.addEventListener('loadedmetadata', onMeta)
     audio.addEventListener('play', onPlay)
     audio.addEventListener('pause', onPause)
-    audio.addEventListener('ended', onEnded)
     return () => {
       audio.pause()
       audio.removeEventListener('timeupdate', onTime)
       audio.removeEventListener('loadedmetadata', onMeta)
       audio.removeEventListener('play', onPlay)
       audio.removeEventListener('pause', onPause)
-      audio.removeEventListener('ended', onEnded)
+      if (fadeRef.current) window.clearInterval(fadeRef.current)
       audioRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -129,13 +193,21 @@ export function PlayerQueueProvider({
     try {
       const raw = localStorage.getItem(storageKey(userId))
       if (!raw) return
-      const data = JSON.parse(raw) as { tracks: PlayerTrack[]; index: number; shuffle: boolean; repeat: RepeatMode; volume: number }
+      const data = JSON.parse(raw) as {
+        tracks: PlayerTrack[]
+        index: number
+        shuffle: boolean
+        repeat: RepeatMode
+        volume: number
+        sourceLabel?: string | null
+      }
       if (Array.isArray(data.tracks) && data.tracks.length) {
         skipAutoPlayRef.current = true
         setTracks(data.tracks)
         setIndex(Math.min(data.index || 0, data.tracks.length - 1))
         setShuffle(!!data.shuffle)
         setRepeat(data.repeat || 'off')
+        setSourceLabel(data.sourceLabel || null)
         if (typeof data.volume === 'number') setVolumeState(data.volume)
       }
     } catch {
@@ -148,9 +220,19 @@ export function PlayerQueueProvider({
     if (userId == null) return
     localStorage.setItem(
       storageKey(userId),
-      JSON.stringify({ tracks, index, shuffle, repeat, volume }),
+      JSON.stringify({ tracks, index, shuffle, repeat, volume, sourceLabel }),
     )
-  }, [userId, tracks, index, shuffle, repeat, volume])
+  }, [userId, tracks, index, shuffle, repeat, volume, sourceLabel])
+
+  // Default shuffle/repeat come from saved prefs, applied once per session.
+  useEffect(() => {
+    if (defaultsAppliedRef.current || !prefsQ.data) return
+    defaultsAppliedRef.current = true
+    if (prefsQ.data.default_shuffle) setShuffle(true)
+    if (prefsQ.data.default_repeat && prefsQ.data.default_repeat !== 'off') {
+      setRepeat(prefsQ.data.default_repeat)
+    }
+  }, [prefsQ.data])
 
   const loadTrack = useCallback(
     async (track: PlayerTrack, autoplay: boolean) => {
@@ -159,7 +241,20 @@ export function PlayerQueueProvider({
       ensureAudioGraph()
       if (ctxRef.current?.state === 'suspended') await ctxRef.current.resume()
       audio.src = playerApi.streamUrl(track.id)
+      const seekTo = pendingSeekRef.current
+      pendingSeekRef.current = null
+      if (seekTo != null && seekTo > 0) {
+        const applySeek = () => {
+          if (Number.isFinite(audio.duration) && audio.duration > 0) {
+            audio.currentTime = Math.min(seekTo, Math.max(0, audio.duration - 0.25))
+          } else {
+            audio.currentTime = seekTo
+          }
+        }
+        audio.addEventListener('loadedmetadata', applySeek, { once: true })
+      }
       if (autoplay) {
+        if (crossfadeRef.current) fadeIn()
         try {
           await audio.play()
         } catch {
@@ -184,7 +279,7 @@ export function PlayerQueueProvider({
         }
       }
     },
-    [ensureAudioGraph],
+    [ensureAudioGraph, fadeIn],
   )
 
   const loadAndPlay = useCallback(
@@ -235,13 +330,51 @@ export function PlayerQueueProvider({
     setIndex((i) => (i > 0 ? i - 1 : tracks.length - 1))
   }, [tracks.length])
 
+  const clearSleep = useCallback(() => {
+    sleepAtEndRef.current = false
+    setSleepMode(null)
+    setSleepUntil(null)
+  }, [])
+
+  const setSleepMinutes = useCallback((mode: SleepMode) => {
+    if (mode === 'end') {
+      sleepAtEndRef.current = true
+      setSleepMode('end')
+      setSleepUntil(null)
+      return
+    }
+    sleepAtEndRef.current = false
+    setSleepMode(mode)
+    setSleepUntil(Date.now() + mode * 60_000)
+  }, [])
+
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
-    const onEnded = () => next()
+    const onEnded = () => {
+      if (sleepAtEndRef.current) {
+        sleepAtEndRef.current = false
+        setSleepMode(null)
+        setPlaying(false)
+        return
+      }
+      next()
+    }
     audio.addEventListener('ended', onEnded)
     return () => audio.removeEventListener('ended', onEnded)
   }, [next])
+
+  // Countdown sleep timer: pause playback when the deadline passes.
+  useEffect(() => {
+    if (sleepUntil == null) return
+    const id = window.setInterval(() => {
+      if (Date.now() < sleepUntil) return
+      audioRef.current?.pause()
+      setPlaying(false)
+      clearSleep()
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [sleepUntil, clearSleep])
 
   const forceStop = useCallback(() => {
     const audio = audioRef.current
@@ -255,6 +388,7 @@ export function PlayerQueueProvider({
     setPlaying(false)
     setCurrentTime(0)
     setDuration(0)
+    setSourceLabel(null)
   }, [])
 
   // Presence heartbeat + admin stop commands
@@ -289,20 +423,25 @@ export function PlayerQueueProvider({
     }
   }, [userId, tracks, index, playing, forceStop])
 
-  const playTracks = useCallback((list: PlayerTrack[], startIndex = 0) => {
-    if (!list.length) return
-    orderRef.current = []
-    setTracks(list)
-    setIndex(Math.max(0, Math.min(startIndex, list.length - 1)))
-  }, [])
+  const playTracks = useCallback(
+    (list: PlayerTrack[], startIndex = 0, label?: string, startAt?: number) => {
+      if (!list.length) return
+      orderRef.current = []
+      pendingSeekRef.current = startAt != null && startAt > 0 ? startAt : null
+      setTracks(list)
+      setIndex(Math.max(0, Math.min(startIndex, list.length - 1)))
+      if (label !== undefined) setSourceLabel(label || null)
+    },
+    [],
+  )
 
   const playTrack = useCallback(
-    (track: PlayerTrack, queue?: PlayerTrack[]) => {
+    (track: PlayerTrack, queue?: PlayerTrack[], label?: string, startAt?: number) => {
       if (queue?.length) {
         const i = queue.findIndex((t) => t.id === track.id)
-        playTracks(queue, i >= 0 ? i : 0)
+        playTracks(queue, i >= 0 ? i : 0, label, startAt)
       } else {
-        playTracks([track], 0)
+        playTracks([track], 0, label, startAt)
       }
     },
     [playTracks],
@@ -345,8 +484,70 @@ export function PlayerQueueProvider({
   const setVolume = useCallback((v: number) => {
     const nv = Math.max(0, Math.min(1, v))
     setVolumeState(nv)
+    if (fadeRef.current) {
+      window.clearInterval(fadeRef.current)
+      fadeRef.current = null
+    }
     if (audioRef.current) audioRef.current.volume = nv
   }, [])
+
+  // Global keyboard shortcuts, suppressed while typing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const target = e.target as HTMLElement | null
+      if (target) {
+        const tag = target.tagName
+        if (
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'SELECT' ||
+          target.isContentEditable
+        ) {
+          return
+        }
+      }
+      const audio = audioRef.current
+      switch (e.key) {
+        case ' ':
+          e.preventDefault()
+          void togglePlay()
+          break
+        case 'ArrowLeft':
+          e.preventDefault()
+          seek((audio?.currentTime || 0) - 5)
+          break
+        case 'ArrowRight':
+          e.preventDefault()
+          seek((audio?.currentTime || 0) + 5)
+          break
+        case 'ArrowUp':
+          e.preventDefault()
+          setVolume(volumeRef.current + 0.05)
+          break
+        case 'ArrowDown':
+          e.preventDefault()
+          setVolume(volumeRef.current - 0.05)
+          break
+        case 'n':
+          next()
+          break
+        case 'p':
+          prev()
+          break
+        case 'l':
+          window.dispatchEvent(new CustomEvent(TOGGLE_LOVE_EVENT))
+          break
+        case 'q':
+          window.dispatchEvent(new CustomEvent(TOGGLE_QUEUE_EVENT))
+          break
+        default:
+          break
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [togglePlay, seek, setVolume, next, prev])
 
   const value = useMemo<QueueApi>(
     () => ({
@@ -360,6 +561,9 @@ export function PlayerQueueProvider({
       volume,
       analyser,
       audioEl: audioRef.current,
+      sourceLabel,
+      sleepMode,
+      sleepUntil,
       playTracks,
       playTrack,
       addNext,
@@ -369,6 +573,8 @@ export function PlayerQueueProvider({
       prev,
       seek,
       setVolume,
+      setSleepMinutes,
+      clearSleep,
       toggleShuffle: () => {
         orderRef.current = []
         setShuffle((s) => !s)
@@ -378,6 +584,7 @@ export function PlayerQueueProvider({
       clearQueue: () => {
         setTracks([])
         setIndex(0)
+        setSourceLabel(null)
         audioRef.current?.pause()
       },
       forceStop,
@@ -421,6 +628,9 @@ export function PlayerQueueProvider({
       duration,
       volume,
       analyser,
+      sourceLabel,
+      sleepMode,
+      sleepUntil,
       playTracks,
       playTrack,
       addNext,
@@ -430,6 +640,8 @@ export function PlayerQueueProvider({
       prev,
       seek,
       setVolume,
+      setSleepMinutes,
+      clearSleep,
       forceStop,
     ],
   )

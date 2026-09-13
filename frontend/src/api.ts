@@ -52,6 +52,11 @@ export type Settings = {
   ssl_enabled: boolean
   public_domain: string
   player_enabled: boolean
+  player_sharing_enabled: boolean
+  preferred_download_method: string
+  completed_download_scan_interval_seconds: number
+  import_mechanism: string
+  remove_completed_downloads: boolean
   download_concurrency: number
   max_retries: number
   provider_ok: boolean | null
@@ -131,6 +136,7 @@ export type Artist = {
   wanted_count: number
   providers?: string[]
   linked_artist_ids?: number[]
+  name_collision?: boolean
   albums: Album[]
 }
 
@@ -172,6 +178,52 @@ export type DownloadJob = {
   created_at: string
   started_at: string | null
   finished_at: string | null
+  source?: string
+  indexer_id?: number | null
+  client_id?: number | null
+  release_title?: string
+  client_item_id?: string
+  output_path?: string
+}
+
+export type Indexer = {
+  id: number
+  name: string
+  protocol: string
+  implementation: string
+  base_url: string
+  api_key_set: boolean
+  categories: number[]
+  enabled: boolean
+  priority: number
+}
+
+export type DownloadClientRow = {
+  id: number
+  name: string
+  protocol: string
+  implementation: string
+  host: string
+  port: number
+  use_ssl: boolean
+  username: string
+  password_set: boolean
+  api_key_set: boolean
+  category: string
+  enabled: boolean
+  priority: number
+}
+
+export type PathMapping = {
+  id: number
+  host: string
+  remote_path: string
+  local_path: string
+}
+
+export type TestResult = {
+  ok: boolean
+  message: string
 }
 
 export type HistoryEvent = {
@@ -261,8 +313,11 @@ export const api = {
     request<Album[]>(
       albumType ? `/albums/wanted?album_type=${encodeURIComponent(albumType)}` : '/albums/wanted',
     ),
-  downloadAllWanted: () =>
-    request<{ queued: number }>('/albums/wanted/download-all', { method: 'POST' }),
+  downloadAllWanted: (method?: string) =>
+    request<{ queued: number }>(
+      `/albums/wanted/download-all${method ? `?method=${encodeURIComponent(method)}` : ''}`,
+      { method: 'POST' },
+    ),
   skipAllWanted: () =>
     request<{ skipped: number }>('/albums/wanted/skip-all', { method: 'POST' }),
   skipWantedSingles: () =>
@@ -277,11 +332,14 @@ export const api = {
   album: (id: number) => request<Album>(`/albums/${id}`),
   patchAlbum: (id: number, body: Record<string, unknown>) =>
     request<Album>(`/albums/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  downloadAlbum: (id: number, upgrade = false) =>
-    request<{ queued: boolean; job_id: number | null }>(
-      `/albums/${id}/download?upgrade=${upgrade}`,
+  downloadAlbum: (id: number, upgrade = false, method?: string) => {
+    const params = new URLSearchParams({ upgrade: String(upgrade) })
+    if (method) params.set('method', method)
+    return request<{ queued: boolean; job_id: number | null; source?: string | null }>(
+      `/albums/${id}/download?${params}`,
       { method: 'POST' },
-    ),
+    )
+  },
   deleteAlbum: (id: number, deleteFiles = false) =>
     request<{ ok: boolean; deleted_files: boolean }>(
       `/albums/${id}?delete_files=${deleteFiles}`,
@@ -335,4 +393,43 @@ export const api = {
     request<{ artists_checked: number; new_albums: number }>('/monitor/run', {
       method: 'POST',
     }),
+  indexers: () => request<Indexer[]>('/acquisition/indexers'),
+  createIndexer: (body: Record<string, unknown>) =>
+    request<Indexer>('/acquisition/indexers', { method: 'POST', body: JSON.stringify(body) }),
+  updateIndexer: (id: number, body: Record<string, unknown>) =>
+    request<Indexer>(`/acquisition/indexers/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteIndexer: (id: number) =>
+    request<{ ok: boolean }>(`/acquisition/indexers/${id}`, { method: 'DELETE' }),
+  testIndexer: (id: number) =>
+    request<TestResult>(`/acquisition/indexers/${id}/test`, { method: 'POST' }),
+  downloadClients: () => request<DownloadClientRow[]>('/acquisition/download-clients'),
+  createDownloadClient: (body: Record<string, unknown>) =>
+    request<DownloadClientRow>('/acquisition/download-clients', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateDownloadClient: (id: number, body: Record<string, unknown>) =>
+    request<DownloadClientRow>(`/acquisition/download-clients/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteDownloadClient: (id: number) =>
+    request<{ ok: boolean }>(`/acquisition/download-clients/${id}`, { method: 'DELETE' }),
+  testDownloadClient: (id: number) =>
+    request<TestResult>(`/acquisition/download-clients/${id}/test`, { method: 'POST' }),
+  pathMappings: () => request<PathMapping[]>('/acquisition/path-mappings'),
+  createPathMapping: (body: Record<string, unknown>) =>
+    request<PathMapping>('/acquisition/path-mappings', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updatePathMapping: (id: number, body: Record<string, unknown>) =>
+    request<PathMapping>(`/acquisition/path-mappings/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deletePathMapping: (id: number) =>
+    request<{ ok: boolean }>(`/acquisition/path-mappings/${id}`, { method: 'DELETE' }),
+  searchReleases: (albumId: number) =>
+    request<unknown[]>(`/acquisition/releases/search?album_id=${albumId}`),
 }
