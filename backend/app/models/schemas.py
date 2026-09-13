@@ -290,12 +290,14 @@ class DownloadClientOut(BaseModel):
     host: str
     port: int
     use_ssl: bool = False
+    verify_ssl: bool = True
     username: str = ""
     password_set: bool = False
     api_key_set: bool = False
     category: str = "musicarr"
     enabled: bool = True
     priority: int = 1
+    base_url: str = ""
 
     class Config:
         from_attributes = True
@@ -308,6 +310,7 @@ class DownloadClientCreate(BaseModel):
     host: str = Field(default="localhost", max_length=512)
     port: int = Field(default=8080, ge=1, le=65535)
     use_ssl: bool = False
+    verify_ssl: bool = True
     username: str = ""
     password: str = ""
     api_key: str = ""
@@ -323,12 +326,47 @@ class DownloadClientUpdate(BaseModel):
     host: str | None = Field(default=None, max_length=512)
     port: int | None = Field(default=None, ge=1, le=65535)
     use_ssl: bool | None = None
+    verify_ssl: bool | None = None
     username: str | None = None
     password: str | None = None
     api_key: str | None = None
     category: str | None = None
     enabled: bool | None = None
     priority: int | None = Field(default=None, ge=1, le=100)
+
+
+class DownloadClientTestDraft(BaseModel):
+    """Test connection using form values without saving."""
+
+    implementation: ClientImplementation = "qbittorrent"
+    host: str = Field(default="localhost", max_length=512)
+    port: int = Field(default=8080, ge=1, le=65535)
+    use_ssl: bool = False
+    verify_ssl: bool = True
+    username: str = ""
+    password: str = ""
+    api_key: str = ""
+    # When testing an existing client, blank secrets keep the stored values.
+    client_id: int | None = None
+
+
+class ReleaseGrabRequest(BaseModel):
+    album_id: int
+    title: str = ""
+    grab_url: str = Field(min_length=1)
+    protocol: IndexerProtocol = "torrent"
+    indexer_id: int | None = None
+    size: int = 0
+    seeders: int = 0
+
+
+class AcquisitionStatusOut(BaseModel):
+    indexers_enabled: int = 0
+    torrent_client: bool = False
+    usenet_client: bool = False
+    path_mappings: int = 0
+    messages: list[str] = []
+
 
 
 class RemotePathMappingOut(BaseModel):
@@ -360,6 +398,7 @@ class ReleaseCandidateOut(BaseModel):
     protocol: str = "usenet"
     download_url: str = ""
     magnet_url: str = ""
+    grab_url: str = ""
     indexer_id: int = 0
     indexer_name: str = ""
     score: float = 0.0

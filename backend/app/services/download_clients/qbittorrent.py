@@ -43,6 +43,15 @@ FAILED_STATES = {"error", "missingfiles", "unknown"}
 
 HEX_HASH = re.compile(r"^[0-9a-fA-F]{40}$")
 
+DOCKER_HINT = (
+    "If Musicarr runs in Docker, use host.docker.internal or the compose service "
+    "name (e.g. qbittorrent) — not localhost."
+)
+CSRF_HINT = (
+    "Also check qBittorrent → Options → Web UI: Server domains / Host header "
+    "validation, and bypass auth for your Docker network if needed."
+)
+
 
 def hash_from_magnet(url: str) -> str:
     """Extract the info hash from a magnet link, normalised to lowercase hex."""
@@ -73,12 +82,18 @@ class QBittorrentClient:
         username: str = "",
         password: str = "",
         category: str = "musicarr",
+        verify_ssl: bool = True,
     ) -> None:
         self.base = base_url(host, port, use_ssl)
         self.username = (username or "").strip()
         self.password = password or ""
+        # Modern qB defaults to admin + password; blank user + password → admin.
+        if self.password and not self.username:
+            self.username = "admin"
         self.category = (category or "").strip()
+        self.verify_ssl = verify_ssl
         self._client: httpx.Client | None = None
+        self._logged_in = False
 
     # -- plumbing ---------------------------------------------------------
     def _http(self) -> httpx.Client:
@@ -87,9 +102,10 @@ class QBittorrentClient:
                 base_url=self.base,
                 timeout=TIMEOUT,
                 follow_redirects=True,
+                verify=self.verify_ssl,
                 headers={
-                    "User-Agent": "Musicarr/1.2",
-                    "Referer": self.base,
+                    "User-Agent": "Musicarr/1.4",
+                    "Referer": self.base + "/",
                     "Origin": self.base,
                 },
             )
@@ -99,6 +115,7 @@ class QBittorrentClient:
         if self._client is not None:
             self._client.close()
             self._client = None
+        self._logged_in = False
 
     def __enter__(self) -> "QBittorrentClient":
         return self
@@ -107,39 +124,62 @@ class QBittorrentClient:
         self.close()
 
     def login(self) -> None:
-        if not self.username:
-            # qBittorrent can bypass auth for local clients; nothing to do.
+        # Bypass auth only when neither user nor password is configured.
+        if not self.username and not self.password:
             return
+        user = self.username or "admin"
         client = self._http()
         try:
             resp = client.post(
                 "/api/v2/auth/login",
-                data={"username": self.username, "password": self.password},
+                data={"username": user, "password": self.password},
             )
+        except httpx.ConnectError as exc:
+            raise DownloadClientError(
+                f"Cannot reach qBittorrent at {self.base}. {DOCKER_HINT} ({exc})"
+            ) from exc
         except httpx.HTTPError as exc:
             raise DownloadClientError(f"Cannot reach qBittorrent: {exc}") from exc
         if resp.status_code == 403:
             raise DownloadClientError(
-                "qBittorrent refused the login (too many failed attempts or banned IP)"
+                "qBittorrent refused the login (banned IP or too many failed attempts). "
+                + CSRF_HINT
             )
         if resp.status_code >= 400:
-            raise DownloadClientError(f"qBittorrent login returned HTTP {resp.status_code}")
-        if resp.text.strip().lower() != "ok.":
-            raise DownloadClientError("qBittorrent rejected the username or password")
+            raise DownloadClientError(
+                f"qBittorrent login returned HTTP {resp.status_code}"
+            )
+        body = resp.text.strip()
+        if body.lower() != "ok.":
+            snippet = body[:120] if body else "(empty)"
+            raise DownloadClientError(
+                f"qBittorrent rejected the username or password ({snippet})"
+            )
+        self._logged_in = True
 
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         client = self._http()
         try:
             resp = client.request(method, path, **kwargs)
+        except httpx.ConnectError as exc:
+            raise DownloadClientError(
+                f"Cannot reach qBittorrent at {self.base}. {DOCKER_HINT} ({exc})"
+            ) from exc
         except httpx.HTTPError as exc:
             raise DownloadClientError(f"Cannot reach qBittorrent: {exc}") from exc
         if resp.status_code == 403:
-            # Session may have expired — log in again and retry once.
+            # Session may have expired or CSRF blocked — log in again and retry.
+            self._logged_in = False
             self.login()
             try:
                 resp = client.request(method, path, **kwargs)
             except httpx.HTTPError as exc:
                 raise DownloadClientError(f"Cannot reach qBittorrent: {exc}") from exc
+            if resp.status_code == 403:
+                raise DownloadClientError(
+                    "qBittorrent returned HTTP 403 after login (CSRF/Host header). "
+                    + CSRF_HINT
+                )
         return resp
 
     # -- API --------------------------------------------------------------
@@ -148,9 +188,21 @@ class QBittorrentClient:
             self.login()
             resp = self._request("GET", "/api/v2/app/version")
             if resp.status_code >= 400:
-                return False, f"qBittorrent returned HTTP {resp.status_code}"
+                return (
+                    False,
+                    f"qBittorrent returned HTTP {resp.status_code} from /app/version "
+                    f"after login. {CSRF_HINT}",
+                )
             version = resp.text.strip() or "unknown"
-            return True, f"Connected to qBittorrent {version}"
+            if version.lower().startswith("<!doctype") or version.lower().startswith(
+                "<html"
+            ):
+                return (
+                    False,
+                    f"Unexpected HTML from {self.base} — check host/port/URL base path. "
+                    + DOCKER_HINT,
+                )
+            return True, f"Connected to qBittorrent {version} at {self.base}"
         except DownloadClientError as exc:
             return False, str(exc)
         except Exception as exc:  # noqa: BLE001
@@ -191,7 +243,6 @@ class QBittorrentClient:
         if expected:
             return expected
 
-        # Non-magnet adds do not report the hash, so watch the category for it.
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             time.sleep(1.0)
@@ -216,7 +267,6 @@ class QBittorrentClient:
         except ValueError as exc:
             raise DownloadClientError("qBittorrent returned an invalid response") from exc
         if not rows:
-            # Removed from the client — nothing left to import.
             return ClientStatus(item_id=item_id, state="failed")
 
         row = rows[0]

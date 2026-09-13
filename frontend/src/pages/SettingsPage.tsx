@@ -151,7 +151,7 @@ export function SettingsPage() {
     setRemoveCompleted(data.remove_completed_downloads ?? false)
     setQobuzEmail(data.qobuz_email || '')
     setQobuzUserId(data.qobuz_user_id || '')
-    setQobuzAppId(data.qobuz_app_id || '950096963')
+    setQobuzAppId(data.qobuz_app_id || '')
   }, [data])
 
   const save = useMutation({
@@ -710,9 +710,17 @@ export function SettingsPage() {
               <label>Preferred download method</label>
               <select value={preferredMethod} onChange={(e) => setPreferredMethod(e.target.value)}>
                 <option value="streaming">Streaming provider (Deezer / Tidal / Qobuz)</option>
-                <option value="indexer">Indexers → download client</option>
-                <option value="streaming_then_indexer">Streaming, then indexer on failure</option>
+                <option value="indexer">
+                  Indexers — manual release search (never auto-grab)
+                </option>
+                <option value="streaming_then_indexer">
+                  Streaming first; on failure, use Search indexers (manual)
+                </option>
               </select>
+              <span className="muted tiny">
+                Indexer downloads always require picking a release in Search indexers. Monitor and
+                Download buttons never silently send torrents/NZBs to your client.
+              </span>
             </div>
             <div className="field">
               <label>Import mechanism (indexer downloads)</label>
@@ -743,9 +751,13 @@ export function SettingsPage() {
           </>
         )}
 
-        {tab === 'indexers' && <AcquisitionPanels panel="indexers" />}
-        {tab === 'clients' && <AcquisitionPanels panel="clients" />}
-        {tab === 'paths' && <AcquisitionPanels panel="paths" />}
+        {tab === 'indexers' && (
+          <AcquisitionPanels panel="indexers" onGoTo={(t) => setTab(t)} />
+        )}
+        {tab === 'clients' && (
+          <AcquisitionPanels panel="clients" onGoTo={(t) => setTab(t)} />
+        )}
+        {tab === 'paths' && <AcquisitionPanels panel="paths" onGoTo={(t) => setTab(t)} />}
 
         {tab === 'notifications' && (
           <>

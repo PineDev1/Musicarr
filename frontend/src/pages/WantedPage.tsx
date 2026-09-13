@@ -4,11 +4,13 @@ import { motion } from 'framer-motion'
 import { useMemo, useState } from 'react'
 import { api } from '../api'
 import { useToast } from '../Toast'
+import { ReleaseSearchModal } from './ReleaseSearchModal'
 
 export function WantedPage() {
   const qc = useQueryClient()
   const toast = useToast()
   const [typeFilter, setTypeFilter] = useState<string>('')
+  const [searchAlbum, setSearchAlbum] = useState<{ id: number; label: string } | null>(null)
   const health = useQuery({ queryKey: ['health'], queryFn: api.health })
   const active = health.data?.active_provider || 'deezer'
   const { data, isLoading, error } = useQuery({
@@ -35,15 +37,18 @@ export function WantedPage() {
 
   const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.settings(false) })
   const preferred = settings.data?.preferred_download_method || 'streaming'
+  // Download button always uses the streaming path (never silent indexer enqueue).
+  const streamingMethod =
+    preferred === 'indexer' ? 'streaming' : preferred.startsWith('streaming') ? preferred : 'streaming'
 
   const download = useMutation({
-    mutationFn: ({ id, method }: { id: number; method?: string }) =>
-      api.downloadAlbum(id, false, method),
+    mutationFn: (id: number) => api.downloadAlbum(id, false, streamingMethod),
     onSuccess: (res) => {
-      toast.push(
-        res.source === 'indexer' ? 'Searching indexers…' : 'Queued streaming download',
-        'ok',
-      )
+      if (!res.queued) {
+        toast.push('Could not queue streaming download — check Settings → Downloads', 'error')
+        return
+      }
+      toast.push('Queued streaming download', 'ok')
       qc.invalidateQueries({ queryKey: ['wanted'] })
       qc.invalidateQueries({ queryKey: ['queue'] })
     },
@@ -54,7 +59,7 @@ export function WantedPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['wanted'] }),
   })
   const downloadAll = useMutation({
-    mutationFn: (method?: string) => api.downloadAllWanted(method),
+    mutationFn: () => api.downloadAllWanted(streamingMethod),
     onSuccess: (res) => {
       toast.push(`Queued ${res.queued} album(s)`, 'ok')
       qc.invalidateQueries({ queryKey: ['wanted'] })
@@ -87,6 +92,13 @@ export function WantedPage() {
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
+  const preferredLabel =
+    preferred === 'indexer'
+      ? 'manual release search (use Search indexers)'
+      : preferred === 'streaming_then_indexer'
+        ? 'streaming, then Search indexers on failure'
+        : preferred.replaceAll('_', ' ')
+
   return (
     <div>
       <div className="page-header">
@@ -94,21 +106,13 @@ export function WantedPage() {
           <h1>Wanted</h1>
           <p>
             Missing releases from <strong style={{ textTransform: 'capitalize' }}>{active}</strong>.
-            Default grab method: <strong>{preferred.replaceAll('_', ' ')}</strong> (Settings →
-            Downloads).
+            Default method: <strong>{preferredLabel}</strong> (Settings → Downloads).
           </p>
         </div>
         {data && data.length > 0 && (
           <div className="toolbar" style={{ marginBottom: 0, flexWrap: 'wrap' }}>
-            <button className="btn" onClick={() => downloadAll.mutate(undefined)} disabled={downloadAll.isPending}>
+            <button className="btn" onClick={() => downloadAll.mutate()} disabled={downloadAll.isPending}>
               Download all
-            </button>
-            <button
-              className="btn secondary"
-              onClick={() => downloadAll.mutate('indexer')}
-              disabled={downloadAll.isPending}
-            >
-              Grab all via indexers
             </button>
             <button className="btn ghost" onClick={() => skipSingles.mutate()} disabled={skipSingles.isPending}>
               Skip all singles
@@ -175,14 +179,19 @@ export function WantedPage() {
               </div>
             </div>
             <div className="row-actions">
-              <button className="btn" onClick={() => download.mutate({ id: album.id })}>
+              <button className="btn" onClick={() => download.mutate(album.id)}>
                 Download
               </button>
               <button
                 className="btn secondary"
-                onClick={() => download.mutate({ id: album.id, method: 'indexer' })}
+                onClick={() =>
+                  setSearchAlbum({
+                    id: album.id,
+                    label: `${album.artist_name || 'Artist'} – ${album.title}`,
+                  })
+                }
               >
-                Indexer
+                Search indexers
               </button>
               <button className="btn ghost" onClick={() => skip.mutate(album.id)}>
                 Skip
@@ -191,6 +200,14 @@ export function WantedPage() {
           </motion.div>
         ))}
       </div>
+
+      {searchAlbum && (
+        <ReleaseSearchModal
+          albumId={searchAlbum.id}
+          albumLabel={searchAlbum.label}
+          onClose={() => setSearchAlbum(null)}
+        />
+      )}
     </div>
   )
 }

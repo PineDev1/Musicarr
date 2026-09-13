@@ -22,11 +22,6 @@ logger = logging.getLogger("musicarr.qobuz")
 
 API_BASE = "https://www.qobuz.com/api.json/0.2"
 
-# Default web-player style client credentials (same pairing QobuzDownloaderX uses
-# when tokens come from the classic web player / token extractors).
-DEFAULT_APP_ID = "950096963"
-DEFAULT_APP_SECRET = "979549437fcc4a3faad4867b5cd25dcb"
-
 
 class QobuzProvider:
     name = "qobuz"
@@ -37,11 +32,11 @@ class QobuzProvider:
 
     @property
     def app_id(self) -> str:
-        return (self.settings.qobuz_app_id or DEFAULT_APP_ID).strip()
+        return (self.settings.qobuz_app_id or "").strip()
 
     @property
     def app_secret(self) -> str:
-        return (self.settings.qobuz_app_secret or DEFAULT_APP_SECRET).strip()
+        return (self.settings.qobuz_app_secret or "").strip()
 
     def _headers(self) -> dict:
         headers = {
@@ -91,12 +86,12 @@ class QobuzProvider:
             raise ProviderError("Qobuz token is required")
         if app_id.strip():
             self.settings.qobuz_app_id = app_id.strip()
-        elif not self.settings.qobuz_app_id:
-            self.settings.qobuz_app_id = DEFAULT_APP_ID
         if app_secret.strip():
             self.settings.qobuz_app_secret = app_secret.strip()
-        elif not self.settings.qobuz_app_secret:
-            self.settings.qobuz_app_secret = DEFAULT_APP_SECRET
+        if not (self.settings.qobuz_app_id or "").strip():
+            raise ProviderError("Qobuz app ID is required — set it in Settings before login")
+        if not (self.settings.qobuz_app_secret or "").strip():
+            raise ProviderError("Qobuz app secret is required — set it in Settings before login")
         self.settings.qobuz_user_auth_token = token
         if user_id.strip():
             self.settings.qobuz_user_id = user_id.strip()

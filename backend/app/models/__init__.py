@@ -222,6 +222,7 @@ class DownloadClient(Base):
     host: Mapped[str] = mapped_column(String(512), default="localhost")
     port: Mapped[int] = mapped_column(Integer, default=8080)
     use_ssl: Mapped[bool] = mapped_column(Boolean, default=False)
+    verify_ssl: Mapped[bool] = mapped_column(Boolean, default=True)
     username: Mapped[str] = mapped_column(String(256), default="")
     password: Mapped[str] = mapped_column(Text, default="")
     api_key: Mapped[str] = mapped_column(Text, default="")

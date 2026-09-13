@@ -168,6 +168,10 @@ def migrate_schema() -> None:
     if pl_cols and "is_smart" not in pl_cols:
         _add_column("player_playlists", "is_smart BOOLEAN DEFAULT 0")
 
+    client_cols = _existing_columns("download_clients")
+    if client_cols and "verify_ssl" not in client_cols:
+        _add_column("download_clients", "verify_ssl BOOLEAN DEFAULT 1")
+
 
 def init_db() -> None:
     from app import models  # noqa: F401
