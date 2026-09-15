@@ -110,6 +110,7 @@ export function SettingsPage() {
   const [notifyComplete, setNotifyComplete] = useState(true)
   const [notifyFailure, setNotifyFailure] = useState(true)
   const [upgradeEnabled, setUpgradeEnabled] = useState(true)
+  const [fallbackProvidersEnabled, setFallbackProvidersEnabled] = useState(true)
   const [mediaRefreshUrl, setMediaRefreshUrl] = useState('')
   const [mediaRefreshToken, setMediaRefreshToken] = useState('')
   const [mediaRefreshType, setMediaRefreshType] = useState('webhook')
@@ -158,6 +159,7 @@ export function SettingsPage() {
     setNotifyComplete(data.notify_on_complete ?? true)
     setNotifyFailure(data.notify_on_failure ?? true)
     setUpgradeEnabled(data.upgrade_enabled ?? true)
+    setFallbackProvidersEnabled(data.fallback_providers_enabled ?? true)
     setMediaRefreshUrl(data.media_refresh_url || '')
     setMediaRefreshType(data.media_refresh_type || 'webhook')
     setAuthEnabled(data.auth_enabled ?? false)
@@ -201,6 +203,7 @@ export function SettingsPage() {
         notify_on_complete: notifyComplete,
         notify_on_failure: notifyFailure,
         upgrade_enabled: upgradeEnabled,
+        fallback_providers_enabled: fallbackProvidersEnabled,
         media_refresh_url: mediaRefreshUrl.trim(),
         media_refresh_type: mediaRefreshType,
         auth_enabled: authEnabled,
@@ -927,6 +930,19 @@ export function SettingsPage() {
                     onChange={(e) => setUpgradeEnabled(e.target.checked)}
                   />
                   Flag albums below target quality and allow Upgrade all
+                </label>
+              </div>
+            </div>
+            <div className="field">
+              <label>Provider fallback</label>
+              <div className="checks">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={fallbackProvidersEnabled}
+                    onChange={(e) => setFallbackProvidersEnabled(e.target.checked)}
+                  />
+                  Try other configured providers if the active one doesn't have an album
                 </label>
               </div>
             </div>

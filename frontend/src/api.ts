@@ -47,6 +47,7 @@ export type Settings = {
   notify_on_complete: boolean
   notify_on_failure: boolean
   upgrade_enabled: boolean
+  fallback_providers_enabled: boolean
   media_refresh_url: string
   media_refresh_token_set: boolean
   media_refresh_type: string

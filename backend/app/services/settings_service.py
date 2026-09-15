@@ -72,6 +72,7 @@ def settings_to_out(row: AppSettings, validate: bool = False) -> SettingsOut:
         notify_on_complete=bool(getattr(row, "notify_on_complete", True)),
         notify_on_failure=bool(getattr(row, "notify_on_failure", True)),
         upgrade_enabled=bool(getattr(row, "upgrade_enabled", True)),
+        fallback_providers_enabled=bool(getattr(row, "fallback_providers_enabled", True)),
         media_refresh_url=getattr(row, "media_refresh_url", "") or "",
         media_refresh_token_set=bool(getattr(row, "media_refresh_token", "") or ""),
         media_refresh_type=getattr(row, "media_refresh_type", None) or "webhook",

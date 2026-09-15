@@ -40,6 +40,7 @@ class SettingsOut(BaseModel):
     notify_on_complete: bool = True
     notify_on_failure: bool = True
     upgrade_enabled: bool = True
+    fallback_providers_enabled: bool = True
     media_refresh_url: str = ""
     media_refresh_token_set: bool = False
     media_refresh_type: str = "webhook"
@@ -87,6 +88,7 @@ class SettingsUpdate(BaseModel):
     notify_on_complete: bool | None = None
     notify_on_failure: bool | None = None
     upgrade_enabled: bool | None = None
+    fallback_providers_enabled: bool | None = None
     media_refresh_url: str | None = None
     media_refresh_token: str | None = None
     media_refresh_type: Literal["webhook", "plex", "jellyfin", "navidrome"] | None = None

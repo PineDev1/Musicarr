@@ -80,6 +80,7 @@ def migrate_schema() -> None:
         "notify_on_complete": "BOOLEAN DEFAULT 1",
         "notify_on_failure": "BOOLEAN DEFAULT 1",
         "upgrade_enabled": "BOOLEAN DEFAULT 1",
+        "fallback_providers_enabled": "BOOLEAN DEFAULT 1",
         "media_refresh_url": "TEXT DEFAULT ''",
         "media_refresh_token": "TEXT DEFAULT ''",
         "media_refresh_type": "VARCHAR(32) DEFAULT 'webhook'",

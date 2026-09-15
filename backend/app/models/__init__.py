@@ -60,6 +60,7 @@ class AppSettings(Base):
     notify_on_complete: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_on_failure: Mapped[bool] = mapped_column(Boolean, default=True)
     upgrade_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    fallback_providers_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     media_refresh_url: Mapped[str] = mapped_column(Text, default="")
     media_refresh_token: Mapped[str] = mapped_column(Text, default="")
     media_refresh_type: Mapped[str] = mapped_column(String(32), default="webhook")
