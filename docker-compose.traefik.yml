@@ -19,7 +19,7 @@
 services:
   musicarr:
     build: .
-    image: musicarr:1.4
+    image: musicarr:1.7
     container_name: musicarr
     volumes:
       - ./data:/config

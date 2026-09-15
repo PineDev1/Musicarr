@@ -2,42 +2,78 @@
 
 **Your library. Your sources. Your rules.**
 
-Self-hosted music library manager with a sharp web UI — grab discographies from **Deezer**, **Tidal**, or **Qobuz**, keep FLAC pristine, and spin up a multi-user listening room at `/player`.
+Musicarr is a self-hosted music library manager with a sharp, modern web UI. Point it at
+**Deezer**, **Tidal**, or **Qobuz**, follow the artists you care about, and it keeps your
+FLAC library filled in automatically — plus an optional multi-user listening room at `/player`
+so the people you share it with never need their own accounts on the source services.
 
-```
-  ♫  Musicarr  ·  library OS vibes  ·  port 8787
-```
+[![Latest release](https://img.shields.io/github/v/release/PineDev1/Musicarr?label=release&color=3dba7a)](https://github.com/PineDev1/Musicarr/releases/latest)
+[![Docker image](https://img.shields.io/badge/ghcr.io-pinedev1%2Fmusicarr-3dba7a?logo=docker&logoColor=white)](https://github.com/PineDev1/Musicarr/pkgs/container/musicarr)
+[![License: no warranty](https://img.shields.io/badge/license-no%20warranty%2C%20use%20at%20your%20own%20risk-lightgrey)](#license--liability)
 
-**Author:** [PineDev1](https://github.com/PineDev1) · **Latest:** [v1.6](https://github.com/PineDev1/Musicarr/releases/tag/v1.6)
+**Author:** [PineDev1](https://github.com/PineDev1)
+
+---
+
+## Screenshots
+
+<table>
+<tr>
+<td width="50%">
+<img src="docs/screenshots/library.png" alt="Library view">
+<p align="center"><sub>Library — every followed artist, at a glance</sub></p>
+</td>
+<td width="50%">
+<img src="docs/screenshots/artist.png" alt="Artist detail view">
+<p align="center"><sub>Artist page — wanted, downloaded, and skipped releases</sub></p>
+</td>
+</tr>
+<tr>
+<td width="50%">
+<img src="docs/screenshots/queue.png" alt="Download queue">
+<p align="center"><sub>Live download queue with per-track collaborator credits</sub></p>
+</td>
+<td width="50%">
+<img src="docs/screenshots/settings.png" alt="Settings page">
+<p align="center"><sub>Tabbed settings — sources, library, MusicBrainz, security, player</sub></p>
+</td>
+</tr>
+</table>
 
 ---
 
 ## Why Musicarr
 
-- One active download source, three providers ready when you are
-- Import the collection you already own — then fill the gaps
-- Optional **music player** with lossless streaming (FLAC stays FLAC)
-- Optional login + Traefik HTTPS when you take it off the LAN
-- One Docker container. Open **http://localhost:8787** and go
+- **One active download source, three providers ready when you are** — switch between Deezer, Tidal, and Qobuz without re-adding your library.
+- **Import the collection you already own**, then let Musicarr fill in the gaps.
+- **Collaborations are handled properly** — a feature credit shows up under every artist involved, not just the primary one.
+- **Optional multi-user music player** at `/player` with lossless streaming — FLAC stays FLAC, no server-side transcoding.
+- **Optional login + Traefik HTTPS** for the moment you take it off the LAN.
+- **One Docker container.** Open `http://localhost:8787` and go.
 
 ---
 
 ## Features
 
-- **Multi-source downloads** — Deezer (ARL), Tidal (device login), or Qobuz (token / app credentials). One active source at a time.
-- **Artist library** — search, add, and monitor artists. Each provider artist is its own library entry (same display names stay separate). Cross-source merge is only via an explicit link later — not by name.
-- **Wanted / Queue / Activity** — track missing albums, live download progress, and history.
-- **In-artist progress** — download bars appear under albums on the artist page.
-- **Quality & naming** — FLAC / 320 / 128, upgrade flags when below target, and custom folder/track templates.
-- **Artist monitor profiles** — all albums, new-only, or unmonitored; per-artist singles override.
-- **Import review** — after importing a library, link local-only artists and review weak tags.
-- **Media server hooks** — refresh Plex / Jellyfin / Navidrome (or a generic webhook) after downloads/imports.
-- **Release monitor** — scheduled + manual “Scan for new music”.
-- **Library tools** — import existing collections, match files, and reorganize by template.
-- **Optional app login + Traefik HTTPS mode** — form login and Secure cookies when behind a reverse proxy.
-- **Multi-user music player** — `/player` with its own logins, playlists, drag-and-drop queue, wavy seek bar, and lossless streaming.
-- **Admin Now Playing** — see who’s listening and force-pause a session.
-- **Docker-first deploy** — single container, web UI on port `8787`.
+| Category | What you get |
+|---|---|
+| **Multi-source downloads** | Deezer (ARL), Tidal (device login), or Qobuz (token / app credentials). One active source at a time; switch anytime. |
+| **Artist library** | Search, add, and monitor artists. Diacritic- and article-aware matching means "The Beatles" and "Beatles" resolve correctly. |
+| **Collaboration credits** | Featured-artist releases are correctly linked and shown under every credited artist's page — even when MusicBrainz has more than one ID for the same artist. |
+| **Wanted / Queue / Activity** | Track missing albums, live download progress, and a full history of what happened and when. |
+| **Quality & naming** | FLAC / 320 / 128 targets, automatic upgrade flags, and custom folder/track templates. |
+| **Artist monitor profiles** | All albums, new-only, or unmonitored — with a per-artist singles override. |
+| **Import existing library** | Point Musicarr at music you already have; it tags, links, and marks it downloaded. |
+| **Import review** | After an import, link local-only artists and clean up weakly tagged albums. |
+| **Import lists** | Paste a list of artist names, set a refresh interval, and Musicarr adds any that go missing from your library. |
+| **Multi-provider fallback** | If your active source doesn't have an album, Musicarr can automatically try your other configured sources before giving up. |
+| **Release monitor** | Scheduled and on-demand "Scan for new music." |
+| **Backup & restore** | One-click export of settings and library metadata (secrets excluded); guided restore. |
+| **Media server hooks** | Refresh Plex, Jellyfin, Navidrome, or a generic webhook after downloads/imports. |
+| **Multi-user music player** | `/player` — its own logins, playlists, drag-and-drop queue, wavy seek bar, smart mixes, and lossless streaming. |
+| **Admin Now Playing** | See who's listening, live, and force-pause a session. |
+| **Guided setup wizard** | First run walks you through sources, library path, and (optionally) the player. |
+| **Docker-first deploy** | Single container, single process, web UI on port `8787`. |
 
 ## Download sources
 
@@ -65,19 +101,17 @@ git clone git@github.com:PineDev1/Musicarr.git
 cd Musicarr
 ```
 
-Private repo: make sure your SSH key or `gh` auth can access `PineDev1/Musicarr`.
-
 ### 2. Start
 
 ```bash
 docker compose up -d --build
 ```
 
-Open **http://localhost:8787**.
+Open **http://localhost:8787** — the setup wizard walks you through the rest.
 
-Musicarr is designed as a **single process** (one container / one `uvicorn` worker). Do not run
-multiple workers or replicas against the same SQLite database — downloads and the release monitor
-are in-process and would race.
+> Musicarr is designed as a **single process** (one container / one `uvicorn` worker). Do not
+> run multiple workers or replicas against the same SQLite database — downloads and the
+> release monitor are in-process and would race.
 
 ### 3. Volumes
 
@@ -86,7 +120,7 @@ are in-process and would race.
 | `./data`  | `/config` | SQLite DB, settings, download staging |
 | `./music` | `/music`  | Your music library |
 
-Point Musicarr’s library path at `/music` inside the container (default), or mount a different host folder:
+Point Musicarr's library path at `/music` inside the container (default), or mount a different host folder:
 
 ```yaml
 volumes:
@@ -103,7 +137,7 @@ docker compose up -d --build
 Or pull the prebuilt image:
 
 ```bash
-docker pull ghcr.io/pinedev1/musicarr:1.6
+docker pull ghcr.io/pinedev1/musicarr:latest
 ```
 
 ### 5. Logs / stop
@@ -147,51 +181,64 @@ Player users cannot download, manage Wanted/Queue, or change admin settings.
 
 ---
 
-## Docker image
+## Backup & restore
 
-### Build locally
+**Settings → Backup** exports your settings and library metadata (artists, albums, tracks,
+history) as a downloadable archive. Provider credentials, tokens, and password hashes are
+**never included** — only a redacted settings file plus a snapshot of the database.
 
-```bash
-docker build -t musicarr:1.6 .
-```
+Restoring validates and stages the archive before touching anything live, then asks you to
+restart Musicarr to load it — this avoids swapping the database out from under an
+in-progress download or the release monitor.
 
-Run without Compose:
+---
 
-```bash
-mkdir -p data music
-docker run -d --name musicarr \
-  -p 8787:8787 \
-  -v "$(pwd)/data:/config" \
-  -v "$(pwd)/music:/music" \
-  -e MUSICARR_DATA_DIR=/config \
-  -e MUSICARR_MUSIC_DIR=/music \
-  musicarr:1.6
-```
+## Import an existing library
 
-### GitHub Container Registry
+1. In **Settings**, set **Library path** to the folder that already contains your music
+   (e.g. `Artist/Album/01 - Track.flac`).
+2. Click **Import existing library**.
+3. Musicarr reads tags (and folder names as fallback), creates artists/albums/tracks, marks them
+   downloaded, and when possible links artists to your **active** download source so you can
+   grab missing releases later.
+4. Open **Review imports** to link local-only artists to your active source and check weakly tagged
+   albums.
+5. Use **Match files to library** anytime to re-link files to artists you already added in Musicarr
+   without creating new entries.
 
-```bash
-echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u PineDev1 --password-stdin
-docker pull ghcr.io/pinedev1/musicarr:1.6
-docker pull ghcr.io/pinedev1/musicarr:latest
-```
+Supported audio: `.flac` `.mp3` `.m4a` `.ogg` `.opus` `.wav` `.aac` `.aiff`
 
-```bash
-docker run -d --name musicarr -p 8787:8787 \
-  -v "$(pwd)/data:/config" -v "$(pwd)/music:/music" \
-  ghcr.io/pinedev1/musicarr:1.6
-```
+- Folders: `{artist}/{album} ({year})`
+- Tracks: `{track:02d} - {title}`
 
 ---
 
 ## Quick start (first run)
 
-1. Open the UI → **Settings → Sources** and connect Deezer, Tidal, or Qobuz.
-2. Set **Library path** (Docker default: `/music`).
-3. Optionally enable **app login** and **HTTPS / Traefik** under **Security**.
-4. Optionally enable the **Player** tab and create listener accounts.
-5. **Add Artist** → Musicarr syncs releases and can queue missing albums.
-6. Or **Import existing library** if the files are already on disk.
+1. Open the UI → the setup wizard prompts for a download source (Deezer / Tidal / Qobuz) and your library path.
+2. Optionally enable **app login** and **HTTPS / Traefik** under **Settings → Security**.
+3. Optionally enable the **Player** tab and create listener accounts.
+4. **Add Artist** → Musicarr syncs releases and can queue missing albums.
+5. Or **Import existing library** if the files are already on disk.
+
+---
+
+## Troubleshooting
+
+**The site is stuck loading in one browser but works in another.**
+This is almost always a stale Service Worker from a previous version, not a server
+problem. In DevTools → **Application** → **Service Workers**, click **Unregister**, then
+**Clear storage** → **Clear site data**, then hard-refresh (Cmd/Ctrl+Shift+R).
+
+**Nothing loads at all, in any browser.**
+Confirm you're using `http://`, not `https://`, unless you've put Musicarr behind Traefik
+with HTTPS mode enabled — a browser trying to negotiate TLS against a plain HTTP port will
+hang indefinitely. Then check `docker compose logs -f musicarr` for a startup error.
+
+**A download won't cancel / the UI feels sluggish under load.**
+Fixed as of v1.7 — update to the latest image. If it recurs, check
+`docker compose logs -f musicarr` for repeated `UNIQUE constraint failed` or
+`database is locked` errors and open an issue with the surrounding log lines.
 
 ---
 
@@ -224,6 +271,13 @@ Production UI into `backend/static`:
 cd frontend && npm run build
 ```
 
+### Running tests
+
+```bash
+cd backend
+.venv/bin/python -m pytest -q
+```
+
 ---
 
 ## Branches
@@ -235,78 +289,6 @@ cd frontend && npm run build
 
 ---
 
-## Import an existing library
-
-1. In **Settings**, set **Library path** to the folder that already contains your music
-   (e.g. `Artist/Album/01 - Track.flac`).
-2. Click **Import existing library**.
-3. Musicarr reads tags (and folder names as fallback), creates artists/albums/tracks, marks them
-   downloaded, and when possible links artists to your **active** download source so you can
-   grab missing releases later.
-4. Open **Review imports** to link local-only artists to your active source and check weakly tagged
-   albums.
-5. Use **Match files to library** anytime to re-link files to artists you already added in Musicarr
-   without creating new entries.
-
-Supported audio: `.flac` `.mp3` `.m4a` `.ogg` `.opus` `.wav` `.aac` `.aiff`
-
-- Folders: `{artist}/{album} ({year})`
-- Tracks: `{track:02d} - {title}`
-
----
-
-## What's new
-
-### v1.6 — Local MusicBrainz + streaming-first library
-
-- **Local MusicBrainz catalog** — Settings → MusicBrainz downloads a slim MetaBrainz dump (core + derived) into SQLite under ~20 GiB; artist resolve, catalogs, and credits run locally without live API 503 spam
-- **Add Artist counts from MusicBrainz** — release counts come from the local catalog when Ready (not provider album totals)
-- **Collaborator / featured-artist sync** — richer credits, shared-collab album IDs, and safer featured-artist linking
-- **Streaming-only again** — indexers, qBittorrent/SABnzbd, path mappings, and Lidarr-style release grab removed
-- **Player bar** — fixed volume (Web Audio GainNode), wider desktop titles, Apple Music–style mobile mini bar with expand + swipe-down sheet
-- **Security & ops** — player admin routes require app login; CORS allowlist (no `*` + credentials); SQLite WAL + busy timeout; `download_concurrency` 1–4 honored; deterministic legacy IDs; collaborator name lookup without a silent 500-row cap
-
-### Removed — Indexers / download clients
-
-Indexer search, qBittorrent/SABnzbd clients, path mappings, and release grab are **removed**. Musicarr is streaming-only again (Deezer / Tidal / Qobuz). Those acquisition features may return in a future project.
-
-### v1.5 — Lidarr-style release search (historical)
-
-- Manual indexer grabs and download-client connectivity (since removed)
-
-### v1.4 — Indexers + artist identity (historical)
-
-- Indexers / download clients (since removed)
-- **Same-name artists stay separate** — identity by provider ID; folders disambiguate on collision
-- **pytest coverage** for artist identity guards
-
-### v1.3 — Player + remote-ready
-
-- **Multi-user `/player`** — separate logins, playlists, drag-and-drop queue, Liked Songs & mixes
-- **Lossless streaming** — original files with HTTP Range; FLAC served as FLAC (no transcode)
-- **Pill play bar + wavy seek** — Android 13–style scrubber with personal wave prefs
-- **Smart playlists** — seed ≥10 tracks, get similar-song suggestions
-- **Admin Now Playing** — live listeners + force-pause
-- **Traefik / HTTPS mode** — Secure cookies, public domain, copyable labels
-- **Optional app login** — protect the admin UI when exposing Musicarr
-
-### v1.2
-
-- Quality upgrades, artist monitor profiles, import review
-- Media server refresh (Plex / Jellyfin / Navidrome / webhook)
-- Tabbed settings
-
-### v1.1
-
-- Wanted filters, album detail, queue failure rematch
-- Discord / webhook notifications, import existing library
-
-### v1.0
-
-- Initial multi-provider Musicarr (Docker + web UI)
-
----
-
 ## What's coming (v2.0)
 
 v2.0 moves Musicarr from a download manager toward a **library OS**.
@@ -315,10 +297,10 @@ v2.0 moves Musicarr from a download manager toward a **library OS**.
 |-----------|--------|
 | **2.0a** | Metadata brain (MusicBrainz / ISRC-first) + stronger rematch/import review |
 | **2.0b** | Multi-root library paths + tag/cover writeback |
-| **2.0c** | Provider fallback for grab/upgrade |
-| **2.0d** | Release calendar / discover, backup/restore, denser UI |
+| **2.0c** | Provider fallback for grab/upgrade *(shipped early in v1.7)* |
+| **2.0d** | Release calendar / discover, denser UI |
 
-**Pillars:** canonical metadata separate from provider IDs; multiple library roots; smarter fulfillment across Deezer/Tidal/Qobuz; consistent tags & artwork; remote-ready access; backup/restore; UI leap.
+**Pillars:** canonical metadata separate from provider IDs; multiple library roots; smarter fulfillment across Deezer/Tidal/Qobuz; consistent tags & artwork; remote-ready access; backup/restore *(shipped in v1.7)*; UI leap.
 
 **Not planned as v2.0 flagships:** full SSO / enterprise identity, or Spotify/YouTube download sources.
 
@@ -326,13 +308,17 @@ v2.0 moves Musicarr from a download manager toward a **library OS**.
 
 ## Releases
 
-- **[v1.6](https://github.com/PineDev1/Musicarr/releases/tag/v1.6)** — local MusicBrainz catalog, streaming-only, player UX + security hardening
-- **[v1.5](https://github.com/PineDev1/Musicarr/releases/tag/v1.5)** — (historical) release search + download-client fixes; acquisition features later removed
-- **[v1.4](https://github.com/PineDev1/Musicarr/releases/tag/v1.4)** — same-name artist identity (+ historical indexers)
-- **[v1.3](https://github.com/PineDev1/Musicarr/releases/tag/v1.3)** — multi-user player, Traefik SSL, Now Playing
-- **v1.0** — initial public release
+See the [Releases page](https://github.com/PineDev1/Musicarr/releases) for the full changelog on every version.
 
-See [Releases](https://github.com/PineDev1/Musicarr/releases) for tags and notes. Images: `ghcr.io/pinedev1/musicarr:1.6` · `latest`
+Images: `ghcr.io/pinedev1/musicarr:<version>` · `ghcr.io/pinedev1/musicarr:latest`
+
+---
+
+## Contributing / support
+
+Issues and pull requests are welcome — please include steps to reproduce, relevant logs
+(`docker compose logs -f musicarr`), and your Musicarr version for bug reports. This is a
+one-person hobby project maintained in spare time; there's no SLA on response time.
 
 ---
 
@@ -353,12 +339,12 @@ No warranty. Use at your own risk. The author (**PineDev1**) accepts **no liabil
 
 ## Legal disclaimer
 
-**Musicarr is provided “as is”, without warranty of any kind, express or implied.**
+**Musicarr is provided "as is", without warranty of any kind, express or implied.**
 
 By using this software you acknowledge and agree that:
 
 1. **You alone are responsible** for how you use Musicarr, including compliance with the terms of service of Deezer, Tidal, Qobuz, and any other third party, as well as all applicable local copyright and intellectual-property laws.
-2. Downloading or copying copyrighted music without authorization from the rights holder **may be illegal** in your jurisdiction and/or a violation of a streaming service’s terms.
+2. Downloading or copying copyrighted music without authorization from the rights holder **may be illegal** in your jurisdiction and/or a violation of a streaming service's terms.
 3. **PineDev1 / the author / contributors hold no accountability** for misuse, account bans, legal claims, damages, data loss, or any other consequence arising from use of this project.
 4. Credentials you paste into Musicarr (ARL cookies, tokens, app secrets, etc.) are stored **on your machine**. Protect them. Never commit them to git or share them publicly.
 5. This software is intended for **personal, local use** on libraries you are legally entitled to manage. The author does not encourage or endorse piracy.

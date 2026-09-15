@@ -1,7 +1,7 @@
 services:
   musicarr:
     build: .
-    image: musicarr:1.6
+    image: musicarr:1.7
     container_name: musicarr
     ports:
       - "8787:8787"
