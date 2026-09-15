@@ -930,8 +930,13 @@ def _sync_provider_albums(
     touched: list[Album] = []
     for raw in provider_albums:
         pid = raw.provider_id
-        if pid in existing:
-            album = existing[pid]
+        # A collab row for this same raw pid may already exist under its
+        # disambiguated "collab:{artist_id}:{pid}" key (see
+        # _unique_provider_album_id) — checking only the raw key here missed
+        # it and inserted a second row with the same disambiguated id,
+        # crashing on the (provider, provider_id) unique constraint.
+        album = existing.get(pid) or existing.get(f"collab:{artist.id}:{pid}")
+        if album is not None:
             album.title = raw.title or album.title
             album.cover_url = raw.cover_url or album.cover_url
             album.release_date = raw.release_date or album.release_date
