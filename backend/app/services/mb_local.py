@@ -369,6 +369,10 @@ def search_release_group_for_artist(
     # 80+ unrelated release-groups, and the real match won't necessarily be
     # among the first 20 SQLite happens to return.
     if not rows and re.search(r"feat\.?|ft\.?|featuring", title or "", re.I):
+        # Each row here costs a couple of extra queries (secondary types +
+        # credits) in _row_to_rg below, and this path runs on every periodic
+        # monitor tick for any artist stuck on a duplicate MBID — so the
+        # limit has to stay modest even though a wider pool improves recall.
         rows = con.execute(
             """
             SELECT rg.id, rg.gid, rg.name, rg.artist_credit, rg.primary_type_id,
@@ -379,7 +383,7 @@ def search_release_group_for_artist(
             WHERE rg.name LIKE ?
             LIMIT ?
             """,
-            (like, 300),
+            (like, 80),
         ).fetchall()
 
     best: ReleaseGroup | None = None
@@ -411,6 +415,10 @@ def search_release_group_for_artist(
         if ratio > best_score:
             best_score = ratio
             best = rg
+            if credited and ratio >= 0.98:
+                # Near-exact title, correctly credited — not going to do
+                # better than this among the remaining candidates.
+                break
     if best and best_score >= 0.75:
         return best
     return None
