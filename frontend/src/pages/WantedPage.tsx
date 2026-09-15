@@ -4,13 +4,11 @@ import { motion } from 'framer-motion'
 import { useMemo, useState } from 'react'
 import { api } from '../api'
 import { useToast } from '../Toast'
-import { ReleaseSearchModal } from './ReleaseSearchModal'
 
 export function WantedPage() {
   const qc = useQueryClient()
   const toast = useToast()
   const [typeFilter, setTypeFilter] = useState<string>('')
-  const [searchAlbum, setSearchAlbum] = useState<{ id: number; label: string } | null>(null)
   const health = useQuery({ queryKey: ['health'], queryFn: api.health })
   const active = health.data?.active_provider || 'deezer'
   const { data, isLoading, error } = useQuery({
@@ -35,20 +33,14 @@ export function WantedPage() {
     }
   }, [data])
 
-  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.settings(false) })
-  const preferred = settings.data?.preferred_download_method || 'streaming'
-  // Download button always uses the streaming path (never silent indexer enqueue).
-  const streamingMethod =
-    preferred === 'indexer' ? 'streaming' : preferred.startsWith('streaming') ? preferred : 'streaming'
-
   const download = useMutation({
-    mutationFn: (id: number) => api.downloadAlbum(id, false, streamingMethod),
+    mutationFn: (id: number) => api.downloadAlbum(id, false),
     onSuccess: (res) => {
       if (!res.queued) {
-        toast.push('Could not queue streaming download — check Settings → Downloads', 'error')
+        toast.push('Could not queue download', 'error')
         return
       }
-      toast.push('Queued streaming download', 'ok')
+      toast.push('Queued download', 'ok')
       qc.invalidateQueries({ queryKey: ['wanted'] })
       qc.invalidateQueries({ queryKey: ['queue'] })
     },
@@ -59,7 +51,7 @@ export function WantedPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['wanted'] }),
   })
   const downloadAll = useMutation({
-    mutationFn: () => api.downloadAllWanted(streamingMethod),
+    mutationFn: () => api.downloadAllWanted(),
     onSuccess: (res) => {
       toast.push(`Queued ${res.queued} album(s)`, 'ok')
       qc.invalidateQueries({ queryKey: ['wanted'] })
@@ -92,13 +84,6 @@ export function WantedPage() {
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
-  const preferredLabel =
-    preferred === 'indexer'
-      ? 'manual release search (use Search indexers)'
-      : preferred === 'streaming_then_indexer'
-        ? 'streaming, then Search indexers on failure'
-        : preferred.replaceAll('_', ' ')
-
   return (
     <div>
       <div className="page-header">
@@ -106,7 +91,6 @@ export function WantedPage() {
           <h1>Wanted</h1>
           <p>
             Missing releases from <strong style={{ textTransform: 'capitalize' }}>{active}</strong>.
-            Default method: <strong>{preferredLabel}</strong> (Settings → Downloads).
           </p>
         </div>
         {data && data.length > 0 && (
@@ -182,17 +166,6 @@ export function WantedPage() {
               <button className="btn" onClick={() => download.mutate(album.id)}>
                 Download
               </button>
-              <button
-                className="btn secondary"
-                onClick={() =>
-                  setSearchAlbum({
-                    id: album.id,
-                    label: `${album.artist_name || 'Artist'} – ${album.title}`,
-                  })
-                }
-              >
-                Search indexers
-              </button>
               <button className="btn ghost" onClick={() => skip.mutate(album.id)}>
                 Skip
               </button>
@@ -200,14 +173,6 @@ export function WantedPage() {
           </motion.div>
         ))}
       </div>
-
-      {searchAlbum && (
-        <ReleaseSearchModal
-          albumId={searchAlbum.id}
-          albumLabel={searchAlbum.label}
-          onClose={() => setSearchAlbum(null)}
-        />
-      )}
     </div>
   )
 }

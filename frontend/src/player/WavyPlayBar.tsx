@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import {
   IconHeart,
   IconMoon,
@@ -69,13 +69,68 @@ export function WavyPlayBar() {
 
   const wave = prefs.data || DEFAULT_PREFS
   const isFlac = track && (track.format === 'flac' || track.quality === 'flac')
+  const volPct = Math.round(q.volume * 100)
 
   return (
     <>
-      <div className={`pill-player${track ? '' : ' empty'}`}>
+      <div className={`pill-player${track ? '' : ' empty'}${expanded ? ' sheet-open' : ''}`}>
         {track ? (
           <>
-            <div className="pill-meta">
+            {/* Mobile mini bar — Apple Music style */}
+            <button
+              type="button"
+              className="pill-mini"
+              aria-label="Open now playing"
+              onClick={() => setExpanded(true)}
+            >
+              {track.cover_url ? (
+                <img src={track.cover_url} alt="" className="pill-art" key={track.id} />
+              ) : (
+                <div className="pill-art placeholder" />
+              )}
+              <div className="pill-text">
+                <div className="pill-title">{track.title}</div>
+                <div className="pill-sub">{track.artist_name}</div>
+              </div>
+            </button>
+            <div className="pill-mini-transport">
+              <button
+                type="button"
+                className="pill-icon-btn"
+                aria-label="Previous"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  q.prev()
+                }}
+              >
+                <IconPrev size={22} />
+              </button>
+              <button
+                type="button"
+                className="pill-play sm"
+                aria-label={q.playing ? 'Pause' : 'Play'}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  q.togglePlay()
+                }}
+              >
+                {q.playing ? <IconPause size={18} /> : <IconPlay size={18} />}
+              </button>
+              <button
+                type="button"
+                className="pill-icon-btn"
+                aria-label="Next"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  q.next()
+                }}
+              >
+                <IconNext size={22} />
+              </button>
+            </div>
+
+            {/* Desktop full bar */}
+            <div className="pill-meta pill-desktop">
               <button
                 type="button"
                 className="pill-art-btn"
@@ -83,12 +138,17 @@ export function WavyPlayBar() {
                 onClick={() => setExpanded(true)}
               >
                 {track.cover_url ? (
-                  <img src={track.cover_url} alt="" className="pill-art" key={track.id} />
+                  <img src={track.cover_url} alt="" className="pill-art" key={`d-${track.id}`} />
                 ) : (
                   <div className="pill-art placeholder" />
                 )}
               </button>
-              <div className="pill-text">
+              <button
+                type="button"
+                className="pill-text pill-text-btn"
+                aria-label="Expand now playing"
+                onClick={() => setExpanded(true)}
+              >
                 <div className="pill-title">{track.title}</div>
                 <div className="pill-sub">
                   {track.artist_name}
@@ -97,7 +157,7 @@ export function WavyPlayBar() {
                 {q.sourceLabel && (
                   <div className="pill-source">Playing from {q.sourceLabel}</div>
                 )}
-              </div>
+              </button>
               <button
                 type="button"
                 className={`pill-icon-btn heart${liked ? ' on' : ''}`}
@@ -108,7 +168,7 @@ export function WavyPlayBar() {
               </button>
             </div>
 
-            <div className="pill-main">
+            <div className="pill-main pill-desktop">
               <WavySeekBar
                 value={q.currentTime}
                 max={q.duration || 1}
@@ -132,7 +192,12 @@ export function WavyPlayBar() {
                 <button type="button" className="pill-icon-btn" aria-label="Previous" onClick={q.prev}>
                   <IconPrev size={20} />
                 </button>
-                <button type="button" className="pill-play" aria-label={q.playing ? 'Pause' : 'Play'} onClick={q.togglePlay}>
+                <button
+                  type="button"
+                  className="pill-play"
+                  aria-label={q.playing ? 'Pause' : 'Play'}
+                  onClick={q.togglePlay}
+                >
                   {q.playing ? <IconPause size={22} /> : <IconPlay size={22} />}
                 </button>
                 <button type="button" className="pill-icon-btn" aria-label="Next" onClick={q.next}>
@@ -150,17 +215,25 @@ export function WavyPlayBar() {
               </div>
             </div>
 
-            <div className="pill-side">
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.01}
-                value={q.volume}
-                onChange={(e) => q.setVolume(Number(e.target.value))}
-                aria-label="Volume"
-                className="pill-vol"
-              />
+            <div className="pill-side pill-desktop">
+              <label className="pill-vol-wrap">
+                <span className="sr-only">Volume</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={q.volume}
+                  onChange={(e) => q.setVolume(Number(e.target.value))}
+                  onInput={(e) => q.setVolume(Number((e.target as HTMLInputElement).value))}
+                  aria-label="Volume"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={volPct}
+                  className="pill-vol"
+                  style={{ '--vol': `${volPct}%` } as CSSProperties}
+                />
+              </label>
               <button
                 type="button"
                 className={`pill-icon-btn${q.sleepMode != null ? ' on' : ''}`}

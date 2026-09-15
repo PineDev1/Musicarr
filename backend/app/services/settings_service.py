@@ -64,6 +64,8 @@ def settings_to_out(row: AppSettings, validate: bool = False) -> SettingsOut:
         min_track_count=int(getattr(row, "min_track_count", 0) or 0),
         ignore_junk_titles=bool(getattr(row, "ignore_junk_titles", True)),
         ignore_live_releases=bool(getattr(row, "ignore_live_releases", False)),
+        official_releases_only=bool(getattr(row, "official_releases_only", True)),
+        mb_catalog_mode=(getattr(row, "mb_catalog_mode", None) or "local"),
         notify_webhook_url=getattr(row, "notify_webhook_url", "") or "",
         notify_on_complete=bool(getattr(row, "notify_on_complete", True)),
         notify_on_failure=bool(getattr(row, "notify_on_failure", True)),
@@ -80,16 +82,6 @@ def settings_to_out(row: AppSettings, validate: bool = False) -> SettingsOut:
         player_sharing_enabled=bool(getattr(row, "player_sharing_enabled", True)),
         download_concurrency=row.download_concurrency,
         max_retries=row.max_retries,
-        preferred_download_method=(
-            getattr(row, "preferred_download_method", None) or "streaming"
-        ),
-        completed_download_scan_interval_seconds=int(
-            getattr(row, "completed_download_scan_interval_seconds", 60) or 60
-        ),
-        import_mechanism=(getattr(row, "import_mechanism", None) or "hardlink"),
-        remove_completed_downloads=bool(
-            getattr(row, "remove_completed_downloads", False)
-        ),
     )
 
 

@@ -1,15 +1,13 @@
 services:
   musicarr:
     build: .
-    image: musicarr:1.4
+    image: musicarr:1.6
     container_name: musicarr
     ports:
       - "8787:8787"
     volumes:
       - ./data:/config
       - ./music:/music
-      # Shared completed downloads for indexer → qBit/SAB import (optional)
-      - ./downloads:/downloads
     environment:
       MUSICARR_DATA_DIR: /config
       MUSICARR_MUSIC_DIR: /music

@@ -5,13 +5,8 @@ from pydantic import BaseModel, Field
 
 
 Bitrate = Literal["flac", "320", "128"]
-AlbumStatus = Literal["wanted", "downloaded", "skipped"]
+AlbumStatus = Literal["wanted", "downloaded", "skipped", "missing"]
 ProviderName = Literal["deezer", "tidal", "qobuz"]
-DownloadMethod = Literal["streaming", "indexer", "streaming_then_indexer"]
-ImportMechanism = Literal["hardlink", "copy", "move"]
-IndexerProtocol = Literal["usenet", "torrent"]
-IndexerImplementation = Literal["newznab", "torznab"]
-ClientImplementation = Literal["qbittorrent", "sabnzbd"]
 
 
 class SettingsOut(BaseModel):
@@ -37,6 +32,8 @@ class SettingsOut(BaseModel):
     min_track_count: int = 0
     ignore_junk_titles: bool = True
     ignore_live_releases: bool = False
+    official_releases_only: bool = True
+    mb_catalog_mode: str = "local"
     notify_webhook_url: str = ""
     notify_on_complete: bool = True
     notify_on_failure: bool = True
@@ -53,10 +50,6 @@ class SettingsOut(BaseModel):
     player_sharing_enabled: bool = True
     download_concurrency: int
     max_retries: int
-    preferred_download_method: str = "streaming"
-    completed_download_scan_interval_seconds: int = 60
-    import_mechanism: str = "hardlink"
-    remove_completed_downloads: bool = False
     provider_ok: bool | None = None
     provider_error: str | None = None
     deezer_ok: bool | None = None
@@ -84,6 +77,8 @@ class SettingsUpdate(BaseModel):
     min_track_count: int | None = Field(default=None, ge=0, le=100)
     ignore_junk_titles: bool | None = None
     ignore_live_releases: bool | None = None
+    official_releases_only: bool | None = None
+    mb_catalog_mode: Literal["local", "live", "local_with_live_fallback"] | None = None
     notify_webhook_url: str | None = None
     notify_on_complete: bool | None = None
     notify_on_failure: bool | None = None
@@ -100,12 +95,6 @@ class SettingsUpdate(BaseModel):
     player_sharing_enabled: bool | None = None
     download_concurrency: int | None = Field(default=None, ge=1, le=4)
     max_retries: int | None = Field(default=None, ge=0, le=10)
-    preferred_download_method: DownloadMethod | None = None
-    completed_download_scan_interval_seconds: int | None = Field(
-        default=None, ge=10, le=3600
-    )
-    import_mechanism: ImportMechanism | None = None
-    remove_completed_downloads: bool | None = None
 
 
 class HealthOut(BaseModel):
@@ -164,6 +153,9 @@ class AlbumOut(BaseModel):
     track_count: int
     monitored: bool
     status: str
+    status_reason: str = ""
+    musicbrainz_id: str | None = None
+    artist_credit: str = ""
     path: str | None
     quality: str = ""
     upgrade_available: bool = False
@@ -173,6 +165,13 @@ class AlbumOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class RelatedArtistOut(BaseModel):
+    id: int | None = None
+    name: str
+    musicbrainz_id: str | None = None
+    provider: str | None = None
 
 
 class ArtistOut(BaseModel):
@@ -185,13 +184,16 @@ class ArtistOut(BaseModel):
     monitored: bool
     monitor_mode: str = "all"
     include_singles: bool | None = None
+    musicbrainz_id: str | None = None
     added_at: datetime
     last_synced_at: datetime | None
     album_count: int = 0
     downloaded_count: int = 0
     wanted_count: int = 0
+    missing_count: int = 0
     providers: list[str] = []
     linked_artist_ids: list[int] = []
+    related_artists: list[RelatedArtistOut] = []
     # True when another artist row shares this display name (identity collision hint)
     name_collision: bool = False
     albums: list[AlbumOut] = []
@@ -206,6 +208,7 @@ class ArtistCreate(BaseModel):
     provider: ProviderName | None = None
     monitored: bool = True
     download_missing: bool = True
+    include_singles: bool | None = None
 
 
 class ArtistPatch(BaseModel):
@@ -232,181 +235,12 @@ class DownloadJobOut(BaseModel):
     error_category: str = ""
     retries: int
     source: str = "streaming"
-    indexer_id: int | None = None
-    client_id: int | None = None
-    release_title: str = ""
-    client_item_id: str = ""
-    output_path: str = ""
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
 
     class Config:
         from_attributes = True
-
-
-class IndexerOut(BaseModel):
-    id: int
-    name: str
-    protocol: str
-    implementation: str
-    base_url: str
-    api_key_set: bool = False
-    categories: list[int] = []
-    enabled: bool = True
-    priority: int = 25
-
-    class Config:
-        from_attributes = True
-
-
-class IndexerCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=256)
-    protocol: IndexerProtocol = "usenet"
-    implementation: IndexerImplementation = "newznab"
-    base_url: str = Field(min_length=1, max_length=1024)
-    api_key: str = ""
-    categories: list[int] = [3000, 3010, 3040]
-    enabled: bool = True
-    priority: int = Field(default=25, ge=1, le=100)
-
-
-class IndexerUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=256)
-    protocol: IndexerProtocol | None = None
-    implementation: IndexerImplementation | None = None
-    base_url: str | None = Field(default=None, min_length=1, max_length=1024)
-    api_key: str | None = None
-    categories: list[int] | None = None
-    enabled: bool | None = None
-    priority: int | None = Field(default=None, ge=1, le=100)
-
-
-class DownloadClientOut(BaseModel):
-    id: int
-    name: str
-    protocol: str
-    implementation: str
-    host: str
-    port: int
-    use_ssl: bool = False
-    verify_ssl: bool = True
-    username: str = ""
-    password_set: bool = False
-    api_key_set: bool = False
-    category: str = "musicarr"
-    enabled: bool = True
-    priority: int = 1
-    base_url: str = ""
-
-    class Config:
-        from_attributes = True
-
-
-class DownloadClientCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=256)
-    protocol: IndexerProtocol = "torrent"
-    implementation: ClientImplementation = "qbittorrent"
-    host: str = Field(default="localhost", max_length=512)
-    port: int = Field(default=8080, ge=1, le=65535)
-    use_ssl: bool = False
-    verify_ssl: bool = True
-    username: str = ""
-    password: str = ""
-    api_key: str = ""
-    category: str = "musicarr"
-    enabled: bool = True
-    priority: int = Field(default=1, ge=1, le=100)
-
-
-class DownloadClientUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=256)
-    protocol: IndexerProtocol | None = None
-    implementation: ClientImplementation | None = None
-    host: str | None = Field(default=None, max_length=512)
-    port: int | None = Field(default=None, ge=1, le=65535)
-    use_ssl: bool | None = None
-    verify_ssl: bool | None = None
-    username: str | None = None
-    password: str | None = None
-    api_key: str | None = None
-    category: str | None = None
-    enabled: bool | None = None
-    priority: int | None = Field(default=None, ge=1, le=100)
-
-
-class DownloadClientTestDraft(BaseModel):
-    """Test connection using form values without saving."""
-
-    implementation: ClientImplementation = "qbittorrent"
-    host: str = Field(default="localhost", max_length=512)
-    port: int = Field(default=8080, ge=1, le=65535)
-    use_ssl: bool = False
-    verify_ssl: bool = True
-    username: str = ""
-    password: str = ""
-    api_key: str = ""
-    # When testing an existing client, blank secrets keep the stored values.
-    client_id: int | None = None
-
-
-class ReleaseGrabRequest(BaseModel):
-    album_id: int
-    title: str = ""
-    grab_url: str = Field(min_length=1)
-    protocol: IndexerProtocol = "torrent"
-    indexer_id: int | None = None
-    size: int = 0
-    seeders: int = 0
-
-
-class AcquisitionStatusOut(BaseModel):
-    indexers_enabled: int = 0
-    torrent_client: bool = False
-    usenet_client: bool = False
-    path_mappings: int = 0
-    messages: list[str] = []
-
-
-
-class RemotePathMappingOut(BaseModel):
-    id: int
-    host: str = ""
-    remote_path: str
-    local_path: str
-
-    class Config:
-        from_attributes = True
-
-
-class RemotePathMappingCreate(BaseModel):
-    host: str = ""
-    remote_path: str = Field(min_length=1, max_length=2048)
-    local_path: str = Field(min_length=1, max_length=2048)
-
-
-class RemotePathMappingUpdate(BaseModel):
-    host: str | None = None
-    remote_path: str | None = Field(default=None, min_length=1, max_length=2048)
-    local_path: str | None = Field(default=None, min_length=1, max_length=2048)
-
-
-class ReleaseCandidateOut(BaseModel):
-    title: str
-    size: int = 0
-    seeders: int = 0
-    protocol: str = "usenet"
-    download_url: str = ""
-    magnet_url: str = ""
-    grab_url: str = ""
-    indexer_id: int = 0
-    indexer_name: str = ""
-    score: float = 0.0
-
-
-class TestResultOut(BaseModel):
-    ok: bool
-    message: str = ""
 
 
 class HistoryOut(BaseModel):

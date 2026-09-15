@@ -21,10 +21,6 @@ def _queue_snapshot() -> list[dict]:
                     [
                         "queued",
                         "running",
-                        "searching",
-                        "grabbed",
-                        "downloading",
-                        "importing",
                         "failed",
                     ]
                 )
@@ -44,9 +40,6 @@ def _queue_snapshot() -> list[dict]:
                 "error_category": getattr(j, "error_category", "") or "",
                 "retries": j.retries,
                 "source": getattr(j, "source", None) or "streaming",
-                "release_title": getattr(j, "release_title", None) or "",
-                "client_id": getattr(j, "client_id", None),
-                "client_item_id": getattr(j, "client_item_id", None) or "",
             }
             for j in jobs
         ]

@@ -4,15 +4,12 @@ import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { playerApi } from '../player/playerApi'
 import { useToast } from '../Toast'
-import { AcquisitionPanels } from './AcquisitionPanels'
 
 type TabId =
   | 'sources'
   | 'library'
+  | 'musicbrainz'
   | 'downloads'
-  | 'indexers'
-  | 'clients'
-  | 'paths'
   | 'notifications'
   | 'media'
   | 'security'
@@ -22,10 +19,8 @@ type TabId =
 const TABS: { id: TabId; label: string }[] = [
   { id: 'sources', label: 'Sources' },
   { id: 'library', label: 'Library' },
+  { id: 'musicbrainz', label: 'MusicBrainz' },
   { id: 'downloads', label: 'Downloads' },
-  { id: 'indexers', label: 'Indexers' },
-  { id: 'clients', label: 'Download clients' },
-  { id: 'paths', label: 'Path mappings' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'media', label: 'Media servers' },
   { id: 'security', label: 'Security' },
@@ -56,6 +51,18 @@ function traefikLabels(domainRaw: string): string {
   ].join('\n')
 }
 
+function formatBytes(n: number): string {
+  if (!n || n <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = n
+  let i = 0
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024
+    i += 1
+  }
+  return i === 0 ? `${Math.round(value)} ${units[i]}` : `${value.toFixed(1)} ${units[i]}`
+}
+
 export function SettingsPage() {
   const qc = useQueryClient()
   const toast = useToast()
@@ -84,6 +91,7 @@ export function SettingsPage() {
   const [minTrackCount, setMinTrackCount] = useState(0)
   const [ignoreJunk, setIgnoreJunk] = useState(true)
   const [ignoreLive, setIgnoreLive] = useState(false)
+  const [officialOnly, setOfficialOnly] = useState(true)
   const [notifyUrl, setNotifyUrl] = useState('')
   const [notifyComplete, setNotifyComplete] = useState(true)
   const [notifyFailure, setNotifyFailure] = useState(true)
@@ -99,10 +107,6 @@ export function SettingsPage() {
   const [publicDomain, setPublicDomain] = useState('')
   const [playerEnabled, setPlayerEnabled] = useState(false)
   const [playerSharingEnabled, setPlayerSharingEnabled] = useState(true)
-  const [preferredMethod, setPreferredMethod] = useState('streaming')
-  const [importMechanism, setImportMechanism] = useState('hardlink')
-  const [scanInterval, setScanInterval] = useState(60)
-  const [removeCompleted, setRemoveCompleted] = useState(false)
   const [newPlayerUser, setNewPlayerUser] = useState('')
   const [newPlayerPass, setNewPlayerPass] = useState('')
   const [newPlayerDisplay, setNewPlayerDisplay] = useState('')
@@ -133,6 +137,7 @@ export function SettingsPage() {
     setMinTrackCount(data.min_track_count ?? 0)
     setIgnoreJunk(data.ignore_junk_titles ?? true)
     setIgnoreLive(data.ignore_live_releases ?? false)
+    setOfficialOnly(data.official_releases_only ?? true)
     setNotifyUrl(data.notify_webhook_url || '')
     setNotifyComplete(data.notify_on_complete ?? true)
     setNotifyFailure(data.notify_on_failure ?? true)
@@ -145,10 +150,6 @@ export function SettingsPage() {
     setPublicDomain(data.public_domain || '')
     setPlayerEnabled(data.player_enabled ?? false)
     setPlayerSharingEnabled(data.player_sharing_enabled ?? true)
-    setPreferredMethod(data.preferred_download_method || 'streaming')
-    setImportMechanism(data.import_mechanism || 'hardlink')
-    setScanInterval(data.completed_download_scan_interval_seconds ?? 60)
-    setRemoveCompleted(data.remove_completed_downloads ?? false)
     setQobuzEmail(data.qobuz_email || '')
     setQobuzUserId(data.qobuz_user_id || '')
     setQobuzAppId(data.qobuz_app_id || '')
@@ -177,6 +178,7 @@ export function SettingsPage() {
         min_track_count: minTrackCount,
         ignore_junk_titles: ignoreJunk,
         ignore_live_releases: ignoreLive,
+        official_releases_only: officialOnly,
         notify_webhook_url: notifyUrl.trim(),
         notify_on_complete: notifyComplete,
         notify_on_failure: notifyFailure,
@@ -189,10 +191,6 @@ export function SettingsPage() {
         public_domain: publicDomain.trim(),
         player_enabled: playerEnabled,
         player_sharing_enabled: playerSharingEnabled,
-        preferred_download_method: preferredMethod,
-        import_mechanism: importMechanism,
-        completed_download_scan_interval_seconds: scanInterval,
-        remove_completed_downloads: removeCompleted,
         qobuz_app_id: qobuzAppId,
       }
       if (arl.trim()) body.arl = arl.trim()
@@ -326,6 +324,57 @@ export function SettingsPage() {
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
+  const mbStatus = useQuery({
+    queryKey: ['mb-catalog-status'],
+    queryFn: api.mbCatalogStatus,
+    enabled: tab === 'musicbrainz',
+    refetchInterval: (q) => (q.state.data?.job?.state === 'running' ? 1000 : false),
+  })
+  const [mbVersionCheck, setMbVersionCheck] = useState<{
+    installed: string
+    latest: string
+    update_available: boolean
+  } | null>(null)
+  const mbCheckVersion = useMutation({
+    mutationFn: api.mbCatalogCheckVersion,
+    onSuccess: (res) => {
+      setMbVersionCheck(res)
+      toast.push(
+        res.update_available
+          ? `Update available: ${res.latest}`
+          : res.latest
+            ? 'Catalog is up to date'
+            : 'Checked latest dump version',
+        'ok',
+      )
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  const mbUpdate = useMutation({
+    mutationFn: api.mbCatalogUpdate,
+    onSuccess: () => {
+      setMbVersionCheck(null)
+      qc.invalidateQueries({ queryKey: ['mb-catalog-status'] })
+      toast.push('Catalog download started', 'ok')
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  const mbSetMode = useMutation({
+    mutationFn: (mode: string) => api.mbCatalogSetMode(mode),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mb-catalog-status'] })
+      qc.invalidateQueries({ queryKey: ['settings'] })
+      toast.push('MusicBrainz mode saved', 'ok')
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+
+  useEffect(() => {
+    if (mbStatus.data?.job?.state === 'done') {
+      qc.invalidateQueries({ queryKey: ['mb-catalog-status'] })
+    }
+  }, [mbStatus.data?.job?.state, qc])
+
   const playerUsers = useQuery({
     queryKey: ['player-users'],
     queryFn: playerApi.users,
@@ -370,7 +419,7 @@ export function SettingsPage() {
 
   function onSubmit(e: FormEvent) {
     e.preventDefault()
-    if (tab === 'tools') return
+    if (tab === 'tools' || tab === 'musicbrainz') return
     save.mutate()
   }
 
@@ -649,7 +698,19 @@ export function SettingsPage() {
                   <input type="checkbox" checked={ignoreLive} onChange={(e) => setIgnoreLive(e.target.checked)} />
                   Ignore live releases on import
                 </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={officialOnly}
+                    onChange={(e) => setOfficialOnly(e.target.checked)}
+                  />
+                  Only official releases (MusicBrainz)
+                </label>
               </div>
+              <span className="muted tiny">
+                When enabled, unmatched albums are skipped for review. Artists that share a
+                MusicBrainz ID are linked across Deezer / Tidal / Qobuz.
+              </span>
             </div>
             <div className="field">
               <label>Minimum tracks (albums/EPs; 0 = off)</label>
@@ -661,6 +722,139 @@ export function SettingsPage() {
                 onChange={(e) => setMinTrackCount(Number(e.target.value))}
               />
             </div>
+          </>
+        )}
+
+        {tab === 'musicbrainz' && (
+          <>
+            <p className="muted" style={{ marginTop: 0, maxWidth: 640 }}>
+              Download a slim local MusicBrainz catalog for artist resolve and release lists. Avoids
+              live API rate limits during artist refresh.
+            </p>
+            {mbStatus.isLoading && <p className="muted">Loading catalog status…</p>}
+            {mbStatus.error && (
+              <p className="error">{(mbStatus.error as Error).message}</p>
+            )}
+            {mbStatus.data && (
+              <>
+                <div className="field">
+                  <label>Status</label>
+                  <p style={{ margin: '0.25rem 0' }}>
+                    Catalog:{' '}
+                    <strong style={{ textTransform: 'capitalize' }}>{mbStatus.data.status}</strong>
+                    {mbStatus.data.dump_version
+                      ? ` · dump ${mbStatus.data.dump_version}`
+                      : ' · no dump installed'}
+                  </p>
+                  <p className="muted tiny" style={{ margin: 0 }}>
+                    {formatBytes(mbStatus.data.size_bytes)}
+                    {mbStatus.data.path ? ` · ${mbStatus.data.path}` : ''}
+                    {mbStatus.data.imported_at
+                      ? ` · imported ${new Date(mbStatus.data.imported_at).toLocaleString()}`
+                      : ''}
+                  </p>
+                </div>
+                <div className="field">
+                  <label>Lookup mode</label>
+                  <select
+                    value={mbStatus.data.mode || 'local'}
+                    onChange={(e) => mbSetMode.mutate(e.target.value)}
+                    disabled={mbSetMode.isPending}
+                  >
+                    <option value="local">Local only (recommended when Ready)</option>
+                    <option value="local_with_live_fallback">Local with live fallback</option>
+                    <option value="live">Live MusicBrainz API only</option>
+                  </select>
+                </div>
+                <div className="toolbar" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <button
+                    type="button"
+                    className="btn secondary"
+                    onClick={() => mbCheckVersion.mutate()}
+                    disabled={mbCheckVersion.isPending || mbStatus.data.job?.state === 'running'}
+                  >
+                    {mbCheckVersion.isPending ? 'Checking…' : 'Check for updates'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          mbStatus.data.ready
+                            ? 'Download the latest MusicBrainz dump and rebuild the local catalog? This can take a while (~7GB download).'
+                            : 'Download the MusicBrainz dump and build a local catalog? This can take a while (~7GB download).',
+                        )
+                      ) {
+                        mbUpdate.mutate()
+                      }
+                    }}
+                    disabled={mbUpdate.isPending || mbStatus.data.job?.state === 'running'}
+                  >
+                    {mbStatus.data.job?.state === 'running'
+                      ? 'Updating…'
+                      : mbStatus.data.ready
+                        ? 'Update'
+                        : 'Download & set up local database'}
+                  </button>
+                </div>
+                {mbVersionCheck && (
+                  <p className="muted" style={{ marginTop: '0.75rem' }}>
+                    Installed: {mbVersionCheck.installed || 'none'} · Latest available:{' '}
+                    {mbVersionCheck.latest || '—'}
+                    {mbVersionCheck.update_available
+                      ? ' · update available'
+                      : mbVersionCheck.latest && mbVersionCheck.installed === mbVersionCheck.latest
+                        ? ' · up to date'
+                        : ''}
+                  </p>
+                )}
+                {(mbStatus.data.job?.state === 'running' ||
+                  mbStatus.data.job?.state === 'error' ||
+                  mbStatus.data.job?.state === 'done') && (
+                  <div className="field" style={{ marginTop: '1rem' }}>
+                    <label>
+                      {mbStatus.data.job.phase
+                        ? mbStatus.data.job.phase.charAt(0).toUpperCase() +
+                          mbStatus.data.job.phase.slice(1)
+                        : 'Job'}
+                    </label>
+                    <p className="muted tiny" style={{ margin: '0.25rem 0' }}>
+                      {mbStatus.data.job.message || '—'}
+                    </p>
+                    <div className="progress">
+                      <span
+                        style={{
+                          width: `${Math.min(100, Math.max(2, mbStatus.data.job.progress_pct || 0))}%`,
+                        }}
+                      />
+                    </div>
+                    <p className="muted tiny" style={{ marginTop: '0.35rem' }}>
+                      {(mbStatus.data.job.progress_pct || 0).toFixed(0)}%
+                      {mbStatus.data.job.bytes_total > 0
+                        ? ` · ${formatBytes(mbStatus.data.job.bytes_done)} / ${formatBytes(mbStatus.data.job.bytes_total)}`
+                        : ''}
+                    </p>
+                    {mbStatus.data.job.error && (
+                      <p className="error" style={{ marginTop: '0.5rem' }}>
+                        {mbStatus.data.job.error}
+                      </p>
+                    )}
+                    {mbStatus.data.job.state === 'error' && (
+                      <button
+                        type="button"
+                        className="btn secondary"
+                        style={{ marginTop: '0.5rem' }}
+                        onClick={() => mbUpdate.mutate()}
+                        disabled={mbUpdate.isPending}
+                      >
+                        Retry
+                      </button>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
           </>
         )}
 
@@ -706,58 +900,8 @@ export function SettingsPage() {
                 onChange={(e) => setMaxRetries(Number(e.target.value))}
               />
             </div>
-            <div className="field">
-              <label>Preferred download method</label>
-              <select value={preferredMethod} onChange={(e) => setPreferredMethod(e.target.value)}>
-                <option value="streaming">Streaming provider (Deezer / Tidal / Qobuz)</option>
-                <option value="indexer">
-                  Indexers — manual release search (never auto-grab)
-                </option>
-                <option value="streaming_then_indexer">
-                  Streaming first; on failure, use Search indexers (manual)
-                </option>
-              </select>
-              <span className="muted tiny">
-                Indexer downloads always require picking a release in Search indexers. Monitor and
-                Download buttons never silently send torrents/NZBs to your client.
-              </span>
-            </div>
-            <div className="field">
-              <label>Import mechanism (indexer downloads)</label>
-              <select value={importMechanism} onChange={(e) => setImportMechanism(e.target.value)}>
-                <option value="hardlink">Hardlink (best for seeding)</option>
-                <option value="copy">Copy</option>
-                <option value="move">Move (breaks torrents)</option>
-              </select>
-            </div>
-            <div className="field">
-              <label>Completed download scan interval (seconds)</label>
-              <input
-                type="number"
-                min={15}
-                max={3600}
-                value={scanInterval}
-                onChange={(e) => setScanInterval(Number(e.target.value))}
-              />
-            </div>
-            <label className="checks">
-              <input
-                type="checkbox"
-                checked={removeCompleted}
-                onChange={(e) => setRemoveCompleted(e.target.checked)}
-              />
-              Remove from download client after import
-            </label>
           </>
         )}
-
-        {tab === 'indexers' && (
-          <AcquisitionPanels panel="indexers" onGoTo={(t) => setTab(t)} />
-        )}
-        {tab === 'clients' && (
-          <AcquisitionPanels panel="clients" onGoTo={(t) => setTab(t)} />
-        )}
-        {tab === 'paths' && <AcquisitionPanels panel="paths" onGoTo={(t) => setTab(t)} />}
 
         {tab === 'notifications' && (
           <>
@@ -1197,7 +1341,7 @@ export function SettingsPage() {
           </>
         )}
 
-        {tab !== 'tools' && (
+        {tab !== 'tools' && tab !== 'musicbrainz' && (
           <div className="toolbar">
             <button className="btn" type="submit" disabled={save.isPending}>
               Save settings

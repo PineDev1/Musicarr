@@ -39,6 +39,8 @@ export type Settings = {
   min_track_count: number
   ignore_junk_titles: boolean
   ignore_live_releases: boolean
+  official_releases_only: boolean
+  mb_catalog_mode: string
   notify_webhook_url: string
   notify_on_complete: boolean
   notify_on_failure: boolean
@@ -53,10 +55,6 @@ export type Settings = {
   public_domain: string
   player_enabled: boolean
   player_sharing_enabled: boolean
-  preferred_download_method: string
-  completed_download_scan_interval_seconds: number
-  import_mechanism: string
-  remove_completed_downloads: boolean
   download_concurrency: number
   max_retries: number
   provider_ok: boolean | null
@@ -111,12 +109,22 @@ export type Album = {
   track_count: number
   monitored: boolean
   status: string
+  status_reason?: string
+  musicbrainz_id?: string | null
+  artist_credit?: string
   path: string | null
   quality?: string
   upgrade_available?: boolean
   artist_name?: string | null
   sources?: string[]
   tracks: Track[]
+}
+
+export type RelatedArtist = {
+  id: number | null
+  name: string
+  musicbrainz_id?: string | null
+  provider?: string | null
 }
 
 export type Artist = {
@@ -129,13 +137,16 @@ export type Artist = {
   monitored: boolean
   monitor_mode?: string
   include_singles?: boolean | null
+  musicbrainz_id?: string | null
   added_at: string
   last_synced_at: string | null
   album_count: number
   downloaded_count: number
   wanted_count: number
+  missing_count?: number
   providers?: string[]
   linked_artist_ids?: number[]
+  related_artists?: RelatedArtist[]
   name_collision?: boolean
   albums: Album[]
 }
@@ -179,75 +190,13 @@ export type DownloadJob = {
   started_at: string | null
   finished_at: string | null
   source?: string
-  indexer_id?: number | null
-  client_id?: number | null
-  release_title?: string
-  client_item_id?: string
-  output_path?: string
 }
 
-export type Indexer = {
-  id: number
-  name: string
-  protocol: string
-  implementation: string
-  base_url: string
-  api_key_set: boolean
-  categories: number[]
-  enabled: boolean
-  priority: number
-}
 
-export type DownloadClientRow = {
-  id: number
-  name: string
-  protocol: string
-  implementation: string
-  host: string
-  port: number
-  use_ssl: boolean
-  verify_ssl?: boolean
-  username: string
-  password_set: boolean
-  api_key_set: boolean
-  category: string
-  enabled: boolean
-  priority: number
-  base_url?: string
-}
 
-export type ReleaseCandidate = {
-  title: string
-  size: number
-  seeders: number
-  protocol: string
-  download_url: string
-  magnet_url: string
-  grab_url: string
-  indexer_id: number
-  indexer_name: string
-  score: number
-}
 
-export type AcquisitionStatus = {
-  indexers_enabled: number
-  torrent_client: boolean
-  usenet_client: boolean
-  path_mappings: number
-  messages: string[]
-}
 
-export type PathMapping = {
-  id: number
-  host: string
-  remote_path: string
-  local_path: string
-}
 
-export type TestResult = {
-  ok: boolean
-  message: string
-}
 
 export type HistoryEvent = {
   id: number
@@ -319,10 +268,20 @@ export const api = {
     request<ArtistSearchResult[]>(`/artists/search?q=${encodeURIComponent(q)}`),
   artists: () => request<Artist[]>('/artists'),
   artist: (id: number) => request<Artist>(`/artists/${id}`),
-  addArtist: (provider_id: string, provider?: string) =>
+  addArtist: (
+    provider_id: string,
+    provider?: string,
+    opts?: { include_singles?: boolean | null; download_missing?: boolean },
+  ) =>
     request<Artist>('/artists', {
       method: 'POST',
-      body: JSON.stringify({ provider_id, provider, monitored: true, download_missing: true }),
+      body: JSON.stringify({
+        provider_id,
+        provider,
+        monitored: true,
+        download_missing: opts?.download_missing ?? true,
+        include_singles: opts?.include_singles ?? null,
+      }),
     }),
   deleteArtist: (id: number) =>
     request<{ ok: boolean }>(`/artists/${id}`, { method: 'DELETE' }),
@@ -330,20 +289,14 @@ export const api = {
     request<Artist>(`/artists/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   refreshArtist: (id: number) =>
     request<Artist>(`/artists/${id}/refresh`, { method: 'POST' }),
-  downloadMissing: (id: number, method?: string) =>
-    request<{ queued: number }>(
-      `/artists/${id}/download-missing${method ? `?method=${encodeURIComponent(method)}` : ''}`,
-      { method: 'POST' },
-    ),
+  downloadMissing: (id: number) =>
+    request<{ queued: number }>(`/artists/${id}/download-missing`, { method: 'POST' }),
   wanted: (albumType?: string) =>
     request<Album[]>(
       albumType ? `/albums/wanted?album_type=${encodeURIComponent(albumType)}` : '/albums/wanted',
     ),
-  downloadAllWanted: (method?: string) =>
-    request<{ queued: number }>(
-      `/albums/wanted/download-all${method ? `?method=${encodeURIComponent(method)}` : ''}`,
-      { method: 'POST' },
-    ),
+  downloadAllWanted: () =>
+    request<{ queued: number }>('/albums/wanted/download-all', { method: 'POST' }),
   skipAllWanted: () =>
     request<{ skipped: number }>('/albums/wanted/skip-all', { method: 'POST' }),
   skipWantedSingles: () =>
@@ -358,14 +311,11 @@ export const api = {
   album: (id: number) => request<Album>(`/albums/${id}`),
   patchAlbum: (id: number, body: Record<string, unknown>) =>
     request<Album>(`/albums/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  downloadAlbum: (id: number, upgrade = false, method?: string) => {
-    const params = new URLSearchParams({ upgrade: String(upgrade) })
-    if (method) params.set('method', method)
-    return request<{ queued: boolean; job_id: number | null; source?: string | null }>(
-      `/albums/${id}/download?${params}`,
+  downloadAlbum: (id: number, upgrade = false) =>
+    request<{ queued: boolean; job_id: number | null; source?: string | null }>(
+      `/albums/${id}/download?upgrade=${upgrade}`,
       { method: 'POST' },
-    )
-  },
+    ),
   deleteAlbum: (id: number, deleteFiles = false) =>
     request<{ ok: boolean; deleted_files: boolean }>(
       `/albums/${id}?delete_files=${deleteFiles}`,
@@ -419,62 +369,54 @@ export const api = {
     request<{ artists_checked: number; new_albums: number }>('/monitor/run', {
       method: 'POST',
     }),
-  indexers: () => request<Indexer[]>('/acquisition/indexers'),
-  createIndexer: (body: Record<string, unknown>) =>
-    request<Indexer>('/acquisition/indexers', { method: 'POST', body: JSON.stringify(body) }),
-  updateIndexer: (id: number, body: Record<string, unknown>) =>
-    request<Indexer>(`/acquisition/indexers/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
-  deleteIndexer: (id: number) =>
-    request<{ ok: boolean }>(`/acquisition/indexers/${id}`, { method: 'DELETE' }),
-  testIndexer: (id: number) =>
-    request<TestResult>(`/acquisition/indexers/${id}/test`, { method: 'POST' }),
-  downloadClients: () => request<DownloadClientRow[]>('/acquisition/download-clients'),
-  createDownloadClient: (body: Record<string, unknown>) =>
-    request<DownloadClientRow>('/acquisition/download-clients', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-  updateDownloadClient: (id: number, body: Record<string, unknown>) =>
-    request<DownloadClientRow>(`/acquisition/download-clients/${id}`, {
+  mbCatalogStatus: () =>
+    request<{
+      status: string
+      ready: boolean
+      path: string
+      size_bytes: number
+      dump_version: string
+      imported_at: string
+      mode: string
+      max_bytes: number
+      job: MbCatalogJob
+    }>('/musicbrainz-catalog/status'),
+  mbCatalogCheckVersion: () =>
+    request<{
+      installed: string
+      latest: string
+      update_available: boolean
+      ready: boolean
+    }>('/musicbrainz-catalog/check-version', { method: 'POST' }),
+  mbCatalogUpdate: () =>
+    request<MbCatalogJob>('/musicbrainz-catalog/update', { method: 'POST' }),
+  mbCatalogJob: () => request<MbCatalogJob>('/musicbrainz-catalog/job'),
+  mbCatalogSetMode: (mode: string) =>
+    request<{
+      status: string
+      ready: boolean
+      path: string
+      size_bytes: number
+      dump_version: string
+      imported_at: string
+      mode: string
+      max_bytes: number
+      job: MbCatalogJob
+    }>('/musicbrainz-catalog/mode', {
       method: 'PUT',
-      body: JSON.stringify(body),
+      body: JSON.stringify({ mode }),
     }),
-  deleteDownloadClient: (id: number) =>
-    request<{ ok: boolean }>(`/acquisition/download-clients/${id}`, { method: 'DELETE' }),
-  testDownloadClient: (id: number) =>
-    request<TestResult>(`/acquisition/download-clients/${id}/test`, { method: 'POST' }),
-  testDownloadClientDraft: (body: Record<string, unknown>) =>
-    request<TestResult>('/acquisition/download-clients/test-draft', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-  acquisitionStatus: () => request<AcquisitionStatus>('/acquisition/status'),
-  pathMappings: () => request<PathMapping[]>('/acquisition/path-mappings'),
-  createPathMapping: (body: Record<string, unknown>) =>
-    request<PathMapping>('/acquisition/path-mappings', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-  updatePathMapping: (id: number, body: Record<string, unknown>) =>
-    request<PathMapping>(`/acquisition/path-mappings/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(body),
-    }),
-  deletePathMapping: (id: number) =>
-    request<{ ok: boolean }>(`/acquisition/path-mappings/${id}`, { method: 'DELETE' }),
-  searchReleases: (albumId: number) =>
-    request<ReleaseCandidate[]>(`/acquisition/releases/search?album_id=${albumId}`),
-  grabRelease: (body: {
-    album_id: number
-    title?: string
-    grab_url: string
-    protocol: string
-    indexer_id?: number | null
-    size?: number
-    seeders?: number
-  }) =>
-    request<{ ok: boolean; job_id: number; client: string }>(
-      '/acquisition/releases/grab',
-      { method: 'POST', body: JSON.stringify(body) },
-    ),
+}
+
+export type MbCatalogJob = {
+  state: string
+  phase: string
+  progress_pct: number
+  bytes_done: number
+  bytes_total: number
+  message: string
+  error: string
+  dump_version: string
+  started_at: string
+  finished_at: string
 }

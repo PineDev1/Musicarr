@@ -2,21 +2,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { api, type DownloadJob } from '../api'
 import { useToast } from '../Toast'
-import { ReleaseSearchModal } from './ReleaseSearchModal'
 
 const CATEGORY_LABELS: Record<string, string> = {
   auth: 'Auth / login',
   rematch: 'No match on active source',
   unavailable: 'Unavailable',
   network: 'Network',
-  config: 'Configuration',
   other: 'Other',
   '': 'Uncategorized',
-}
-
-const SOURCE_LABELS: Record<string, string> = {
-  streaming: 'Streaming',
-  indexer: 'Indexer',
 }
 
 export function QueuePage() {
@@ -27,17 +20,7 @@ export function QueuePage() {
     queryFn: () => api.queue(true),
     refetchInterval: 2000,
   })
-  const clients = useQuery({
-    queryKey: ['download-clients'],
-    queryFn: api.downloadClients,
-  })
   const [live, setLive] = useState<DownloadJob[] | null>(null)
-  const [searchAlbum, setSearchAlbum] = useState<{ id: number; label: string } | null>(null)
-
-  const clientName = (clientId?: number | null) => {
-    if (!clientId) return ''
-    return clients.data?.find((c) => c.id === clientId)?.name || `Client #${clientId}`
-  }
 
   useEffect(() => {
     const es = new EventSource('/api/events/queue')
@@ -54,8 +37,6 @@ export function QueuePage() {
           error_category?: string
           retries: number
           source?: string
-          release_title?: string
-          client_id?: number | null
         }>
         setLive(
           snap.map((j) => ({
@@ -71,8 +52,6 @@ export function QueuePage() {
             error_category: j.error_category || '',
             retries: j.retries,
             source: j.source || 'streaming',
-            release_title: j.release_title || '',
-            client_id: j.client_id ?? null,
             created_at: '',
             started_at: null,
             finished_at: null,
@@ -121,8 +100,6 @@ export function QueuePage() {
           error: liveJob.error,
           error_category: liveJob.error_category || j.error_category,
           source: liveJob.source || j.source,
-          release_title: liveJob.release_title || j.release_title,
-          client_id: liveJob.client_id ?? j.client_id,
         }
       : j
   })
@@ -192,113 +169,51 @@ export function QueuePage() {
           <thead>
             <tr>
               <th>Album</th>
-              <th>Source</th>
               <th>State</th>
               <th>Progress</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {merged.map((job) => {
-              const isIndexer = (job.source || '') === 'indexer'
-              const client = clientName(job.client_id)
-              return (
-                <tr key={job.id}>
-                  <td>
-                    <strong>
-                      {job.artist_name} – {job.album_title}
-                    </strong>
-                    {job.release_title && (
-                      <div className="muted tiny" title={job.release_title}>
-                        {job.release_title}
-                      </div>
-                    )}
-                    {client && (
-                      <div className="muted tiny">via {client}</div>
-                    )}
-                    {job.error && <div className="error">{job.error}</div>}
-                    {job.state === 'failed' && job.error_category && (
-                      <div className="muted">
-                        Category: {CATEGORY_LABELS[job.error_category] || job.error_category}
-                      </div>
-                    )}
-                    {job.retries > 0 && <div className="muted">Retries: {job.retries}</div>}
-                  </td>
-                  <td>
-                    <span className="badge queued">
-                      {SOURCE_LABELS[job.source || 'streaming'] || job.source || 'Streaming'}
-                    </span>
-                  </td>
-                  <td>
-                    <span className={`badge ${job.state}`}>{job.state}</span>
-                  </td>
-                  <td style={{ minWidth: 140 }}>
-                    {job.progress.toFixed(0)}%
-                    <div className="progress">
-                      <span style={{ width: `${Math.min(100, job.progress)}%` }} />
+            {merged.map((job) => (
+              <tr key={job.id}>
+                <td>
+                  <strong>
+                    {job.artist_name} – {job.album_title}
+                  </strong>
+                  {job.error && <div className="error">{job.error}</div>}
+                  {job.state === 'failed' && job.error_category && (
+                    <div className="muted">
+                      Category: {CATEGORY_LABELS[job.error_category] || job.error_category}
                     </div>
-                  </td>
-                  <td className="row-actions">
-                    {(job.state === 'queued' ||
-                      job.state === 'running' ||
-                      job.state === 'searching' ||
-                      job.state === 'grabbed' ||
-                      job.state === 'downloading' ||
-                      job.state === 'importing') && (
-                      <button className="btn ghost" onClick={() => cancel.mutate(job.id)}>
-                        Cancel
-                      </button>
-                    )}
-                    {job.state === 'failed' && !isIndexer && (
-                      <button className="btn secondary" onClick={() => retry.mutate(job.id)}>
-                        Retry
-                      </button>
-                    )}
-                    {job.state === 'failed' && isIndexer && job.album_id && (
-                      <button
-                        className="btn secondary"
-                        type="button"
-                        onClick={() =>
-                          setSearchAlbum({
-                            id: job.album_id!,
-                            label: `${job.artist_name} – ${job.album_title}`,
-                          })
-                        }
-                      >
-                        Search again
-                      </button>
-                    )}
-                    {job.state === 'failed' &&
-                      !isIndexer &&
-                      (job.error || '').includes('Search indexers') &&
-                      job.album_id && (
-                        <button
-                          className="btn ghost"
-                          type="button"
-                          onClick={() =>
-                            setSearchAlbum({
-                              id: job.album_id!,
-                              label: `${job.artist_name} – ${job.album_title}`,
-                            })
-                          }
-                        >
-                          Search indexers
-                        </button>
-                      )}
-                  </td>
-                </tr>
-              )
-            })}
+                  )}
+                  {job.retries > 0 && <div className="muted">Retries: {job.retries}</div>}
+                </td>
+                <td>
+                  <span className={`badge ${job.state}`}>{job.state}</span>
+                </td>
+                <td style={{ minWidth: 140 }}>
+                  {job.progress.toFixed(0)}%
+                  <div className="progress">
+                    <span style={{ width: `${Math.min(100, job.progress)}%` }} />
+                  </div>
+                </td>
+                <td className="row-actions">
+                  {(job.state === 'queued' || job.state === 'running') && (
+                    <button className="btn ghost" onClick={() => cancel.mutate(job.id)}>
+                      Cancel
+                    </button>
+                  )}
+                  {job.state === 'failed' && (
+                    <button className="btn secondary" onClick={() => retry.mutate(job.id)}>
+                      Retry
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
-      )}
-
-      {searchAlbum && (
-        <ReleaseSearchModal
-          albumId={searchAlbum.id}
-          albumLabel={searchAlbum.label}
-          onClose={() => setSearchAlbum(null)}
-        />
       )}
     </div>
   )

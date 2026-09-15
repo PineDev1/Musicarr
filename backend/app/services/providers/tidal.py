@@ -127,6 +127,45 @@ class TidalProvider:
             )
         return out
 
+    def search_albums(self, query: str, limit: int = 25) -> list[ProviderAlbum]:
+        session = self._load_session()
+        results = session.search(query, models=[tidalapi.album.Album], limit=limit)
+        albums = []
+        if isinstance(results, dict):
+            albums = results.get("albums") or results.get(tidalapi.album.Album) or []
+        out: list[ProviderAlbum] = []
+        for alb in list(albums)[:limit]:
+            album_type = "album"
+            try:
+                atype = str(getattr(alb, "type", "") or "").lower()
+                if "ep" in atype:
+                    album_type = "ep"
+                elif "single" in atype:
+                    album_type = "single"
+                elif "compil" in atype:
+                    album_type = "compilation"
+            except Exception:  # noqa: BLE001
+                pass
+            release = None
+            if getattr(alb, "release_date", None):
+                release = alb.release_date.isoformat()[:10]
+            cover = None
+            try:
+                cover = alb.image(320)
+            except Exception:  # noqa: BLE001
+                pass
+            out.append(
+                ProviderAlbum(
+                    provider_id=str(alb.id),
+                    title=getattr(alb, "name", None) or "Unknown Album",
+                    album_type=album_type,
+                    release_date=release,
+                    cover_url=cover,
+                    track_count=int(getattr(alb, "num_tracks", 0) or 0),
+                )
+            )
+        return out
+
     def get_artist(self, provider_id: str) -> ProviderArtist:
         session = self._load_session()
         a = session.artist(int(provider_id))

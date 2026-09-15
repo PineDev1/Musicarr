@@ -2,12 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models import Artist
 from app.models.schemas import (
     ArtistCreate,
     ArtistOut,
     ArtistPatch,
     ArtistSearchResult,
-    DownloadMethod,
 )
 from app.services.artists import (
     add_artist,
@@ -70,6 +70,9 @@ def _album_out(album, sources: list[str] | None = None, include_tracks: bool = T
         track_count=album.track_count,
         monitored=album.monitored,
         status=album.status,
+        status_reason=getattr(album, "status_reason", "") or "",
+        musicbrainz_id=getattr(album, "musicbrainz_id", None),
+        artist_credit=getattr(album, "artist_credit", "") or "",
         path=album.path,
         quality=quality,
         upgrade_available=upgradable,
@@ -90,7 +93,7 @@ def _artist_group_out(
     if not artists:
         raise ValueError("empty artist group")
     primary = min(artists, key=lambda a: a.id)
-    total, downloaded, wanted = grouped_artist_stats(artists, active_provider=active)
+    total, downloaded, wanted, missing = grouped_artist_stats(artists, active_provider=active)
     providers = sorted({(a.provider or "deezer").lower() for a in artists})
     linked_ids = [a.id for a in sorted(artists, key=lambda a: a.id)]
     image = next((a.image_url for a in artists if a.image_url), None)
@@ -112,6 +115,37 @@ def _artist_group_out(
     collided = False
     if collision_ids is not None:
         collided = any(a.id in collision_ids for a in artists)
+    related = []
+    import json
+
+    from app.models.schemas import RelatedArtistOut
+
+    for a in artists:
+        raw = getattr(a, "related_artists_json", None) or "[]"
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        except json.JSONDecodeError:
+            payload = []
+        for item in payload:
+            if not isinstance(item, dict) or not item.get("name"):
+                continue
+            related.append(
+                RelatedArtistOut(
+                    id=item.get("id"),
+                    name=item["name"],
+                    musicbrainz_id=item.get("musicbrainz_id"),
+                    provider=item.get("provider"),
+                )
+            )
+    # de-dupe by name
+    seen_rel: set[str] = set()
+    related_unique: list = []
+    for r in related:
+        key = r.name.strip().lower()
+        if key in seen_rel:
+            continue
+        seen_rel.add(key)
+        related_unique.append(r)
     return ArtistOut(
         id=primary.id,
         provider=primary.provider,
@@ -122,13 +156,23 @@ def _artist_group_out(
         monitored=any(a.monitored for a in artists),
         monitor_mode=getattr(primary, "monitor_mode", None) or "all",
         include_singles=getattr(primary, "include_singles", None),
+        musicbrainz_id=next(
+            (
+                (getattr(a, "musicbrainz_id", None) or "").strip()
+                for a in artists
+                if (getattr(a, "musicbrainz_id", None) or "").strip()
+            ),
+            None,
+        ),
         added_at=min(a.added_at for a in artists),
         last_synced_at=max((a.last_synced_at for a in artists if a.last_synced_at), default=None),
         album_count=total,
         downloaded_count=downloaded,
         wanted_count=wanted,
+        missing_count=missing,
         providers=providers,
         linked_artist_ids=linked_ids,
+        related_artists=related_unique,
         name_collision=collided,
         albums=albums,
     )
@@ -141,8 +185,22 @@ def search_artists(q: str = Query(..., min_length=1), limit: int = 25, db: Sessi
         results = provider.search_artists(q, limit=limit)
     except ProviderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    from app.services import musicbrainz
+
+    # Prefer MusicBrainz catalog counts (local when Ready) over provider album totals.
+    mb_counts: dict[str, int | None] = {}
     out = []
     for r in results:
+        name_key = (r.name or "").strip().lower()
+        mb_count: int | None = None
+        if name_key:
+            if name_key not in mb_counts:
+                mbid = musicbrainz.resolve_artist(r.name)
+                mb_counts[name_key] = (
+                    musicbrainz.count_release_groups(mbid) if mbid else None
+                )
+            mb_count = mb_counts[name_key]
         out.append(
             ArtistSearchResult(
                 provider=provider.name,
@@ -150,7 +208,7 @@ def search_artists(q: str = Query(..., min_length=1), limit: int = 25, db: Sessi
                 deezer_id=int(r.provider_id) if provider.name == "deezer" and r.provider_id.isdigit() else None,
                 name=r.name,
                 image_url=r.image_url,
-                nb_album=r.nb_album,
+                nb_album=mb_count if mb_count is not None else r.nb_album,
             )
         )
     return out
@@ -192,11 +250,17 @@ def create_artist(payload: ArtistCreate, db: Session = Depends(get_db)):
             monitored=payload.monitored,
             download_missing=payload.download_missing,
             provider_name=payload.provider or settings.active_provider,
+            include_singles=payload.include_singles,
         )
     except ProviderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to add artist: {exc}") from exc
     detail = get_artist_detail(db, artist.id)
-    linked = find_linked_artists(db, detail or artist)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Artist was deleted during sync")
+    linked = find_linked_artists(db, detail)
     return _artist_group_out(
         linked,
         include_albums=True,
@@ -232,6 +296,7 @@ def patch_artist(artist_id: int, payload: ArtistPatch, db: Session = Depends(get
         raise HTTPException(status_code=404, detail="Artist not found")
     linked = find_linked_artists(db, artist)
     data = payload.model_dump(exclude_unset=True)
+    singles_changed = "include_singles" in data
     for row in linked:
         for key, value in data.items():
             setattr(row, key, value)
@@ -243,6 +308,21 @@ def patch_artist(artist_id: int, payload: ArtistPatch, db: Session = Depends(get
         if "monitor_mode" in data and data["monitor_mode"] in {"all", "new"}:
             row.monitored = True
     db.commit()
+
+    # Lidarr-style: changing singles preference rescans MusicBrainz and queues new wanted
+    if singles_changed:
+        for row in linked:
+            try:
+                if row.provider == "local":
+                    continue
+                sync_artist_albums(db, row)
+                if row.monitored and (getattr(row, "monitor_mode", "all") or "all") != "none":
+                    download_queue.enqueue_artist_missing(db, row.id)
+            except ProviderError:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                db.rollback()
+
     settings = ensure_settings(db)
     active = (settings.active_provider or "deezer").lower()
     artist = get_artist_detail(db, artist_id)
@@ -272,17 +352,28 @@ def refresh_artist(artist_id: int, db: Session = Depends(get_db)):
     linked = find_linked_artists(db, artist)
     errors: list[str] = []
     for row in linked:
+        provider_name = getattr(row, "provider", None) or "?"
+        artist_row_id = getattr(row, "id", None)
         try:
-            if row.provider == "local":
+            if provider_name == "local":
                 continue
-            provider = get_provider(db, row.provider)
+            provider = get_provider(db, provider_name)
             ok, err = provider.validate_session()
             if not ok:
-                errors.append(f"{row.provider}: {err or 'not connected'}")
+                errors.append(f"{provider_name}: {err or 'not connected'}")
                 continue
-            sync_artist_albums(db, row)
+            # Re-load in case the artist was deleted mid-request
+            fresh = db.get(Artist, artist_row_id) if artist_row_id else None
+            if not fresh:
+                errors.append(f"{provider_name}: artist was deleted")
+                continue
+            sync_artist_albums(db, fresh)
         except ProviderError as exc:
-            errors.append(f"{row.provider}: {exc}")
+            db.rollback()
+            errors.append(f"{provider_name}: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            errors.append(f"{provider_name}: {exc}")
     artist = get_artist_detail(db, artist_id)
     if not artist:
         raise HTTPException(status_code=404, detail="Artist not found")
@@ -305,8 +396,7 @@ def refresh_artist(artist_id: int, db: Session = Depends(get_db)):
 @router.post("/{artist_id}/download-missing")
 def download_missing(
     artist_id: int,
-    db: Session = Depends(get_db),
-    method: DownloadMethod | None = Query(default=None),
+    db: Session = Depends(get_db)
 ):
     artist = get_artist_detail(db, artist_id)
     if not artist:
@@ -317,6 +407,6 @@ def download_missing(
     for row in linked:
         if (row.provider or "").lower() != active:
             continue
-        jobs = download_queue.enqueue_artist_missing(db, row.id, method=method)
+        jobs = download_queue.enqueue_artist_missing(db, row.id)
         queued += len(jobs)
     return {"queued": queued}

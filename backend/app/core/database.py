@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.core.config import settings
@@ -19,6 +19,19 @@ engine = create_engine(
     settings.db_url,
     connect_args={"check_same_thread": False},
 )
+
+
+@event.listens_for(engine, "connect")
+def _sqlite_on_connect(dbapi_conn, _connection_record) -> None:
+    """WAL + busy timeout for request threads + download worker + monitor."""
+    if settings.db_url.startswith("sqlite"):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
+
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -59,6 +72,8 @@ def migrate_schema() -> None:
         "min_track_count": "INTEGER DEFAULT 0",
         "ignore_junk_titles": "BOOLEAN DEFAULT 1",
         "ignore_live_releases": "BOOLEAN DEFAULT 0",
+        "official_releases_only": "BOOLEAN DEFAULT 1",
+        "mb_catalog_mode": "VARCHAR(32) DEFAULT 'local'",
         "notify_webhook_url": "TEXT DEFAULT ''",
         "notify_on_complete": "BOOLEAN DEFAULT 1",
         "notify_on_failure": "BOOLEAN DEFAULT 1",
@@ -92,10 +107,23 @@ def migrate_schema() -> None:
             _add_column("artists", "include_singles BOOLEAN")
         if "link_group_id" not in artist_cols:
             _add_column("artists", "link_group_id VARCHAR(64)")
+        if "musicbrainz_id" not in artist_cols:
+            _add_column("artists", "musicbrainz_id VARCHAR(64)")
+        if "related_artists_json" not in artist_cols:
+            _add_column("artists", "related_artists_json TEXT DEFAULT '[]'")
 
     album_cols = _existing_columns("albums")
-    if album_cols and "quality" not in album_cols:
-        _add_column("albums", "quality VARCHAR(16) DEFAULT ''")
+    if album_cols:
+        if "quality" not in album_cols:
+            _add_column("albums", "quality VARCHAR(16) DEFAULT ''")
+        if "musicbrainz_id" not in album_cols:
+            _add_column("albums", "musicbrainz_id VARCHAR(64)")
+        if "status_reason" not in album_cols:
+            _add_column("albums", "status_reason TEXT DEFAULT ''")
+        if "collaborators_json" not in album_cols:
+            _add_column("albums", "collaborators_json TEXT DEFAULT '[]'")
+        if "artist_credit" not in album_cols:
+            _add_column("albums", "artist_credit VARCHAR(1024) DEFAULT ''")
 
     for table, id_col in (
         ("artists", "deezer_id"),
@@ -168,9 +196,10 @@ def migrate_schema() -> None:
     if pl_cols and "is_smart" not in pl_cols:
         _add_column("player_playlists", "is_smart BOOLEAN DEFAULT 0")
 
-    client_cols = _existing_columns("download_clients")
-    if client_cols and "verify_ssl" not in client_cols:
-        _add_column("download_clients", "verify_ssl BOOLEAN DEFAULT 1")
+    # Drop retired indexer / download-client tables (streaming-only).
+    with engine.begin() as conn:
+        for table in ("indexers", "download_clients", "remote_path_mappings"):
+            conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
 
 
 def init_db() -> None:

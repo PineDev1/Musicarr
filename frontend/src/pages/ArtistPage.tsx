@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, type DownloadJob } from '../api'
 import { useToast } from '../Toast'
-import { ReleaseSearchModal } from './ReleaseSearchModal'
 
 type LiveJob = {
   id: number
@@ -25,18 +24,11 @@ export function ArtistPage() {
   const qc = useQueryClient()
   const toast = useToast()
   const [liveJobs, setLiveJobs] = useState<LiveJob[]>([])
-  const [searchAlbum, setSearchAlbum] = useState<{ id: number; label: string } | null>(null)
-
   const { data, isLoading, error } = useQuery({
     queryKey: ['artist', artistId],
     queryFn: () => api.artist(artistId),
     enabled: Number.isFinite(artistId),
   })
-  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.settings(false) })
-  const preferred = settings.data?.preferred_download_method || 'streaming'
-  const streamingMethod =
-    preferred === 'indexer' ? 'streaming' : preferred.startsWith('streaming') ? preferred : 'streaming'
-
   const { data: queueJobs } = useQuery({
     queryKey: ['queue'],
     queryFn: () => api.queue(true),
@@ -126,20 +118,10 @@ export function ArtistPage() {
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const downloadMissing = useMutation({
-    mutationFn: () =>
-      preferred === 'indexer'
-        ? Promise.resolve({ queued: 0 })
-        : api.downloadMissing(artistId, streamingMethod),
+    mutationFn: () => api.downloadMissing(artistId),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['queue'] })
       qc.invalidateQueries({ queryKey: ['health'] })
-      if (preferred === 'indexer') {
-        toast.push(
-          'Preferred method is manual release search — use Search indexers on each album',
-          'ok',
-        )
-        return
-      }
       toast.push(`Queued ${res.queued} album(s)`, 'ok')
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
@@ -169,16 +151,16 @@ export function ArtistPage() {
   })
   const downloadAlbum = useMutation({
     mutationFn: ({ albumId, upgrade }: { albumId: number; upgrade?: boolean }) =>
-      api.downloadAlbum(albumId, upgrade, streamingMethod),
+      api.downloadAlbum(albumId, upgrade),
     onSuccess: (res) => {
       if (!res.queued) {
-        toast.push('Could not queue streaming download', 'error')
+        toast.push('Could not queue download', 'error')
         return
       }
       qc.invalidateQueries({ queryKey: ['queue'] })
       qc.invalidateQueries({ queryKey: ['health'] })
       qc.invalidateQueries({ queryKey: ['upgradable'] })
-      toast.push('Queued streaming download', 'ok')
+      toast.push('Queued download', 'ok')
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
@@ -193,6 +175,13 @@ export function ArtistPage() {
 
   const sources = data.providers?.length ? data.providers : [data.provider]
   const monitorMode = data.monitor_mode || (data.monitored ? 'all' : 'none')
+  const skippedOfficialHint = (data.albums || []).filter(
+    (a) => a.status === 'skipped' && !a.monitored,
+  ).length
+  const missingCount =
+    data.missing_count ??
+    (data.albums || []).filter((a) => a.status === 'missing').length
+  const related = data.related_artists || []
 
   return (
     <div>
@@ -203,8 +192,9 @@ export function ArtistPage() {
           </p>
           <h1>{data.name}</h1>
           <p>
-            {data.downloaded_count} downloaded · {data.wanted_count} wanted · {data.album_count}{' '}
-            total
+            {data.downloaded_count} downloaded · {data.wanted_count} wanted
+            {missingCount > 0 ? ` · ${missingCount} missing on provider` : ''} ·{' '}
+            {data.album_count} total
           </p>
           <p className="muted" style={{ marginTop: '0.35rem' }}>
             Source:{' '}
@@ -213,12 +203,40 @@ export function ArtistPage() {
                 {p}
               </span>
             ))}
+            {data.musicbrainz_id ? (
+              <span className="muted" title={data.musicbrainz_id}>
+                · Catalog from MusicBrainz
+              </span>
+            ) : null}
             {data.name_collision ? (
               <span className="muted" title="Another artist in your library shares this name">
                 · id {data.provider_id} (same name as another artist — kept separate)
               </span>
             ) : null}
           </p>
+          {missingCount > 0 && (
+            <p className="error" style={{ marginTop: '0.35rem' }}>
+              {missingCount} official MusicBrainz release(s) are not available on{' '}
+              {sources.join(' / ')}. See albums marked missing below.
+            </p>
+          )}
+          {skippedOfficialHint > 0 && (
+            <p className="muted" style={{ marginTop: '0.35rem' }}>
+              {skippedOfficialHint} provider-only album(s) skipped (not on MusicBrainz) — use Want
+              on a row to keep one.
+            </p>
+          )}
+          {related.length > 0 && (
+            <p className="muted" style={{ marginTop: '0.5rem' }}>
+              Featured / related:{' '}
+              {related.map((r, i) => (
+                <span key={`${r.name}-${i}`}>
+                  {i > 0 ? ', ' : ''}
+                  {r.id ? <Link to={`/artists/${r.id}`}>{r.name}</Link> : r.name}
+                </span>
+              ))}
+            </p>
+          )}
         </div>
         {data.image_url && (
           <img
@@ -242,28 +260,22 @@ export function ArtistPage() {
             <option value="none">Unmonitored</option>
           </select>
         </div>
-        <div className="field" style={{ margin: 0, minWidth: 200 }}>
-          <label>Singles for this artist</label>
-          <select
-            value={
-              data.include_singles === true
-                ? 'yes'
-                : data.include_singles === false
-                  ? 'no'
-                  : 'inherit'
-            }
-            onChange={(e) => {
-              const v = e.target.value
-              patchArtist.mutate({
-                include_singles: v === 'inherit' ? null : v === 'yes',
-              })
-            }}
-            disabled={patchArtist.isPending}
-          >
-            <option value="inherit">Use global setting</option>
-            <option value="yes">Always include</option>
-            <option value="no">Never include</option>
-          </select>
+        <div className="field" style={{ margin: 0, minWidth: 220 }}>
+          <label>Include singles</label>
+          <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={data.include_singles === true}
+              onChange={(e) => {
+                patchArtist.mutate({
+                  include_singles: e.target.checked ? true : false,
+                })
+              }}
+              disabled={patchArtist.isPending}
+            />
+            Match &amp; queue MusicBrainz singles
+          </label>
+          <span className="muted tiny">Changing this rescans MusicBrainz like Lidarr.</span>
         </div>
         <button className="btn secondary" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
           Refresh metadata
@@ -307,6 +319,11 @@ export function ArtistPage() {
                   <Link to={`/albums/${album.id}`}>
                     <strong>{album.title}</strong>
                   </Link>{' '}
+                  {album.artist_credit ? (
+                    <span className="muted" style={{ fontWeight: 400 }}>
+                      · {album.artist_credit}
+                    </span>
+                  ) : null}{' '}
                   {downloading ? (
                     <span className={`badge ${job.state}`}>{job.state}</span>
                   ) : failed ? (
@@ -325,6 +342,16 @@ export function ArtistPage() {
                   tracks
                   {album.quality ? ` · ${album.quality.toUpperCase()}` : ''}
                 </div>
+                {album.status === 'missing' && album.status_reason ? (
+                  <div className="error" style={{ marginTop: 4, fontSize: '0.85rem' }}>
+                    {album.status_reason}
+                  </div>
+                ) : null}
+                {album.status === 'skipped' && album.status_reason ? (
+                  <div className="muted" style={{ marginTop: 4, fontSize: '0.85rem' }}>
+                    {album.status_reason}
+                  </div>
+                ) : null}
                 <div style={{ marginTop: 6 }}>
                   {downloading ? (
                     <div>
@@ -363,28 +390,19 @@ export function ArtistPage() {
                     Upgrade
                   </button>
                 )}
-                {!downloading && album.status !== 'downloaded' && (
-                  <>
-                    <button
-                      className="btn secondary"
-                      onClick={() => downloadAlbum.mutate({ albumId: album.id })}
-                      disabled={downloadAlbum.isPending}
-                    >
-                      {failed ? 'Retry' : 'Download'}
-                    </button>
-                    <button
-                      className="btn ghost"
-                      type="button"
-                      onClick={() =>
-                        setSearchAlbum({
-                          id: album.id,
-                          label: `${data.name} – ${album.title}`,
-                        })
-                      }
-                    >
-                      Search indexers
-                    </button>
-                  </>
+                {!downloading && album.status !== 'downloaded' && album.status !== 'missing' && (
+                  <button
+                    className="btn secondary"
+                    onClick={() => downloadAlbum.mutate({ albumId: album.id })}
+                    disabled={downloadAlbum.isPending}
+                  >
+                    {failed ? 'Retry' : 'Download'}
+                  </button>
+                )}
+                {album.status === 'missing' && (
+                  <span className="muted" style={{ fontSize: '0.85rem' }}>
+                    Unavailable on provider
+                  </span>
                 )}
                 {album.status !== 'skipped' ? (
                   <button
@@ -418,13 +436,6 @@ export function ArtistPage() {
         })}
       </div>
 
-      {searchAlbum && (
-        <ReleaseSearchModal
-          albumId={searchAlbum.id}
-          albumLabel={searchAlbum.label}
-          onClose={() => setSearchAlbum(null)}
-        />
-      )}
     </div>
   )
 }

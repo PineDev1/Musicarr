@@ -173,6 +173,41 @@ class QobuzProvider:
             )
         return out
 
+    def search_albums(self, query: str, limit: int = 25) -> list[ProviderAlbum]:
+        data = self._get(
+            "album/search",
+            {"query": query, "limit": limit},
+        )
+        items = (data.get("albums") or {}).get("items") or []
+        out: list[ProviderAlbum] = []
+        for alb in items:
+            release = alb.get("release_date_original") or alb.get("released_at")
+            if isinstance(release, int):
+                release = time.strftime("%Y-%m-%d", time.gmtime(release))
+            cover = None
+            img = alb.get("image") or {}
+            if isinstance(img, dict):
+                cover = img.get("large") or img.get("small")
+            qtype = (alb.get("product_type") or "album").lower()
+            album_type = "album"
+            if "ep" in qtype:
+                album_type = "ep"
+            elif "single" in qtype:
+                album_type = "single"
+            elif "compil" in qtype:
+                album_type = "compilation"
+            out.append(
+                ProviderAlbum(
+                    provider_id=str(alb.get("id")),
+                    title=alb.get("title") or "Unknown Album",
+                    album_type=album_type,
+                    release_date=str(release) if release else None,
+                    cover_url=cover,
+                    track_count=int(alb.get("tracks_count") or 0),
+                )
+            )
+        return out
+
     def get_artist(self, provider_id: str) -> ProviderArtist:
         a = self._get("artist/get", {"artist_id": provider_id})
         image = None
