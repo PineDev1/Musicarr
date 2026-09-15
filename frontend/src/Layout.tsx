@@ -6,7 +6,9 @@ import { api } from './api'
 const links = [
   { to: '/', label: 'Library', end: true },
   { to: '/add', label: 'Add Artist' },
+  { to: '/pending-artists', label: 'Pending Artists' },
   { to: '/wanted', label: 'Wanted' },
+  { to: '/skipped', label: 'Skipped' },
   { to: '/upgrades', label: 'Upgrades' },
   { to: '/queue', label: 'Queue' },
   { to: '/import-review', label: 'Import Review' },
@@ -58,6 +60,12 @@ export function Layout() {
                 ? ` (${health.data.wanted_albums})`
                 : ''}
               {l.to === '/import-review' && importReviewCount > 0 ? ` (${importReviewCount})` : ''}
+              {l.to === '/pending-artists' && health.data && health.data.pending_artists > 0
+                ? ` (${health.data.pending_artists})`
+                : ''}
+              {l.to === '/skipped' && health.data && health.data.skipped_albums > 0
+                ? ` (${health.data.skipped_albums})`
+                : ''}
             </NavLink>
           ))}
         </nav>

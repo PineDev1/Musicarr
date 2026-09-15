@@ -9,7 +9,7 @@ from sqlalchemy.orm import joinedload
 
 from app.core.database import SessionLocal
 from app.models import Artist
-from app.services.artists import sync_artist_albums
+from app.services.artists import effective_download_mode, sync_artist_albums
 from app.services.download_queue import download_queue
 from app.services.history import add_history
 from app.services.providers import get_provider
@@ -71,12 +71,15 @@ class ReleaseMonitor:
                     .where(
                         Artist.monitored.is_(True),
                         Artist.provider == active,
+                        Artist.status == "active",
                     )
                 )
                 .unique()
                 .all()
             )
             new_albums = 0
+            queued = 0
+            awaiting_manual = 0
             checked = 0
             skipped = 0
             for artist in list(artists):
@@ -93,7 +96,10 @@ class ReleaseMonitor:
                         )
                         continue
                     before_ids = {a.provider_id for a in artist.albums}
-                    synced = sync_artist_albums(db, artist)
+                    # Unattended tick — any newly-discovered "feat." collaborator
+                    # goes through the same pending-review gate as any other
+                    # unattended add.
+                    synced = sync_artist_albums(db, artist, require_approval=True)
                     checked += 1
                     for album in synced:
                         mode = (getattr(artist, "monitor_mode", None) or "all").lower()
@@ -101,7 +107,11 @@ class ReleaseMonitor:
                             continue
                         if album.provider_id not in before_ids and album.status == "wanted":
                             new_albums += 1
-                            download_queue.enqueue_album(db, album.id)
+                            if effective_download_mode(db, artist) == "auto":
+                                download_queue.enqueue_album(db, album.id)
+                                queued += 1
+                            else:
+                                awaiting_manual += 1
                 except ProviderError as exc:
                     skipped += 1
                     logger.warning("Monitor skip %s: %s", artist.name, exc)
@@ -110,11 +120,10 @@ class ReleaseMonitor:
                     logger.exception("Monitor failed for artist %s", artist.name)
             self._last_run = datetime.now(timezone.utc)
             if new_albums:
-                add_history(
-                    db,
-                    "monitor",
-                    f"Found {new_albums} new album(s); queued downloads",
-                )
+                msg = f"Found {new_albums} new album(s); queued {queued}"
+                if awaiting_manual:
+                    msg += f", {awaiting_manual} waiting for manual approval"
+                add_history(db, "monitor", msg)
             elif force:
                 add_history(
                     db,
@@ -125,6 +134,8 @@ class ReleaseMonitor:
                 "artists_checked": checked,
                 "artists_skipped": skipped,
                 "new_albums": new_albums,
+                "queued": queued,
+                "awaiting_manual": awaiting_manual,
             }
         except Exception as exc:  # noqa: BLE001
             logger.exception("Monitor check failed")

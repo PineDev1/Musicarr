@@ -9,20 +9,27 @@ from app.models.schemas import (
     ArtistOut,
     ArtistPatch,
     ArtistSearchResult,
+    BulkArtistIdsRequest,
     BulkArtistSearchRequest,
     BulkArtistSearchResult,
 )
 from app.services.artists import (
     add_artist,
+    approve_pending_artist,
+    bulk_approve_pending_artists,
+    bulk_reject_pending_artists,
     collision_groups,
     delete_artist,
+    effective_download_mode,
     find_linked_artists,
     get_artist_detail,
     grouped_artist_stats,
     list_artists_grouped,
+    list_pending_artists,
     merge_album_rows,
     merge_artists,
     name_collision_ids,
+    reject_pending_artist,
     sync_artist_albums,
 )
 from app.services.download_queue import download_queue
@@ -76,6 +83,8 @@ def _album_out(album, sources: list[str] | None = None, include_tracks: bool = T
         monitored=album.monitored,
         status=album.status,
         status_reason=getattr(album, "status_reason", "") or "",
+        skip_reason_code=getattr(album, "skip_reason_code", "") or "",
+        dismissed=bool(getattr(album, "dismissed", False)),
         musicbrainz_id=getattr(album, "musicbrainz_id", None),
         artist_credit=getattr(album, "artist_credit", "") or "",
         path=album.path,
@@ -161,6 +170,9 @@ def _artist_group_out(
         monitored=any(a.monitored for a in artists),
         monitor_mode=getattr(primary, "monitor_mode", None) or "all",
         include_singles=getattr(primary, "include_singles", None),
+        status=getattr(primary, "status", None) or "active",
+        pending_reason=getattr(primary, "pending_reason", None) or "",
+        download_mode=getattr(primary, "download_mode", None),
         musicbrainz_id=next(
             (
                 (getattr(a, "musicbrainz_id", None) or "").strip()
@@ -359,6 +371,8 @@ def create_artist(payload: ArtistCreate, db: Session = Depends(get_db)):
             download_missing=payload.download_missing,
             provider_name=payload.provider or settings.active_provider,
             include_singles=payload.include_singles,
+            download_mode=payload.download_mode,
+            monitor_mode=payload.monitor_mode,
         )
     except ProviderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -377,6 +391,58 @@ def create_artist(payload: ArtistCreate, db: Session = Depends(get_db)):
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
         collision_ids=name_collision_ids(db),
     )
+
+
+@router.get("/pending", response_model=list[ArtistOut])
+def get_pending_artists(db: Session = Depends(get_db)):
+    settings = ensure_settings(db)
+    active = (settings.active_provider or "deezer").lower()
+    return [
+        _artist_group_out(
+            [artist],
+            include_albums=False,
+            active=active,
+            target_bitrate=(settings.bitrate or "flac").lower(),
+            upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
+        )
+        for artist in list_pending_artists(db)
+    ]
+
+
+@router.post("/pending/bulk-approve")
+def bulk_approve_pending(payload: BulkArtistIdsRequest, db: Session = Depends(get_db)):
+    return bulk_approve_pending_artists(db, payload.artist_ids)
+
+
+@router.post("/pending/bulk-reject")
+def bulk_reject_pending(payload: BulkArtistIdsRequest, db: Session = Depends(get_db)):
+    return bulk_reject_pending_artists(db, payload.artist_ids)
+
+
+@router.post("/{artist_id}/approve", response_model=ArtistOut)
+def approve_artist(artist_id: int, db: Session = Depends(get_db)):
+    try:
+        artist = approve_pending_artist(db, artist_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    detail = get_artist_detail(db, artist.id)
+    settings = ensure_settings(db)
+    return _artist_group_out(
+        [detail] if detail else [artist],
+        include_albums=False,
+        active=(settings.active_provider or "deezer").lower(),
+        target_bitrate=(settings.bitrate or "flac").lower(),
+        upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
+    )
+
+
+@router.post("/{artist_id}/reject")
+def reject_artist(artist_id: int, db: Session = Depends(get_db)):
+    try:
+        reject_pending_artist(db, artist_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True}
 
 
 @router.get("/{artist_id}", response_model=ArtistOut)
@@ -424,7 +490,12 @@ def patch_artist(artist_id: int, payload: ArtistPatch, db: Session = Depends(get
                 if row.provider == "local":
                     continue
                 sync_artist_albums(db, row)
-                if row.monitored and (getattr(row, "monitor_mode", "all") or "all") != "none":
+                if (
+                    row.monitored
+                    and (getattr(row, "monitor_mode", "all") or "all") != "none"
+                    and row.status == "active"
+                    and effective_download_mode(db, row) == "auto"
+                ):
                     download_queue.enqueue_artist_missing(db, row.id)
             except ProviderError:
                 db.rollback()

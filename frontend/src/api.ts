@@ -14,6 +14,8 @@ export type Health = {
   monitored_artists: number
   wanted_albums: number
   queue_size: number
+  pending_artists: number
+  skipped_albums: number
 }
 
 export type Settings = {
@@ -60,6 +62,7 @@ export type Settings = {
   player_sharing_enabled: boolean
   download_concurrency: number
   max_retries: number
+  default_download_mode: 'auto' | 'manual'
   provider_ok: boolean | null
   provider_error: string | null
   deezer_ok: boolean | null
@@ -119,6 +122,8 @@ export type Album = {
   monitored: boolean
   status: string
   status_reason?: string
+  skip_reason_code?: string
+  dismissed?: boolean
   musicbrainz_id?: string | null
   artist_credit?: string
   path: string | null
@@ -146,6 +151,9 @@ export type Artist = {
   monitored: boolean
   monitor_mode?: string
   include_singles?: boolean | null
+  status?: 'active' | 'pending'
+  pending_reason?: string
+  download_mode?: 'auto' | 'manual' | null
   musicbrainz_id?: string | null
   added_at: string
   last_synced_at: string | null
@@ -333,7 +341,12 @@ export const api = {
   addArtist: (
     provider_id: string,
     provider?: string,
-    opts?: { include_singles?: boolean | null; download_missing?: boolean },
+    opts?: {
+      include_singles?: boolean | null
+      download_missing?: boolean
+      monitor_mode?: 'all' | 'new' | 'none'
+      download_mode?: 'auto' | 'manual' | null
+    },
   ) =>
     request<Artist>('/artists', {
       method: 'POST',
@@ -343,6 +356,8 @@ export const api = {
         monitored: true,
         download_missing: opts?.download_missing ?? true,
         include_singles: opts?.include_singles ?? null,
+        monitor_mode: opts?.monitor_mode ?? null,
+        download_mode: opts?.download_mode ?? null,
       }),
     }),
   deleteArtist: (id: number) =>
@@ -353,6 +368,21 @@ export const api = {
     request<Artist>(`/artists/${id}/refresh`, { method: 'POST' }),
   downloadMissing: (id: number) =>
     request<{ queued: number }>(`/artists/${id}/download-missing`, { method: 'POST' }),
+  pendingArtists: () => request<Artist[]>('/artists/pending'),
+  approveArtist: (id: number) =>
+    request<Artist>(`/artists/${id}/approve`, { method: 'POST' }),
+  rejectArtist: (id: number) =>
+    request<{ ok: boolean }>(`/artists/${id}/reject`, { method: 'POST' }),
+  bulkApproveArtists: (artistIds: number[]) =>
+    request<{ approved: number }>('/artists/pending/bulk-approve', {
+      method: 'POST',
+      body: JSON.stringify({ artist_ids: artistIds }),
+    }),
+  bulkRejectArtists: (artistIds: number[]) =>
+    request<{ rejected: number }>('/artists/pending/bulk-reject', {
+      method: 'POST',
+      body: JSON.stringify({ artist_ids: artistIds }),
+    }),
   wanted: (albumType?: string) =>
     request<Album[]>(
       albumType ? `/albums/wanted?album_type=${encodeURIComponent(albumType)}` : '/albums/wanted',
@@ -372,6 +402,30 @@ export const api = {
     }),
   bulkDownloadAlbums: (albumIds: number[]) =>
     request<{ queued: number }>('/albums/bulk/download', {
+      method: 'POST',
+      body: JSON.stringify({ album_ids: albumIds }),
+    }),
+  skippedAlbums: (params?: {
+    artist_id?: number
+    reason_code?: string
+    album_type?: string
+    sort?: 'artist' | 'date'
+  }) => {
+    const q = new URLSearchParams()
+    if (params?.artist_id) q.set('artist_id', String(params.artist_id))
+    if (params?.reason_code) q.set('reason_code', params.reason_code)
+    if (params?.album_type) q.set('album_type', params.album_type)
+    if (params?.sort) q.set('sort', params.sort)
+    const qs = q.toString()
+    return request<Album[]>(`/albums/skipped${qs ? `?${qs}` : ''}`)
+  },
+  restoreSkippedAlbums: (albumIds: number[]) =>
+    request<{ restored: number }>('/albums/skipped/restore', {
+      method: 'POST',
+      body: JSON.stringify({ album_ids: albumIds }),
+    }),
+  dismissSkippedAlbums: (albumIds: number[]) =>
+    request<{ dismissed: number }>('/albums/skipped/dismiss', {
       method: 'POST',
       body: JSON.stringify({ album_ids: albumIds }),
     }),

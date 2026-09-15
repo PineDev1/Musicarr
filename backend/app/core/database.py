@@ -110,6 +110,7 @@ def migrate_schema(engine_: Engine | None = None) -> None:
         "completed_download_scan_interval_seconds": "INTEGER DEFAULT 60",
         "import_mechanism": "VARCHAR(16) DEFAULT 'hardlink'",
         "remove_completed_downloads": "BOOLEAN DEFAULT 0",
+        "default_download_mode": "VARCHAR(16) DEFAULT 'manual'",
     }
     existing = existing_columns("app_settings")
     for name, definition in settings_cols.items():
@@ -128,6 +129,16 @@ def migrate_schema(engine_: Engine | None = None) -> None:
             add_column("artists", "musicbrainz_id VARCHAR(64)")
         if "related_artists_json" not in artist_cols:
             add_column("artists", "related_artists_json TEXT DEFAULT '[]'")
+        if "status" not in artist_cols:
+            add_column("artists", "status VARCHAR(16) DEFAULT 'active'")
+        if "pending_reason" not in artist_cols:
+            add_column("artists", "pending_reason VARCHAR(64) DEFAULT ''")
+        if "download_mode" not in artist_cols:
+            add_column("artists", "download_mode VARCHAR(16)")
+        with eng.begin() as conn:
+            conn.execute(
+                text("UPDATE artists SET status = 'active' WHERE status IS NULL OR status = ''")
+            )
 
     album_cols = existing_columns("albums")
     if album_cols:
@@ -141,6 +152,10 @@ def migrate_schema(engine_: Engine | None = None) -> None:
             add_column("albums", "collaborators_json TEXT DEFAULT '[]'")
         if "artist_credit" not in album_cols:
             add_column("albums", "artist_credit VARCHAR(1024) DEFAULT ''")
+        if "skip_reason_code" not in album_cols:
+            add_column("albums", "skip_reason_code VARCHAR(32) DEFAULT ''")
+        if "dismissed" not in album_cols:
+            add_column("albums", "dismissed BOOLEAN DEFAULT 0")
 
     for table, id_col in (
         ("artists", "deezer_id"),
@@ -223,11 +238,15 @@ def migrate_schema(engine_: Engine | None = None) -> None:
     # These back the hottest queries (download queue polling, monitor's per-tick
     # artist scan, library filtering) which were doing full table scans.
     indexes = {
-        "artists": [("ix_artists_monitored", "monitored")],
+        "artists": [
+            ("ix_artists_monitored", "monitored"),
+            ("ix_artists_status", "status"),
+        ],
         "albums": [
             ("ix_albums_artist_id", "artist_id"),
             ("ix_albums_monitored", "monitored"),
             ("ix_albums_status", "status"),
+            ("ix_albums_skip_reason_code", "skip_reason_code"),
         ],
         "download_jobs": [
             ("ix_download_jobs_album_id", "album_id"),
@@ -242,6 +261,21 @@ def migrate_schema(engine_: Engine | None = None) -> None:
                 continue
             for name, expr in cols:
                 conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({expr})"))
+
+    # Partial unique index closing a narrow race in download_queue.enqueue_album:
+    # two near-simultaneous callers (e.g. add_artist's post-sync sweep and a
+    # monitor tick) could both pass its SELECT-then-INSERT dedupe check before
+    # either commits. This makes "one active job per album" an actual DB
+    # constraint; enqueue_album catches the resulting IntegrityError.
+    if "download_jobs" in existing_tables:
+        with eng.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_download_jobs_album_active "
+                    "ON download_jobs(album_id) "
+                    "WHERE state IN ('queued','running') AND album_id IS NOT NULL"
+                )
+            )
 
 
 def init_db() -> None:

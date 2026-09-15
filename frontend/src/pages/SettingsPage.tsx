@@ -137,6 +137,7 @@ export function SettingsPage() {
   const [qobuzAppSecret, setQobuzAppSecret] = useState('')
   const [tidalCode, setTidalCode] = useState<string | null>(null)
   const [tidalUri, setTidalUri] = useState<string | null>(null)
+  const [defaultDownloadMode, setDefaultDownloadMode] = useState<'auto' | 'manual'>('manual')
 
   useEffect(() => {
     if (!data) return
@@ -173,6 +174,7 @@ export function SettingsPage() {
     setQobuzEmail(data.qobuz_email || '')
     setQobuzUserId(data.qobuz_user_id || '')
     setQobuzAppId(data.qobuz_app_id || '')
+    setDefaultDownloadMode(data.default_download_mode || 'manual')
   }, [data])
 
   const save = useMutation({
@@ -191,6 +193,7 @@ export function SettingsPage() {
         track_template: trackTemplate,
         monitor_interval_minutes: interval,
         max_retries: maxRetries,
+        default_download_mode: defaultDownloadMode,
         include_albums: includeAlbums,
         include_eps: includeEps,
         include_singles: includeSingles,
@@ -937,6 +940,19 @@ export function SettingsPage() {
                 <option value="320">MP3 320</option>
                 <option value="128">MP3 128</option>
               </select>
+            </div>
+            <div className="field">
+              <label>Default download mode for new artists</label>
+              <select
+                value={defaultDownloadMode}
+                onChange={(e) => setDefaultDownloadMode(e.target.value as 'auto' | 'manual')}
+              >
+                <option value="manual">Manual — wait for my approval in Wanted</option>
+                <option value="auto">Auto — download new releases as soon as they're found</option>
+              </select>
+              <span className="muted tiny">
+                Applies to any artist that doesn't have its own override set on the artist page.
+              </span>
             </div>
             <div className="field">
               <label>Quality upgrades</label>

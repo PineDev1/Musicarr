@@ -65,6 +65,8 @@ def _album_out(
         monitored=album.monitored,
         status=album.status,
         status_reason=getattr(album, "status_reason", "") or "",
+        skip_reason_code=getattr(album, "skip_reason_code", "") or "",
+        dismissed=bool(getattr(album, "dismissed", False)),
         musicbrainz_id=getattr(album, "musicbrainz_id", None),
         artist_credit=getattr(album, "artist_credit", "") or "",
         path=album.path,
@@ -108,6 +110,63 @@ class BulkIds(BaseModel):
     album_ids: list[int]
 
 
+@router.get("/skipped", response_model=list[AlbumOut])
+def skipped_albums(
+    db: Session = Depends(get_db),
+    artist_id: int | None = None,
+    reason_code: str | None = None,
+    album_type: str | None = None,
+    sort: str = "artist",
+    include_dismissed: bool = False,
+):
+    q = select(Album).options(joinedload(Album.tracks), joinedload(Album.artist)).where(
+        Album.status == "skipped"
+    )
+    if not include_dismissed:
+        q = q.where(Album.dismissed.is_(False))
+    if artist_id is not None:
+        q = q.where(Album.artist_id == artist_id)
+    if reason_code:
+        q = q.where(Album.skip_reason_code == reason_code)
+    if album_type:
+        q = q.where(Album.album_type == album_type)
+    albums = list(db.scalars(q).unique().all())
+    if sort == "date":
+        albums.sort(key=lambda a: a.release_date or "", reverse=True)
+    else:
+        albums.sort(key=lambda a: ((a.artist.name if a.artist else "") or "").lower())
+    target, up_on = _quality_settings(db)
+    return [_album_out(a, target_bitrate=target, upgrade_enabled=up_on) for a in albums]
+
+
+@router.post("/skipped/restore")
+def restore_skipped(payload: BulkIds, db: Session = Depends(get_db)):
+    count = 0
+    for album_id in payload.album_ids:
+        album = db.get(Album, album_id)
+        if album and album.status == "skipped":
+            album.status = "wanted"
+            album.monitored = True
+            album.status_reason = ""
+            album.skip_reason_code = ""
+            album.dismissed = False
+            count += 1
+    db.commit()
+    return {"restored": count}
+
+
+@router.post("/skipped/dismiss")
+def dismiss_skipped(payload: BulkIds, db: Session = Depends(get_db)):
+    count = 0
+    for album_id in payload.album_ids:
+        album = db.get(Album, album_id)
+        if album and album.status == "skipped":
+            album.dismissed = True
+            count += 1
+    db.commit()
+    return {"dismissed": count}
+
+
 @router.post("/wanted/download-all")
 def download_all_wanted(
     db: Session = Depends(get_db)
@@ -140,6 +199,8 @@ def skip_all_wanted(db: Session = Depends(get_db)):
     for album in albums:
         album.status = "skipped"
         album.monitored = False
+        album.skip_reason_code = "manual"
+        album.status_reason = "Skipped (bulk action)"
     db.commit()
     return {"skipped": len(albums)}
 
@@ -158,6 +219,8 @@ def skip_all_singles(db: Session = Depends(get_db)):
     for album in albums:
         album.status = "skipped"
         album.monitored = False
+        album.skip_reason_code = "singles_disabled"
+        album.status_reason = "Skipped (bulk singles action)"
     db.commit()
     return {"skipped": len(albums)}
 
@@ -182,6 +245,8 @@ def skip_junk_wanted(db: Session = Depends(get_db)):
         if junk or live:
             album.status = "skipped"
             album.monitored = False
+            album.skip_reason_code = "junk" if junk else "live"
+            album.status_reason = "Matched junk-title filter" if junk else "Live release filter"
             skipped += 1
     db.commit()
     return {"skipped": skipped}
@@ -195,6 +260,8 @@ def bulk_skip(payload: BulkIds, db: Session = Depends(get_db)):
         if album:
             album.status = "skipped"
             album.monitored = False
+            album.skip_reason_code = "manual"
+            album.status_reason = "Skipped manually"
             count += 1
     db.commit()
     return {"skipped": count}
@@ -211,6 +278,8 @@ def bulk_download(
         if album and album.status == "skipped":
             album.status = "wanted"
             album.monitored = True
+            album.skip_reason_code = ""
+            album.dismissed = False
         if download_queue.enqueue_album(db, album_id):
             queued += 1
     db.commit()

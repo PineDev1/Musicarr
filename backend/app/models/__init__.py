@@ -76,6 +76,8 @@ class AppSettings(Base):
     player_sharing_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     download_concurrency: Mapped[int] = mapped_column(Integer, default=1)
     max_retries: Mapped[int] = mapped_column(Integer, default=3)
+    # auto | manual — default for artists that don't set their own download_mode
+    default_download_mode: Mapped[str] = mapped_column(String(16), default="manual")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -102,6 +104,13 @@ class Artist(Base):
     monitor_mode: Mapped[str] = mapped_column(String(16), default="all")
     # None/empty = inherit global include_singles; "0"/"1" stored as bool
     include_singles: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
+    # pending = awaiting user approval (never synced-for-download or monitored);
+    # active = normal, fully live artist
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    # Why this artist is pending: "import_list" | "featured" | ""
+    pending_reason: Mapped[str] = mapped_column(String(64), default="")
+    # None = inherit AppSettings.default_download_mode; "auto" | "manual" overrides it
+    download_mode: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -134,6 +143,12 @@ class Album(Base):
     status: Mapped[str] = mapped_column(String(32), default="wanted", index=True)
     # e.g. "Qobuz doesn't have this release"
     status_reason: Mapped[str] = mapped_column(Text, default="")
+    # Machine-filterable skip reason: junk | live | type_disabled | singles_disabled |
+    # not_on_provider | min_tracks | manual | other — parallel to status_reason's free text
+    skip_reason_code: Mapped[str] = mapped_column(String(32), default="", index=True)
+    # User explicitly reviewed and dismissed a skipped release — sync must not
+    # resurrect or re-touch it until the user restores it themselves
+    dismissed: Mapped[bool] = mapped_column(Boolean, default=False)
     musicbrainz_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     # JSON list of collaborator display names for this release
     collaborators_json: Mapped[str] = mapped_column(Text, default="[]")

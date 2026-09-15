@@ -53,6 +53,7 @@ class SettingsOut(BaseModel):
     player_sharing_enabled: bool = True
     download_concurrency: int
     max_retries: int
+    default_download_mode: str = "manual"
     provider_ok: bool | None = None
     provider_error: str | None = None
     deezer_ok: bool | None = None
@@ -101,6 +102,7 @@ class SettingsUpdate(BaseModel):
     player_sharing_enabled: bool | None = None
     download_concurrency: int | None = Field(default=None, ge=1, le=4)
     max_retries: int | None = Field(default=None, ge=0, le=10)
+    default_download_mode: Literal["auto", "manual"] | None = None
 
 
 class NotifyTestRequest(BaseModel):
@@ -125,6 +127,8 @@ class HealthOut(BaseModel):
     monitored_artists: int
     wanted_albums: int
     queue_size: int
+    pending_artists: int = 0
+    skipped_albums: int = 0
 
 
 class ArtistSearchResult(BaseModel):
@@ -181,6 +185,8 @@ class AlbumOut(BaseModel):
     monitored: bool
     status: str
     status_reason: str = ""
+    skip_reason_code: str = ""
+    dismissed: bool = False
     musicbrainz_id: str | None = None
     artist_credit: str = ""
     path: str | None
@@ -211,6 +217,9 @@ class ArtistOut(BaseModel):
     monitored: bool
     monitor_mode: str = "all"
     include_singles: bool | None = None
+    status: str = "active"
+    pending_reason: str = ""
+    download_mode: str | None = None
     musicbrainz_id: str | None = None
     added_at: datetime
     last_synced_at: datetime | None
@@ -236,12 +245,19 @@ class ArtistCreate(BaseModel):
     monitored: bool = True
     download_missing: bool = True
     include_singles: bool | None = None
+    monitor_mode: Literal["all", "new", "none"] | None = None
+    download_mode: Literal["auto", "manual"] | None = None
 
 
 class ArtistPatch(BaseModel):
     monitored: bool | None = None
     monitor_mode: Literal["all", "new", "none"] | None = None
     include_singles: bool | None = None
+    download_mode: Literal["auto", "manual"] | None = None
+
+
+class BulkArtistIdsRequest(BaseModel):
+    artist_ids: list[int]
 
 
 class ImportListCreate(BaseModel):

@@ -145,6 +145,26 @@ export function ArtistPage() {
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
+  const approve = useMutation({
+    mutationFn: () => api.approveArtist(artistId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['artist', artistId] })
+      qc.invalidateQueries({ queryKey: ['pending-artists'] })
+      qc.invalidateQueries({ queryKey: ['health'] })
+      toast.push('Artist approved', 'ok')
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  const reject = useMutation({
+    mutationFn: () => api.rejectArtist(artistId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pending-artists'] })
+      qc.invalidateQueries({ queryKey: ['health'] })
+      toast.push('Artist rejected', 'ok')
+      window.location.href = '/pending-artists'
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
   const patchAlbum = useMutation({
     mutationFn: ({ albumId, body }: { albumId: number; body: Record<string, unknown> }) =>
       api.patchAlbum(albumId, body),
@@ -238,6 +258,24 @@ export function ArtistPage() {
 
   return (
     <div>
+      {data.status === 'pending' && (
+        <div className="banner" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+          <span>
+            This artist is awaiting your approval
+            {data.pending_reason === 'import_list' ? ' (added by an import list)' : ''}
+            {data.pending_reason === 'featured' ? ' (discovered as a featured artist)' : ''}
+            {' '}— nothing will download until you approve it.
+          </span>
+          <div className="row-actions">
+            <button className="btn" onClick={() => approve.mutate()} disabled={approve.isPending}>
+              Approve
+            </button>
+            <button className="btn ghost" onClick={() => reject.mutate()} disabled={reject.isPending}>
+              Reject
+            </button>
+          </div>
+        </div>
+      )}
       <div className="page-header">
         <div>
           <p className="muted" style={{ marginBottom: '0.5rem' }}>
@@ -311,6 +349,20 @@ export function ArtistPage() {
             <option value="all">All albums</option>
             <option value="new">New albums only</option>
             <option value="none">Unmonitored</option>
+          </select>
+        </div>
+        <div className="field" style={{ margin: 0, minWidth: 180 }}>
+          <label>Downloads</label>
+          <select
+            value={data.download_mode || ''}
+            onChange={(e) =>
+              patchArtist.mutate({ download_mode: e.target.value || null })
+            }
+            disabled={patchArtist.isPending}
+          >
+            <option value="">Use default</option>
+            <option value="auto">Auto-download</option>
+            <option value="manual">Manual approval</option>
           </select>
         </div>
         <div className="field" style={{ margin: 0, minWidth: 220 }}>

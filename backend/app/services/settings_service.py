@@ -132,6 +132,7 @@ def settings_to_out(row: AppSettings, validate: bool = False) -> SettingsOut:
         player_sharing_enabled=bool(getattr(row, "player_sharing_enabled", True)),
         download_concurrency=row.download_concurrency,
         max_retries=row.max_retries,
+        default_download_mode=(getattr(row, "default_download_mode", None) or "manual"),
     )
 
 

@@ -77,13 +77,15 @@ def run_import_list(db: Session, import_list: ImportList) -> dict:
                     monitored=True,
                     download_missing=True,
                     provider_name=provider.name,
+                    require_approval=True,
+                    pending_reason="import_list",
                 )
                 added.append(name)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Import list add_artist failed for %s: %s", name, exc)
                 errors.append(f"{name}: {exc}")
 
-        summary = f"{len(added)} added, {len(skipped)} already in library"
+        summary = f"{len(added)} added to pending review, {len(skipped)} already in library"
         if errors:
             summary += f", {len(errors)} not matched"
 

@@ -57,7 +57,13 @@ def test_run_import_list_adds_new_skips_existing_and_reports_no_match(db):
     assert import_list.last_run_at is not None
     assert "1 added" in import_list.last_result
     mock_add_artist.assert_called_once_with(
-        db, "new1", monitored=True, download_missing=True, provider_name="qobuz"
+        db,
+        "new1",
+        monitored=True,
+        download_missing=True,
+        provider_name="qobuz",
+        require_approval=True,
+        pending_reason="import_list",
     )
 
 

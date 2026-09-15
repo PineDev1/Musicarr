@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings as app_config
@@ -217,7 +218,20 @@ class DownloadQueue:
             progress=0.0,
         )
         db.add(job)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # Lost the race to a concurrent caller (e.g. a monitor tick firing
+            # at the same moment as an add-artist sweep) — the partial unique
+            # index on (album_id) for active states caught it. Return whatever
+            # job actually won instead of raising.
+            db.rollback()
+            return db.scalar(
+                select(DownloadJob).where(
+                    DownloadJob.album_id == album_id,
+                    DownloadJob.state.in_(ACTIVE_JOB_STATES),
+                )
+            )
         db.refresh(job)
         add_history(db, "queued", f"Queued {job.artist_name} – {job.album_title}")
         self.wake()

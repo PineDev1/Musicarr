@@ -12,9 +12,11 @@ import { ImportListsPage } from './pages/ImportListsPage'
 import { ImportReviewPage } from './pages/ImportReviewPage'
 import { LibraryPage } from './pages/LibraryPage'
 import { LoginPage } from './pages/LoginPage'
+import { PendingArtistsPage } from './pages/PendingArtistsPage'
 import { QueuePage } from './pages/QueuePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { SetupWizardPage, isSetupComplete, markSetupDone } from './pages/SetupWizardPage'
+import { SkippedReleasesPage } from './pages/SkippedReleasesPage'
 import { UpgradesPage } from './pages/UpgradesPage'
 import { WantedPage } from './pages/WantedPage'
 import { NowPlayingPage } from './pages/NowPlayingPage'
@@ -88,6 +90,8 @@ function AdminApp() {
           <Route path="artists/:id" element={<ArtistPage />} />
           <Route path="albums/:id" element={<AlbumPage />} />
           <Route path="wanted" element={<WantedPage />} />
+          <Route path="skipped" element={<SkippedReleasesPage />} />
+          <Route path="pending-artists" element={<PendingArtistsPage />} />
           <Route path="upgrades" element={<UpgradesPage />} />
           <Route path="queue" element={<QueuePage />} />
           <Route path="now-playing" element={<NowPlayingPage />} />

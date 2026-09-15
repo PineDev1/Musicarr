@@ -103,6 +103,14 @@ def health(db: Session = Depends(get_db)):
         .select_from(DownloadJob)
         .where(DownloadJob.state.in_(ACTIVE_JOB_STATES))
     ) or 0
+    pending_artists = db.scalar(
+        select(func.count()).select_from(Artist).where(Artist.status == "pending")
+    ) or 0
+    skipped_albums = db.scalar(
+        select(func.count())
+        .select_from(Album)
+        .where(Album.status == "skipped", Album.dismissed.is_(False))
+    ) or 0
     return HealthOut(
         status="ok" if path_is_writable(lib) else "degraded",
         active_provider=active,
@@ -119,4 +127,6 @@ def health(db: Session = Depends(get_db)):
         monitored_artists=artists,
         wanted_albums=wanted,
         queue_size=queue,
+        pending_artists=pending_artists,
+        skipped_albums=skipped_albums,
     )
