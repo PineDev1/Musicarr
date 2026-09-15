@@ -270,6 +270,39 @@ def _unique_provider_album_id(
     return f"collab:{artist_id}:{pid}"
 
 
+def _dedupe_pid_for_write(
+    db: Session,
+    *,
+    provider_name: str,
+    pid: str,
+    artist_id: int,
+    current_album_id: int,
+) -> str:
+    """Re-check right before actually writing `pid` to an existing row's
+    provider_id. `_unique_provider_album_id` can only compare against the
+    artist_id it's told, not the specific row it'll end up written to — so a
+    same-artist duplicate row already sitting on this pid (an older
+    duplicate, or one this same sync run just updated moments ago) can slip
+    through it. This catches that right before the write, excluding the row
+    being written to itself.
+    """
+    for obj in list(db.new) + list(db.dirty) + list(db.identity_map.values()):
+        if not isinstance(obj, Album) or obj.id == current_album_id:
+            continue
+        if obj.provider == provider_name and str(obj.provider_id) == pid:
+            return f"collab:{artist_id}:{effective_provider_album_id(pid)}"
+    conflict = db.scalar(
+        select(Album).where(
+            Album.provider == provider_name,
+            Album.provider_id == pid,
+            Album.id != current_album_id,
+        )
+    )
+    if conflict is not None:
+        return f"collab:{artist_id}:{effective_provider_album_id(pid)}"
+    return pid
+
+
 def _upsert_mb_album(
     db: Session,
     *,
@@ -338,8 +371,15 @@ def _upsert_mb_album(
         if collaborator_names is not None:
             _set_album_collaborators(album, collaborator_names, primary_name=artist.name)
         if provider_hit and (album.provider_id or "").startswith("mb:"):
-            album.provider_id = pid
-            album.deezer_id = _legacy_id(provider_name, pid)
+            safe_pid = _dedupe_pid_for_write(
+                db,
+                provider_name=provider_name,
+                pid=pid,
+                artist_id=artist.id,
+                current_album_id=album.id,
+            )
+            album.provider_id = safe_pid
+            album.deezer_id = _legacy_id(provider_name, safe_pid)
         return album
 
     if album is None:
@@ -367,7 +407,17 @@ def _upsert_mb_album(
     if provider_hit:
         from sqlalchemy import inspect as sa_inspect
 
-        conflict = existing_by_pid.get(pid)
+        # Live re-check rather than trusting existing_by_pid: that dict is a
+        # snapshot from the start of the sync and isn't updated by every
+        # write, so a same-artist duplicate row another branch just touched
+        # moments ago could otherwise slip through here.
+        conflict = existing_by_pid.get(pid) or db.scalar(
+            select(Album).where(
+                Album.provider == provider_name,
+                Album.provider_id == pid,
+                Album.id != album.id,
+            )
+        )
         if conflict is not None and conflict is not album:
             if (conflict.status or "") == "downloaded":
                 # Keep the downloaded row; this album gets a disambiguated id.
@@ -376,6 +426,12 @@ def _upsert_mb_album(
                 insp = sa_inspect(conflict)
                 if insp.persistent:
                     db.delete(conflict)
+                    # Without an explicit flush here, SQLAlchemy doesn't
+                    # guarantee the DELETE executes before the UPDATE below
+                    # reuses the same (provider, provider_id) — both hitting
+                    # the DB in the same flush can trip the unique
+                    # constraint even though the end state is valid.
+                    db.flush()
                 elif insp.pending:
                     db.expunge(conflict)
                 existing_by_pid.pop(conflict.provider_id, None)
@@ -594,12 +650,18 @@ def _sync_from_musicbrainz(
         pid = str(raw.provider_id)
         if pid in matched_provider_ids:
             continue
-        album = existing_by_pid.get(pid)
+        album = existing_by_pid.get(pid) or existing_by_pid.get(f"collab:{artist.id}:{pid}")
         title_l = (raw.title or (album.title if album else "") or "").lower()
         looks_collab = "feat" in title_l or " ft." in title_l or " ft " in title_l
+        already_downloaded = bool(album and (album.status or "") == "downloaded")
         if looks_collab and collab_searches < max_collab_searches:
-            # Skip MB search for types this artist isn't monitoring (usually singles).
-            if not album_type_allowed_for_artist(db, artist, raw.album_type or "single"):
+            # Skip MB search for types this artist isn't monitoring (usually
+            # singles) — unless the album is already downloaded, in which case
+            # we're only correcting its collab credit metadata, not deciding
+            # whether to add it, so the type filter shouldn't block that.
+            if not already_downloaded and not album_type_allowed_for_artist(
+                db, artist, raw.album_type or "single"
+            ):
                 pass
             else:
                 collab_searches += 1

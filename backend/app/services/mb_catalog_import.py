@@ -684,6 +684,32 @@ def build_fixture_catalog(db_path: Path) -> None:
             "INSERT INTO artist_rg(artist_id, release_group_id) VALUES (?, ?)",
             [(1, 100), (2, 100)],
         )
+        # A second, differently-MBID'd "Ed Sheeran" row, and an unrelated
+        # decoy release-group that also happens to be titled "Life Goes On"
+        # (a common title) credited to a third artist — mirrors a real
+        # MusicBrainz duplicate-artist-MBID situation, where the artist
+        # Musicarr actually resolved isn't the one linked via artist_rg to
+        # the real collab, and a same-titled unrelated release-group exists
+        # to accidentally match against.
+        con.execute(
+            "INSERT INTO artist(id, gid, name) VALUES (?, ?, ?)",
+            (6, "dddddddd-1111-2222-3333-444444444444", "Ed Sheeran"),
+        )
+        con.execute(
+            "INSERT INTO artist(id, gid, name) VALUES (?, ?, ?)",
+            (7, "eeeeeeee-1111-2222-3333-444444444444", "Some Other Band"),
+        )
+        con.execute("INSERT INTO artist_credit(id, name) VALUES (?, ?)", (13, "Some Other Band"))
+        con.execute(
+            "INSERT INTO artist_credit_name(artist_credit, position, artist_id, name, join_phrase) VALUES (?, ?, ?, ?, ?)",
+            (13, 0, 7, "Some Other Band", ""),
+        )
+        con.execute(
+            "INSERT INTO release_group(id, gid, name, artist_credit, primary_type_id) VALUES (?, ?, ?, ?, ?)",
+            (104, "44444444-5555-6666-7777-888888888888", "Life Goes On", 13, 1),
+        )
+        con.execute("INSERT INTO release_group_meta(id, first_release_year) VALUES (?, ?)", (104, 1999))
+        con.execute("INSERT INTO artist_rg(artist_id, release_group_id) VALUES (?, ?)", (7, 104))
         # Solo Luke album
         con.execute("INSERT INTO artist_credit(id, name) VALUES (?, ?)", (11, "Luke Combs"))
         con.execute(

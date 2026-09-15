@@ -437,15 +437,17 @@ def search_release_group_for_artist(
         ratio = SequenceMatcher(None, clean, cand).ratio()
         if cand == clean or clean in cand or cand in clean:
             ratio = 1.0
+        if rg.credits and aid not in credit_mbids:
+            # This release-group has known credits and our artist isn't one
+            # of them — never a valid match, regardless of title similarity
+            # (common titles like "Life Goes On" have many unrelated hits).
+            continue
         if clean_strict and normalize_title_strict(rg.title) == clean_strict:
             ratio += 0.1
         score = int(row.get("score") or 0)
         combined = ratio + (0.05 if score >= 90 else 0)
         if aid in credit_mbids:
             combined += 0.15
-        elif rg.credits and aid not in credit_mbids:
-            # Wide search hit that doesn't credit this artist at all
-            combined -= 0.35
         if combined > best_score:
             best_score = combined
             best = rg

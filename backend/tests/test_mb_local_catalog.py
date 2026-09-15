@@ -117,6 +117,34 @@ def test_search_release_group_distinguishes_editions(fixture_catalog):
     assert deluxe.title == "Renaissance (Deluxe Edition)"
 
 
+def test_search_release_group_finds_collab_despite_duplicate_artist_mbid(fixture_catalog):
+    """Regression test: MusicBrainz can have two different MBIDs for the same
+    real artist. If the artist Musicarr resolved to isn't the one linked via
+    artist_rg to the real collab release-group, the wide-search fallback must
+    still find it by matching the credited artist's *name* — and must never
+    fall back to an unrelated same-titled release-group (here, a decoy also
+    called "Life Goes On" credited to a different artist).
+    """
+    other_ed_sheeran_mbid = "dddddddd-1111-2222-3333-444444444444"
+    hit = mb_local.search_release_group_for_artist(
+        "Life Goes On (feat. Luke Combs)", other_ed_sheeran_mbid
+    )
+    assert hit is not None
+    assert hit.mbid == "befae816-06e2-426d-aa51-6fcc6d93fca6"
+    assert {c.name for c in hit.credits} == {"Ed Sheeran", "Luke Combs"}
+
+
+def test_search_release_group_rejects_uncredited_same_title(fixture_catalog):
+    """An artist genuinely unrelated to a same-titled release-group must not
+    match it just because the bare title lines up."""
+    other_ed_sheeran_mbid = "dddddddd-1111-2222-3333-444444444444"
+    hit = mb_local.search_release_group_for_artist("Life Goes On", other_ed_sheeran_mbid)
+    # Either no match, or a match that's genuinely credited to Ed Sheeran —
+    # never the "Some Other Band" decoy release-group.
+    if hit is not None:
+        assert "Ed Sheeran" in {c.name for c in hit.credits}
+
+
 def test_job_idle_shape():
     job = mb_catalog_import.get_job()
     assert job.state in {"idle", "running", "done", "error"}

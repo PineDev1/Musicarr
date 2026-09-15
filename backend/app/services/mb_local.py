@@ -16,7 +16,7 @@ from app.services.musicbrainz import (
     normalize_title,
     normalize_title_strict,
 )
-from app.services.text_match import fold_diacritics
+from app.services.text_match import fold_diacritics, normalize_key
 
 logger = logging.getLogger("musicarr.mb_local")
 
@@ -316,8 +316,13 @@ def search_release_group_for_artist(
     except FileNotFoundError:
         return None
 
-    artist = con.execute("SELECT id FROM artist WHERE gid = ?", (aid,)).fetchone()
+    artist = con.execute("SELECT id, name FROM artist WHERE gid = ?", (aid,)).fetchone()
     artist_id = int(artist["id"]) if artist else None
+    # MusicBrainz occasionally has more than one artist entry for the same
+    # real person (e.g. two distinct "Ed Sheeran" MBIDs); a release-group's
+    # credits might name our artist without crediting the exact MBID we
+    # resolved to. Fall back to a name match so that still counts.
+    artist_name_key = normalize_key(str(artist["name"])) if artist else ""
 
     def _query(name_clause: str, like_value: str) -> list[sqlite3.Row]:
         # When the artist is known, join from artist_rg (indexed on artist_id)
@@ -357,7 +362,12 @@ def search_release_group_for_artist(
         # so only pay for it when the cheap native scan found nothing.
         like_folded = f"%{_unaccent_lower(search_title)}%"
         rows = _query("unaccent_lower(rg.name)", like_folded)
-    # Wide search if arid-scoped miss and title looks like a collab
+    # Wide search if arid-scoped miss and title looks like a collab. This is a
+    # last resort (e.g. the target artist has a second, differently-credited
+    # MBID in MusicBrainz — see artist_name_key above), so it's worth paying
+    # for a much wider candidate pool: common titles like "Life Goes On" have
+    # 80+ unrelated release-groups, and the real match won't necessarily be
+    # among the first 20 SQLite happens to return.
     if not rows and re.search(r"feat\.?|ft\.?|featuring", title or "", re.I):
         rows = con.execute(
             """
@@ -369,7 +379,7 @@ def search_release_group_for_artist(
             WHERE rg.name LIKE ?
             LIMIT ?
             """,
-            (like, max(limit * 4, 20)),
+            (like, 300),
         ).fetchall()
 
     best: ReleaseGroup | None = None
@@ -388,10 +398,16 @@ def search_release_group_for_artist(
         if clean_strict and normalize_title_strict(rg.title) == clean_strict:
             ratio += 0.1
         credit_mbids = {c.mbid for c in rg.credits}
-        if aid in credit_mbids:
+        credit_name_keys = {normalize_key(c.name) for c in rg.credits}
+        credited = aid in credit_mbids or (artist_name_key and artist_name_key in credit_name_keys)
+        if rg.credits and not credited:
+            # This release-group has known credits and none of them are our
+            # artist (by id or name) — never a valid match, regardless of how
+            # well the bare title happens to line up (e.g. many different
+            # artists have released songs called "Life Goes On").
+            continue
+        if credited:
             ratio += 0.15
-        elif rg.credits and aid not in credit_mbids:
-            ratio -= 0.35
         if ratio > best_score:
             best_score = ratio
             best = rg
