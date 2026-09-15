@@ -24,6 +24,7 @@ export function ArtistPage() {
   const qc = useQueryClient()
   const toast = useToast()
   const [liveJobs, setLiveJobs] = useState<LiveJob[]>([])
+  const [selected, setSelected] = useState<Set<number>>(new Set())
   const { data, isLoading, error } = useQuery({
     queryKey: ['artist', artistId],
     queryFn: () => api.artist(artistId),
@@ -168,6 +169,26 @@ export function ArtistPage() {
     mutationFn: (jobId: number) => api.cancelJob(jobId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['queue'] }),
   })
+  const bulkDownload = useMutation({
+    mutationFn: () => api.bulkDownloadAlbums([...selected]),
+    onSuccess: (res) => {
+      toast.push(`Queued ${res.queued} album(s)`, 'ok')
+      setSelected(new Set())
+      qc.invalidateQueries({ queryKey: ['artist', artistId] })
+      qc.invalidateQueries({ queryKey: ['queue'] })
+      qc.invalidateQueries({ queryKey: ['health'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  const bulkSkip = useMutation({
+    mutationFn: () => api.bulkSkipAlbums([...selected]),
+    onSuccess: (res) => {
+      toast.push(`Skipped ${res.skipped} album(s)`, 'ok')
+      setSelected(new Set())
+      qc.invalidateQueries({ queryKey: ['artist', artistId] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
 
   if (isLoading) return <p className="muted">Loading…</p>
   if (error) return <p className="error">{(error as Error).message}</p>
@@ -182,6 +203,38 @@ export function ArtistPage() {
     data.missing_count ??
     (data.albums || []).filter((a) => a.status === 'missing').length
   const related = data.related_artists || []
+
+  const jobForRow = (album: (typeof data.albums)[number]) => jobForAlbum(album.id, album.title)
+  const selectableIds = data.albums
+    .filter((a) => {
+      const job = jobForRow(a)
+      const downloading = job && (job.state === 'queued' || job.state === 'running')
+      return !downloading && a.status !== 'downloaded' && a.status !== 'missing'
+    })
+    .map((a) => a.id)
+  const allSelectableSelected =
+    selectableIds.length > 0 && selectableIds.every((id) => selected.has(id))
+
+  function toggleOne(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleAllSelectable() {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (allSelectableSelected) {
+        for (const id of selectableIds) next.delete(id)
+      } else {
+        for (const id of selectableIds) next.add(id)
+      }
+      return next
+    })
+  }
 
   return (
     <div>
@@ -300,6 +353,25 @@ export function ArtistPage() {
         </button>
       </div>
 
+      {selectableIds.length > 0 && (
+        <div className="toolbar" style={{ flexWrap: 'wrap' }}>
+          <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="checkbox" checked={allSelectableSelected} onChange={toggleAllSelectable} />
+            Select all
+          </label>
+          {selected.size > 0 && (
+            <>
+              <button className="btn" onClick={() => bulkDownload.mutate()} disabled={bulkDownload.isPending}>
+                Download selected ({selected.size})
+              </button>
+              <button className="btn ghost" onClick={() => bulkSkip.mutate()} disabled={bulkSkip.isPending}>
+                Skip selected
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       <div className="album-list">
         {data.albums.map((album) => {
           const isDownloaded = album.status === 'downloaded'
@@ -307,8 +379,18 @@ export function ArtistPage() {
           const job = jobForAlbum(album.id, album.title)
           const downloading = job && (job.state === 'queued' || job.state === 'running')
           const failed = job && job.state === 'failed'
+          const selectable = !downloading && album.status !== 'downloaded' && album.status !== 'missing'
           return (
             <div key={album.id} className="album-row">
+              {selectable && (
+                <label style={{ display: 'flex', alignItems: 'center', marginRight: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(album.id)}
+                    onChange={() => toggleOne(album.id)}
+                  />
+                </label>
+              )}
               {album.cover_url ? (
                 <img src={album.cover_url} alt="" />
               ) : (

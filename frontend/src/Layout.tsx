@@ -9,6 +9,7 @@ const links = [
   { to: '/wanted', label: 'Wanted' },
   { to: '/upgrades', label: 'Upgrades' },
   { to: '/queue', label: 'Queue' },
+  { to: '/import-review', label: 'Import Review' },
   { to: '/now-playing', label: 'Now Playing' },
   { to: '/activity', label: 'Activity' },
   { to: '/settings', label: 'Settings' },
@@ -18,6 +19,14 @@ export function Layout() {
   const qc = useQueryClient()
   const health = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 15000 })
   const auth = useQuery({ queryKey: ['auth-status'], queryFn: api.authStatus })
+  // suggest=false keeps this a cheap DB-only count, safe to poll in the nav.
+  const importReview = useQuery({
+    queryKey: ['import-review-count'],
+    queryFn: () => api.importReview(false),
+    refetchInterval: 60000,
+  })
+  const importReviewCount =
+    (importReview.data?.local_artists.length || 0) + (importReview.data?.weak_albums.length || 0)
   const location = useLocation()
   const provider = health.data?.active_provider || 'deezer'
 
@@ -47,6 +56,7 @@ export function Layout() {
               {l.to === '/wanted' && health.data && health.data.wanted_albums > 0
                 ? ` (${health.data.wanted_albums})`
                 : ''}
+              {l.to === '/import-review' && importReviewCount > 0 ? ` (${importReviewCount})` : ''}
             </NavLink>
           ))}
         </nav>
