@@ -256,6 +256,25 @@ def _clean_collab_title(title: str, primary_name: str) -> str:
     return t or title
 
 
+def _id_taken_by_other_artist(
+    db: Session, *, provider_name: str, candidate: str, artist_id: int
+) -> bool:
+    """True if `candidate` is already in use — by session objects not yet
+    flushed, or in the DB — by a row that ISN'T this exact artist. A prior
+    merge/reassignment can leave a "collab:{artist_id}:..." string claimed by
+    a row whose artist_id no longer matches the id embedded in it, so the
+    embedded id alone can't be trusted as proof of freshness."""
+    for obj in list(db.new) + list(db.dirty) + list(db.identity_map.values()):
+        if not isinstance(obj, Album):
+            continue
+        if obj.provider == provider_name and str(obj.provider_id) == candidate:
+            return obj.artist_id != artist_id
+    existing = db.scalar(
+        select(Album).where(Album.provider == provider_name, Album.provider_id == candidate)
+    )
+    return existing is not None and existing.artist_id != artist_id
+
+
 def _unique_provider_album_id(
     db: Session,
     *,
@@ -265,20 +284,24 @@ def _unique_provider_album_id(
 ) -> str:
     """Avoid global (provider, provider_id) clashes when two artists share a collab release."""
     pid = str(provider_id)
-    # Unflushed session objects are invisible to SELECT — check identity map first.
-    for obj in list(db.new) + list(db.dirty) + list(db.identity_map.values()):
-        if not isinstance(obj, Album):
-            continue
-        if obj.provider == provider_name and str(obj.provider_id) == pid:
-            if obj.artist_id == artist_id:
-                return pid
-            return f"collab:{artist_id}:{pid}"
-    existing = db.scalar(
-        select(Album).where(Album.provider == provider_name, Album.provider_id == pid)
-    )
-    if existing is None or existing.artist_id == artist_id:
+    if not _id_taken_by_other_artist(
+        db, provider_name=provider_name, candidate=pid, artist_id=artist_id
+    ):
         return pid
-    return f"collab:{artist_id}:{pid}"
+    # Someone else owns the raw id — disambiguate for this artist. The
+    # embedded artist_id makes the candidate collision-free in the common
+    # case, but a stale row from an earlier merge/reassignment can already
+    # be sitting on that exact string under a different artist_id today, so
+    # verify the candidate itself before trusting it — and keep extending it
+    # deterministically until it's actually free.
+    candidate = f"collab:{artist_id}:{pid}"
+    suffix = 2
+    while _id_taken_by_other_artist(
+        db, provider_name=provider_name, candidate=candidate, artist_id=artist_id
+    ):
+        candidate = f"collab:{artist_id}:{pid}:{suffix}"
+        suffix += 1
+    return candidate
 
 
 def _dedupe_pid_for_write(
@@ -519,6 +542,7 @@ def _artist_still_exists(db: Session, artist_id: int | None) -> bool:
 
 def _safe_commit_artist_sync(db: Session, artist: Artist) -> bool:
     """Commit album sync; abort cleanly if the artist was deleted mid-sync."""
+    from sqlalchemy.exc import IntegrityError
     from sqlalchemy.orm.exc import ObjectDeletedError, StaleDataError
 
     if not _artist_still_exists(db, getattr(artist, "id", None)):
@@ -530,6 +554,18 @@ def _safe_commit_artist_sync(db: Session, artist: Artist) -> bool:
         return True
     except (StaleDataError, ObjectDeletedError):
         db.rollback()
+        return False
+    except IntegrityError as exc:
+        # Last-resort safety net: some still-untraced duplicate provider_id
+        # slipped through the dedupe checks upstream. Don't crash the whole
+        # sync (and the request/monitor tick calling it) over one bad
+        # release-group — drop the pending changes and log it for follow-up.
+        db.rollback()
+        add_history(
+            db,
+            "sync_error",
+            f"Album sync hit a duplicate-id conflict for {artist.name}: {exc}",
+        )
         return False
 
 
