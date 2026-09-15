@@ -77,7 +77,7 @@ export function ImportListsPage() {
       </div>
 
       {creating && (
-        <div className="album-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+        <div className="album-row" style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
           <div className="field" style={{ margin: 0 }}>
             <label>Name</label>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Favorites" />
@@ -126,7 +126,11 @@ export function ImportListsPage() {
         {(data || []).map((list: ImportList) => {
           const names = list.names_raw.split('\n').filter((n) => n.trim()).length
           return (
-            <div key={list.id} className="album-row">
+            <div
+              key={list.id}
+              className="album-row"
+              style={{ gridTemplateColumns: '1fr auto' }}
+            >
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div>
                   <strong>{list.name}</strong>{' '}
