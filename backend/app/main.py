@@ -8,11 +8,23 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
-from app.api import albums, artists, auth, backup, events, musicbrainz_catalog, ops, player, settings
+from app.api import (
+    albums,
+    artists,
+    auth,
+    backup,
+    events,
+    import_lists,
+    musicbrainz_catalog,
+    ops,
+    player,
+    settings,
+)
 from app.core.database import SessionLocal, ensure_dirs, init_db
 from app.services import app_auth, player_auth
 from app.services.cors_origins import LOCAL_CORS_ORIGINS, origin_is_allowed
 from app.services.download_queue import download_queue
+from app.services.import_lists import import_list_runner
 from app.services.monitor import release_monitor
 from app.services.settings_service import ensure_settings
 from sqlalchemy import select
@@ -41,9 +53,11 @@ async def lifespan(_: FastAPI):
         db.close()
     download_queue.start()
     release_monitor.start()
+    import_list_runner.start()
     yield
     download_queue.stop()
     release_monitor.stop()
+    import_list_runner.stop()
 
 
 app = FastAPI(title="Musicarr", version="0.1.0", lifespan=lifespan)
@@ -161,6 +175,7 @@ app.include_router(events.router, prefix="/api")
 app.include_router(player.router, prefix="/api")
 app.include_router(musicbrainz_catalog.router, prefix="/api")
 app.include_router(backup.router, prefix="/api")
+app.include_router(import_lists.router, prefix="/api")
 
 
 @app.get("/api")

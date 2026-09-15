@@ -10,6 +10,7 @@ const links = [
   { to: '/upgrades', label: 'Upgrades' },
   { to: '/queue', label: 'Queue' },
   { to: '/import-review', label: 'Import Review' },
+  { to: '/import-lists', label: 'Import Lists' },
   { to: '/now-playing', label: 'Now Playing' },
   { to: '/activity', label: 'Activity' },
   { to: '/settings', label: 'Settings' },

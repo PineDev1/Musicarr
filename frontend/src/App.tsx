@@ -8,6 +8,7 @@ import { ActivityPage } from './pages/ActivityPage'
 import { AddArtistPage } from './pages/AddArtistPage'
 import { AlbumPage } from './pages/AlbumPage'
 import { ArtistPage } from './pages/ArtistPage'
+import { ImportListsPage } from './pages/ImportListsPage'
 import { ImportReviewPage } from './pages/ImportReviewPage'
 import { LibraryPage } from './pages/LibraryPage'
 import { LoginPage } from './pages/LoginPage'
@@ -93,6 +94,7 @@ function AdminApp() {
           <Route path="activity" element={<ActivityPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="import-review" element={<ImportReviewPage />} />
+          <Route path="import-lists" element={<ImportListsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       )}

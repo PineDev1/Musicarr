@@ -244,6 +244,38 @@ class ArtistPatch(BaseModel):
     include_singles: bool | None = None
 
 
+class ImportListCreate(BaseModel):
+    name: str
+    names_raw: str
+    interval_minutes: int = Field(default=720, ge=15, le=10080)
+    enabled: bool = True
+
+
+class ImportListUpdate(BaseModel):
+    name: str | None = None
+    names_raw: str | None = None
+    interval_minutes: int | None = Field(default=None, ge=15, le=10080)
+    enabled: bool | None = None
+
+
+class ImportListOut(BaseModel):
+    id: int
+    name: str
+    names_raw: str
+    interval_minutes: int
+    enabled: bool
+    last_run_at: datetime | None
+    last_result: str
+    created_at: datetime
+
+
+class ImportListRunResult(BaseModel):
+    added: list[str]
+    skipped: list[str]
+    errors: list[str]
+    summary: str
+
+
 class AlbumPatch(BaseModel):
     monitored: bool | None = None
     status: AlbumStatus | None = None

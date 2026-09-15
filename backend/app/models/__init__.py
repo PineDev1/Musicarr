@@ -211,6 +211,19 @@ class HistoryEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ImportList(Base):
+    __tablename__ = "import_lists"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), default="")
+    names_raw: Mapped[str] = mapped_column(Text, default="")
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=720)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_result: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class PlayerUser(Base):
     __tablename__ = "player_users"
 

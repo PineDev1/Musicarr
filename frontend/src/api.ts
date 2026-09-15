@@ -218,6 +218,24 @@ export type RestoreJob = {
   finished_at: string
 }
 
+export type ImportList = {
+  id: number
+  name: string
+  names_raw: string
+  interval_minutes: number
+  enabled: boolean
+  last_run_at: string | null
+  last_result: string
+  created_at: string
+}
+
+export type ImportListRunResult = {
+  added: string[]
+  skipped: string[]
+  errors: string[]
+  summary: string
+}
+
 export type HistoryEvent = {
   id: number
   event_type: string
@@ -426,6 +444,15 @@ export const api = {
     return res.json() as Promise<RestoreJob>
   },
   restoreJob: () => request<RestoreJob>('/backup/restore/job'),
+  importLists: () => request<ImportList[]>('/import-lists'),
+  createImportList: (body: { name: string; names_raw: string; interval_minutes: number; enabled: boolean }) =>
+    request<ImportList>('/import-lists', { method: 'POST', body: JSON.stringify(body) }),
+  updateImportList: (id: number, body: Partial<Pick<ImportList, 'name' | 'names_raw' | 'interval_minutes' | 'enabled'>>) =>
+    request<ImportList>(`/import-lists/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteImportList: (id: number) =>
+    request<void>(`/import-lists/${id}`, { method: 'DELETE' }),
+  runImportList: (id: number) =>
+    request<ImportListRunResult>(`/import-lists/${id}/run`, { method: 'POST' }),
   runMonitor: () =>
     request<{ artists_checked: number; new_albums: number }>('/monitor/run', {
       method: 'POST',
