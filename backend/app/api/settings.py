@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models import Album, Artist, DownloadJob
-from app.models.schemas import HealthOut, SettingsOut, SettingsUpdate
+from app.models.schemas import HealthOut, NotifyTestRequest, SettingsOut, SettingsUpdate
 from app.services import app_auth
 from app.services.download_queue import ACTIVE_JOB_STATES
 from app.services.providers import get_provider
@@ -52,14 +52,25 @@ def put_settings(
 
 
 @router.post("/settings/notify-test")
-def notify_test(db: Session = Depends(get_db)):
+def notify_test(payload: NotifyTestRequest | None = None, db: Session = Depends(get_db)):
     from app.services.notifications import send_test_notification
 
-    row = ensure_settings(db)
-    if not (getattr(row, "notify_webhook_url", None) or "").strip():
+    payload = payload or NotifyTestRequest()
+    # Prefer whatever's currently in the form (even if unsaved) over the persisted value,
+    # so "Send test notification" actually tests what the user is looking at.
+    url = (payload.notify_webhook_url or "").strip()
+    if not url:
+        row = ensure_settings(db)
+        url = (getattr(row, "notify_webhook_url", None) or "").strip()
+    if not url:
         raise HTTPException(status_code=400, detail="Set a notification URL first")
     try:
-        send_test_notification(db)
+        send_test_notification(
+            db,
+            webhook_url=payload.notify_webhook_url,
+            channel=payload.notify_channel,
+            token=payload.notify_token,
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"ok": True}

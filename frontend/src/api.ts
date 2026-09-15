@@ -246,7 +246,8 @@ export const api = {
   settings: (validate = false) => request<Settings>(`/settings?validate=${validate}`),
   updateSettings: (body: Record<string, unknown>) =>
     request<Settings>('/settings', { method: 'PUT', body: JSON.stringify(body) }),
-  notifyTest: () => request<{ ok: boolean }>('/settings/notify-test', { method: 'POST' }),
+  notifyTest: (body: { notify_webhook_url?: string; notify_channel?: string; notify_token?: string } = {}) =>
+    request<{ ok: boolean }>('/settings/notify-test', { method: 'POST', body: JSON.stringify(body) }),
   logout: (provider: string) =>
     request<Settings>(`/auth/${provider}/logout`, { method: 'POST' }),
   tidalDeviceStart: () =>

@@ -75,7 +75,7 @@ def migrate_schema() -> None:
         "official_releases_only": "BOOLEAN DEFAULT 1",
         "mb_catalog_mode": "VARCHAR(32) DEFAULT 'local'",
         "notify_webhook_url": "TEXT DEFAULT ''",
-        "notify_channel": "VARCHAR(32) DEFAULT 'discord'",
+        "notify_channel": "VARCHAR(32) DEFAULT 'custom'",
         "notify_token": "TEXT DEFAULT ''",
         "notify_on_complete": "BOOLEAN DEFAULT 1",
         "notify_on_failure": "BOOLEAN DEFAULT 1",

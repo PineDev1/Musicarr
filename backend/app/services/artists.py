@@ -96,7 +96,7 @@ def merge_artists(db: Session, artist_ids: list[int], *, preferred_id: int | Non
 
 
 def collision_groups(db: Session) -> list[list[Artist]]:
-    """Groups of artists that share a normalized display name (2+ each)."""
+    """Groups of artists that share a normalized display name (2+ each) and aren't already merged."""
     artists = list(db.scalars(select(Artist).order_by(Artist.name, Artist.id)).all())
     by_name: dict[str, list[Artist]] = {}
     for artist in artists:
@@ -104,7 +104,16 @@ def collision_groups(db: Session) -> list[list[Artist]]:
         if not key:
             continue
         by_name.setdefault(key, []).append(artist)
-    return [rows for rows in by_name.values() if len(rows) > 1]
+    groups: list[list[Artist]] = []
+    for rows in by_name.values():
+        if len(rows) < 2:
+            continue
+        # Rows already sharing a link_group_id are treated as one merged entity;
+        # only flag the group if distinct (unmerged) artists remain.
+        distinct = {(getattr(r, "link_group_id", None) or "").strip() or f"id:{r.id}" for r in rows}
+        if len(distinct) > 1:
+            groups.append(rows)
+    return groups
 
 
 def ensure_musicbrainz_identity(db: Session, artist: Artist) -> str | None:

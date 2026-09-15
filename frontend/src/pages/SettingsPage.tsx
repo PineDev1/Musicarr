@@ -1045,7 +1045,14 @@ export function SettingsPage() {
               <button
                 type="button"
                 className="btn secondary"
-                onClick={() => notifyTest.mutate()}
+                onClick={() =>
+                  notifyTest.mutate({
+                    notify_webhook_url: notifyUrl,
+                    notify_channel: notifyChannel,
+                    // Blank means "keep the saved token" (it's write-only once set).
+                    ...(notifyToken.trim() ? { notify_token: notifyToken.trim() } : {}),
+                  })
+                }
                 disabled={notifyTest.isPending || !notifyUrl.trim()}
               >
                 {notifyTest.isPending ? 'Sending…' : 'Send test notification'}

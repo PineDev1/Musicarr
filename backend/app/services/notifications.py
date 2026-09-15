@@ -44,17 +44,28 @@ def _post_form(url: str, fields: dict[str, str]) -> None:
         resp.read()
 
 
-def send_notification(db: Session, title: str, message: str, *, kind: str = "info") -> None:
+def send_notification(
+    db: Session,
+    title: str,
+    message: str,
+    *,
+    kind: str = "info",
+    webhook_url: str | None = None,
+    channel: str | None = None,
+    token: str | None = None,
+) -> None:
     settings = ensure_settings(db)
-    url = (getattr(settings, "notify_webhook_url", None) or "").strip()
+    # Overrides let a caller (e.g. "send test notification") try unsaved form
+    # values instead of only what's already persisted.
+    url = (webhook_url if webhook_url is not None else getattr(settings, "notify_webhook_url", None) or "").strip()
     if not url:
         return
     if kind == "complete" and not getattr(settings, "notify_on_complete", True):
         return
     if kind in {"failure", "auth"} and not getattr(settings, "notify_on_failure", True):
         return
-    channel = (getattr(settings, "notify_channel", None) or "discord").strip().lower() or "discord"
-    token = (getattr(settings, "notify_token", None) or "").strip()
+    channel = (channel if channel is not None else getattr(settings, "notify_channel", None) or "custom").strip().lower() or "custom"
+    token = (token if token is not None else getattr(settings, "notify_token", None) or "").strip()
     content = f"{title}\n{message}"
     try:
         if channel == "discord":
@@ -86,7 +97,9 @@ def send_notification(db: Session, title: str, message: str, *, kind: str = "inf
             )
         elif channel == "ntfy":
             # URL is the topic endpoint, e.g. https://ntfy.sh/mytopic
-            headers = {"Title": title[:250], "Tags": "music"}
+            # HTTP headers must be latin-1; percent-encode the title so non-ASCII
+            # artist/album names (CJK, Cyrillic, emoji, accents) can't crash the send.
+            headers = {"Title": urllib.parse.quote(title[:250]), "Tags": "music"}
             if token:
                 headers["Authorization"] = f"Bearer {token}"
             req = urllib.request.Request(
@@ -123,14 +136,23 @@ def send_notification(db: Session, title: str, message: str, *, kind: str = "inf
                     "kind": kind,
                 },
             )
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, UnicodeError, ValueError) as exc:
         logger.warning("Webhook notify failed: %s", exc)
 
 
-def send_test_notification(db: Session) -> None:
+def send_test_notification(
+    db: Session,
+    *,
+    webhook_url: str | None = None,
+    channel: str | None = None,
+    token: str | None = None,
+) -> None:
     send_notification(
         db,
         "Musicarr test",
         "Notifications are working.",
         kind="info",
+        webhook_url=webhook_url,
+        channel=channel,
+        token=token,
     )

@@ -106,3 +106,63 @@ def test_upsert_track_unique_pid_across_albums(db):
     db.commit()
     assert created.provider_id != clash
     assert created.album_id == album.id
+
+
+def test_upsert_track_rehomes_retagged_file(db):
+    """A file retagged to a new album must move, not stay stuck on the old one."""
+    artist = _artist(db, name="Artist", provider="qobuz", provider_id="art2")
+    old_album = Album(
+        provider="qobuz",
+        provider_id="old-album",
+        deezer_id=_legacy_id("qobuz", "old-album"),
+        artist_id=artist.id,
+        title="Old Album",
+        album_type="album",
+        track_count=1,
+        monitored=True,
+        status="downloaded",
+    )
+    new_album = Album(
+        provider="qobuz",
+        provider_id="new-album",
+        deezer_id=_legacy_id("qobuz", "new-album"),
+        artist_id=artist.id,
+        title="New Album",
+        album_type="album",
+        track_count=1,
+        monitored=True,
+        status="downloaded",
+    )
+    db.add_all([old_album, new_album])
+    db.commit()
+    db.refresh(old_album)
+    db.refresh(new_album)
+
+    path = "/music/artist/01 - Track.flac"
+    first = _upsert_track(
+        db,
+        old_album,
+        title="Track",
+        track_no=1,
+        disc_no=1,
+        isrc=None,
+        path=path,
+    )
+    db.commit()
+    assert first.album_id == old_album.id
+
+    # User retags the file (same path) to belong to a different album, then re-imports.
+    moved = _upsert_track(
+        db,
+        new_album,
+        title="Track (Retagged)",
+        track_no=2,
+        disc_no=1,
+        isrc=None,
+        path=path,
+    )
+    db.commit()
+    assert moved.id == first.id
+    assert moved.album_id == new_album.id
+    assert moved.title == "Track (Retagged)"
+    assert moved.track_no == 2

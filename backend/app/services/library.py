@@ -344,12 +344,25 @@ def _upsert_track(
 ) -> Track:
     # Same file imported twice (or rematch): attach to existing row by path first.
     path_key = str(path)
-    for obj in list(db.new) + list(db.dirty) + list(db.identity_map.values()):
-        if isinstance(obj, Track) and obj.path == path_key:
-            return obj
-    by_path = db.scalar(select(Track).where(Track.path == path_key))
-    if by_path is not None:
-        return by_path
+    existing = next(
+        (
+            obj
+            for obj in list(db.new) + list(db.dirty) + list(db.identity_map.values())
+            if isinstance(obj, Track) and obj.path == path_key
+        ),
+        None,
+    )
+    if existing is None:
+        existing = db.scalar(select(Track).where(Track.path == path_key))
+    if existing is not None:
+        # Retagged file: re-home the track if it now belongs to a different album.
+        if existing.album_id != album.id:
+            existing.album_id = album.id
+            existing.title = title or existing.title
+            existing.track_no = track_no or existing.track_no
+            existing.disc_no = disc_no or existing.disc_no
+            existing.isrc = isrc or existing.isrc
+        return existing
 
     tracks = _tracks_for_album(db, album)
     track = None

@@ -55,7 +55,7 @@ class AppSettings(Base):
     # local | live | local_with_live_fallback
     mb_catalog_mode: Mapped[str] = mapped_column(String(32), default="local")
     notify_webhook_url: Mapped[str] = mapped_column(Text, default="")
-    notify_channel: Mapped[str] = mapped_column(String(32), default="discord")
+    notify_channel: Mapped[str] = mapped_column(String(32), default="custom")
     notify_token: Mapped[str] = mapped_column(Text, default="")
     notify_on_complete: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_on_failure: Mapped[bool] = mapped_column(Boolean, default=True)

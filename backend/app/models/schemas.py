@@ -35,7 +35,7 @@ class SettingsOut(BaseModel):
     official_releases_only: bool = True
     mb_catalog_mode: str = "local"
     notify_webhook_url: str = ""
-    notify_channel: str = "discord"
+    notify_channel: str = "custom"
     notify_token_set: bool = False
     notify_on_complete: bool = True
     notify_on_failure: bool = True
@@ -99,6 +99,12 @@ class SettingsUpdate(BaseModel):
     player_sharing_enabled: bool | None = None
     download_concurrency: int | None = Field(default=None, ge=1, le=4)
     max_retries: int | None = Field(default=None, ge=0, le=10)
+
+
+class NotifyTestRequest(BaseModel):
+    notify_webhook_url: str | None = None
+    notify_channel: str | None = None
+    notify_token: str | None = None
 
 
 class HealthOut(BaseModel):
