@@ -6,15 +6,15 @@ import logging
 import os
 import sqlite3
 import tarfile
-import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import httpx
 
+from app.services.background_job import BackgroundJobStore, JobState
 from app.services.mb_catalog_paths import (
     CORE_DUMP_TABLES,
     DERIVED_DUMP_TABLES,
@@ -32,38 +32,27 @@ logger = logging.getLogger("musicarr.mb_catalog")
 
 
 @dataclass
-class CatalogJob:
-    state: str = "idle"  # idle | running | done | error
-    phase: str = ""  # downloading | extracting | building | finalizing | done | error
-    progress_pct: float = 0.0
+class CatalogJob(JobState):
+    """Adds MusicBrainz-dump-specific fields to the shared job shape."""
+
     bytes_done: int = 0
     bytes_total: int = 0
-    message: str = ""
-    error: str = ""
     dump_version: str = ""
-    started_at: str = ""
-    finished_at: str = ""
 
 
-_job_lock = threading.Lock()
-_job = CatalogJob()
-_worker: threading.Thread | None = None
+_store = BackgroundJobStore(
+    job_factory=CatalogJob,
+    persist_path=catalog_dir() / "last_job.json",
+    thread_name="mb-catalog-import",
+)
 
 
 def _set_job(**kwargs: Any) -> None:
-    with _job_lock:
-        for key, value in kwargs.items():
-            setattr(_job, key, value)
-        snapshot = asdict(_job)
-    try:
-        _last_job_path().write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
-    except OSError:
-        logger.debug("Could not persist catalog job state", exc_info=True)
+    _store.update(**kwargs)
 
 
 def get_job() -> CatalogJob:
-    with _job_lock:
-        return CatalogJob(**asdict(_job))
+    return _store.get()
 
 
 def catalog_ready() -> bool:
@@ -83,57 +72,6 @@ def read_catalog_meta() -> dict[str, Any]:
 
 def write_catalog_meta(data: dict[str, Any]) -> None:
     catalog_meta_path().write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-
-def _last_job_path() -> Path:
-    return catalog_dir() / "last_job.json"
-
-
-def _persist_job() -> None:
-    try:
-        job = get_job()
-        _last_job_path().write_text(json.dumps(asdict(job), indent=2), encoding="utf-8")
-    except OSError:
-        logger.debug("Could not persist catalog job state", exc_info=True)
-
-
-def _restore_job_if_needed() -> None:
-    """Restore last job snapshot after process restart (running → interrupted)."""
-    global _job
-    path = _last_job_path()
-    if not path.is_file():
-        return
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
-    if not isinstance(data, dict):
-        return
-    with _job_lock:
-        if _job.state == "running":
-            return
-        restored = CatalogJob(
-            state=str(data.get("state") or "idle"),
-            phase=str(data.get("phase") or ""),
-            progress_pct=float(data.get("progress_pct") or 0),
-            bytes_done=int(data.get("bytes_done") or 0),
-            bytes_total=int(data.get("bytes_total") or 0),
-            message=str(data.get("message") or ""),
-            error=str(data.get("error") or ""),
-            dump_version=str(data.get("dump_version") or ""),
-            started_at=str(data.get("started_at") or ""),
-            finished_at=str(data.get("finished_at") or ""),
-        )
-        if restored.state == "running":
-            restored.state = "error"
-            restored.phase = "error"
-            restored.error = restored.error or "Catalog update interrupted by server restart"
-            restored.message = "Interrupted — run Update again"
-            restored.finished_at = datetime.now(timezone.utc).isoformat()
-        _job = restored
-
-
-_restore_job_if_needed()
 
 
 def fetch_latest_dump_version(timeout: float = 30.0) -> str:
@@ -176,25 +114,18 @@ def catalog_status(*, mode: str = "local") -> dict[str, Any]:
 
 
 def start_catalog_update(*, force: bool = False) -> CatalogJob:
-    global _worker
-    with _job_lock:
-        if _job.state == "running":
-            return CatalogJob(**asdict(_job))
-        _job.state = "running"
-        _job.phase = "downloading"
-        _job.progress_pct = 0.0
-        _job.bytes_done = 0
-        _job.bytes_total = 0
-        _job.message = "Starting MusicBrainz catalog update…"
-        _job.error = ""
-        _job.dump_version = ""
-        _job.started_at = datetime.now(timezone.utc).isoformat()
-        _job.finished_at = ""
-
-    _persist_job()
-    _worker = threading.Thread(target=_run_import_job, name="mb-catalog-import", daemon=True)
-    _worker.start()
-    return get_job()
+    if _store.is_running():
+        return get_job()
+    try:
+        return _store.start(
+            target=_run_import_job,
+            initial={
+                "phase": "downloading",
+                "message": "Starting MusicBrainz catalog update…",
+            },
+        )
+    except RuntimeError:
+        return get_job()
 
 
 def _run_import_job() -> None:

@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.services.background_job import BackgroundJobStore, utc_now_iso
+from app.services.background_job import BackgroundJobStore, JobState, utc_now_iso
 from app.services.library import import_existing_library, reorganize_library, scan_library
 
 logger = logging.getLogger("musicarr.library_jobs")
@@ -15,15 +15,12 @@ ProgressCb = Callable[[dict[str, Any]], None]
 
 
 @dataclass
-class LibraryJob:
-    state: str = "idle"  # idle | running | done | error
-    kind: str = ""  # import | scan | reorganize
-    phase: str = ""
-    progress_pct: float = 0.0
-    message: str = ""
-    error: str = ""
-    started_at: str = ""
-    finished_at: str = ""
+class LibraryJob(JobState):
+    """Adds library-import-specific counters to the shared job shape.
+
+    `kind` distinguishes import | scan | reorganize.
+    """
+
     files_seen: int = 0
     files_done: int = 0
     artists_created: int = 0

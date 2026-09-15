@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.models import Album, Track
 from app.services.artists import _legacy_id
-from app.services.library import _upsert_track
+from app.services.library import TrackIndex, _upsert_track
 from sqlalchemy import select
 from tests.conftest import _artist
 
@@ -25,8 +25,10 @@ def test_upsert_track_sees_unflushed_siblings(db):
     db.commit()
     db.refresh(album)
 
+    index = TrackIndex(db)
     first = _upsert_track(
         db,
+        index,
         album,
         title="Life Goes On (feat. Luke Combs)",
         track_no=1,
@@ -36,6 +38,7 @@ def test_upsert_track_sees_unflushed_siblings(db):
     )
     second = _upsert_track(
         db,
+        index,
         album,
         title="Life Goes On (feat. Luke Combs)",
         track_no=1,
@@ -94,8 +97,10 @@ def test_upsert_track_unique_pid_across_albums(db):
     )
     db.commit()
 
+    index = TrackIndex(db)
     created = _upsert_track(
         db,
+        index,
         album,
         title="Hello",
         track_no=1,
@@ -139,8 +144,10 @@ def test_upsert_track_rehomes_retagged_file(db):
     db.refresh(new_album)
 
     path = "/music/artist/01 - Track.flac"
+    index = TrackIndex(db)
     first = _upsert_track(
         db,
+        index,
         old_album,
         title="Track",
         track_no=1,
@@ -154,6 +161,7 @@ def test_upsert_track_rehomes_retagged_file(db):
     # User retags the file (same path) to belong to a different album, then re-imports.
     moved = _upsert_track(
         db,
+        index,
         new_album,
         title="Track (Retagged)",
         track_no=2,
