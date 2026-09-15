@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
 from app.models import Album, Track
-from app.models.schemas import AlbumOut, AlbumPatch, DownloadMethod, TrackOut
+from app.models.schemas import AlbumOut, AlbumPatch, TrackOut
 from app.services.download_queue import download_queue
 from app.services.filters import is_junk_title, is_live_title
 from app.services.history import add_history
@@ -64,6 +64,9 @@ def _album_out(
         track_count=album.track_count,
         monitored=album.monitored,
         status=album.status,
+        status_reason=getattr(album, "status_reason", "") or "",
+        musicbrainz_id=getattr(album, "musicbrainz_id", None),
+        artist_credit=getattr(album, "artist_credit", "") or "",
         path=album.path,
         quality=quality,
         upgrade_available=upgradable,
@@ -107,8 +110,7 @@ class BulkIds(BaseModel):
 
 @router.post("/wanted/download-all")
 def download_all_wanted(
-    db: Session = Depends(get_db),
-    method: DownloadMethod | None = Query(default=None),
+    db: Session = Depends(get_db)
 ):
     active = _active_provider(db)
     albums = db.scalars(
@@ -120,7 +122,7 @@ def download_all_wanted(
     ).all()
     queued = 0
     for album in albums:
-        if download_queue.enqueue_album(db, album.id, method=method):
+        if download_queue.enqueue_album(db, album.id):
             queued += 1
     return {"queued": queued}
 
@@ -201,8 +203,7 @@ def bulk_skip(payload: BulkIds, db: Session = Depends(get_db)):
 @router.post("/bulk/download")
 def bulk_download(
     payload: BulkIds,
-    db: Session = Depends(get_db),
-    method: DownloadMethod | None = Query(default=None),
+    db: Session = Depends(get_db)
 ):
     queued = 0
     for album_id in payload.album_ids:
@@ -210,7 +211,7 @@ def bulk_download(
         if album and album.status == "skipped":
             album.status = "wanted"
             album.monitored = True
-        if download_queue.enqueue_album(db, album_id, method=method):
+        if download_queue.enqueue_album(db, album_id):
             queued += 1
     db.commit()
     return {"queued": queued}
@@ -245,8 +246,7 @@ def upgradable_albums(db: Session = Depends(get_db)):
 
 @router.post("/upgrade-all")
 def upgrade_all(
-    db: Session = Depends(get_db),
-    method: DownloadMethod | None = Query(default=None),
+    db: Session = Depends(get_db)
 ):
     from app.services.quality import needs_upgrade
 
@@ -263,7 +263,7 @@ def upgrade_all(
             continue
         if needs_upgrade(getattr(album, "quality", "") or "", target):
             if download_queue.enqueue_album(
-                db, album.id, allow_upgrade=True, method=method
+                db, album.id, allow_upgrade=True
             ):
                 queued += 1
     return {"queued": queued, "target": target}
@@ -316,8 +316,7 @@ def patch_album(album_id: int, payload: AlbumPatch, db: Session = Depends(get_db
 def download_album(
     album_id: int,
     db: Session = Depends(get_db),
-    upgrade: bool = False,
-    method: DownloadMethod | None = Query(default=None),
+    upgrade: bool = False
 ):
     album = db.get(Album, album_id)
     if not album:
@@ -330,8 +329,7 @@ def download_album(
         db,
         album_id,
         allow_upgrade=upgrade or album.status == "downloaded",
-        method=method,
-    )
+            )
     return {
         "queued": bool(job),
         "job_id": job.id if job else None,

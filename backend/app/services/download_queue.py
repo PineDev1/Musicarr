@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings as app_config
@@ -26,17 +26,7 @@ from app.services.settings_service import ensure_settings, library_root
 
 logger = logging.getLogger("musicarr.download")
 
-# States that mean "this album is already being worked on". Indexer jobs stay
-# active while the download client works, so they must count as busy too.
-ACTIVE_JOB_STATES = [
-    "queued",
-    "running",
-    "searching",
-    "grabbed",
-    "downloading",
-    "importing",
-]
-DOWNLOAD_METHODS = {"streaming", "indexer", "streaming_then_indexer"}
+ACTIVE_JOB_STATES = ["queued", "running"]
 
 
 def pick_unique_artist_search_hit(artist_name: str, hits: list) -> object | None:
@@ -52,11 +42,6 @@ def pick_unique_artist_search_hit(artist_name: str, hits: list) -> object | None
     if len(exact) == 1:
         return exact[0]
     return None
-
-
-def resolve_download_method(settings, method: str | None = None) -> str:
-    requested = (method or getattr(settings, "preferred_download_method", None) or "").lower()
-    return requested if requested in DOWNLOAD_METHODS else "streaming"
 
 
 def classify_download_error(message: str) -> str:
@@ -79,12 +64,13 @@ class DownloadQueue:
         self._thread: threading.Thread | None = None
         self._stop = False
         self._cancel_ids: set[int] = set()
+        self._active_workers: set[threading.Thread] = set()
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
         self._stop = False
-        self._thread = threading.Thread(target=self._worker_loop, name="musicarr-dl", daemon=True)
+        self._thread = threading.Thread(target=self._supervisor_loop, name="musicarr-dl", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
@@ -94,18 +80,112 @@ class DownloadQueue:
     def wake(self) -> None:
         self._wake.set()
 
+    def _concurrency(self) -> int:
+        db = SessionLocal()
+        try:
+            settings = ensure_settings(db)
+            raw = int(getattr(settings, "download_concurrency", 1) or 1)
+            return max(1, min(4, raw))
+        except Exception:  # noqa: BLE001
+            return 1
+        finally:
+            db.close()
+
+    def _reap_workers(self) -> None:
+        with self._lock:
+            dead = {t for t in self._active_workers if not t.is_alive()}
+            self._active_workers -= dead
+
+    def _active_count(self) -> int:
+        with self._lock:
+            return sum(1 for t in self._active_workers if t.is_alive())
+
+    def _supervisor_loop(self) -> None:
+        while not self._stop:
+            self._reap_workers()
+            concurrency = self._concurrency()
+            launched = False
+            while self._active_count() < concurrency:
+                job_id = self._claim_next_job(concurrency)
+                if job_id is None:
+                    break
+                worker = threading.Thread(
+                    target=self._run_claimed_job,
+                    args=(job_id,),
+                    name=f"musicarr-dl-{job_id}",
+                    daemon=True,
+                )
+                with self._lock:
+                    self._active_workers.add(worker)
+                worker.start()
+                launched = True
+            if not launched:
+                self._wake.wait(timeout=2.0)
+                self._wake.clear()
+
+    def _claim_next_job(self, concurrency: int) -> int | None:
+        """Atomically move one queued job to running if under concurrency cap."""
+        db = SessionLocal()
+        try:
+            running = (
+                db.scalar(
+                    select(func.count()).select_from(DownloadJob).where(DownloadJob.state == "running")
+                )
+                or 0
+            )
+            if running >= concurrency:
+                return None
+            job = db.scalar(
+                select(DownloadJob)
+                .where(DownloadJob.state == "queued")
+                .order_by(DownloadJob.created_at.asc())
+            )
+            if not job:
+                return None
+            result = db.execute(
+                update(DownloadJob)
+                .where(DownloadJob.id == job.id, DownloadJob.state == "queued")
+                .values(
+                    state="running",
+                    started_at=datetime.now(timezone.utc),
+                    progress=1.0,
+                )
+            )
+            db.commit()
+            if result.rowcount != 1:
+                return None
+            return int(job.id)
+        finally:
+            db.close()
+
+    def _run_claimed_job(self, job_id: int) -> None:
+        try:
+            self._process_job(job_id, already_claimed=True)
+        except Exception:  # noqa: BLE001
+            logger.exception("Unhandled download error for job %s", job_id)
+        finally:
+            with self._lock:
+                self._active_workers.discard(threading.current_thread())
+            self._wake.set()
+
     def enqueue_album(
         self,
         db: Session,
         album_id: int,
         *,
         allow_upgrade: bool = False,
-        method: str | None = None,
     ) -> DownloadJob | None:
         album = db.get(Album, album_id)
         if not album:
             return None
         if album.status == "skipped" and not allow_upgrade:
+            return None
+        if album.status == "missing":
+            return None
+        from app.services.artists import effective_provider_album_id
+
+        stream_pid = effective_provider_album_id(album.provider_id or "")
+        if stream_pid.startswith("mb:") or not stream_pid:
             return None
         if allow_upgrade and album.status == "downloaded":
             album.status = "wanted"
@@ -119,23 +199,20 @@ class DownloadQueue:
         )
         if existing:
             return existing
-        settings = ensure_settings(db)
-        resolved = resolve_download_method(settings, method)
-        # Indexer grabs are interactive only — UI opens release search; never auto-enqueue.
-        if resolved == "indexer":
-            return None
-        # streaming_then_indexer starts on streaming; on failure we prompt manual search.
-        source = "streaming"
         artist = db.get(Artist, album.artist_id)
+        from app.services.artists import album_display_artist
+
+        display = album_display_artist(artist, album) if artist else ""
+        album_title = album.title or ""
         job = DownloadJob(
             target_type="album",
-            target_id=int(album.provider_id) if album.provider_id.isdigit() else 0,
-            target_provider_id=album.provider_id,
+            target_id=int(stream_pid) if stream_pid.isdigit() else 0,
+            target_provider_id=stream_pid,
             album_id=album.id,
-            artist_name=artist.name if artist else "",
-            album_title=album.title,
+            artist_name=display or (artist.name if artist else ""),
+            album_title=album_title,
             state="queued",
-            source=source,
+            source="streaming",
             progress=0.0,
         )
         db.add(job)
@@ -149,8 +226,6 @@ class DownloadQueue:
         self,
         db: Session,
         artist_id: int,
-        *,
-        method: str | None = None,
     ) -> list[DownloadJob]:
         albums = db.scalars(
             select(Album).where(
@@ -161,7 +236,7 @@ class DownloadQueue:
         ).all()
         jobs = []
         for album in albums:
-            job = self.enqueue_album(db, album.id, method=method)
+            job = self.enqueue_album(db, album.id)
             if job:
                 jobs.append(job)
         return jobs
@@ -172,8 +247,6 @@ class DownloadQueue:
             return None
         if job.state in {"completed", "failed", "cancelled"}:
             return job
-        if job.source == "indexer" and job.client_item_id:
-            self._abort_client_item(db, job)
         job.state = "cancelled"
         job.finished_at = datetime.now(timezone.utc)
         db.commit()
@@ -185,9 +258,6 @@ class DownloadQueue:
     def retry(self, db: Session, job_id: int) -> DownloadJob | None:
         job = db.get(DownloadJob, job_id)
         if not job or not job.album_id:
-            return None
-        # Indexer grabs are interactive — use Search indexers / Search again in the UI.
-        if job.source == "indexer":
             return None
         job.state = "queued"
         job.progress = 0.0
@@ -236,87 +306,23 @@ class DownloadQueue:
         with self._lock:
             return job_id in self._cancel_ids
 
-    def _worker_loop(self) -> None:
-        while not self._stop:
-            job_id = self._next_job_id()
-            if job_id is None:
-                self._wake.wait(timeout=2.0)
-                self._wake.clear()
-                continue
-            try:
-                self._process_job(job_id)
-            except Exception:  # noqa: BLE001
-                logger.exception("Unhandled download error for job %s", job_id)
-
-    def _abort_client_item(self, db: Session, job: DownloadJob) -> None:
-        """Remove a grabbed release from its download client."""
-        from app.models import DownloadClient
-        from app.services.download_clients import get_client
-
-        client_row = db.get(DownloadClient, job.client_id) if job.client_id else None
-        if not client_row:
-            return
-        try:
-            client = get_client(client_row)
-        except Exception:  # noqa: BLE001
-            return
-        try:
-            client.remove(job.client_item_id, delete_data=True)
-        except Exception:  # noqa: BLE001
-            logger.warning("Could not remove %s from %s", job.client_item_id, client_row.name)
-        finally:
-            closer = getattr(client, "close", None)
-            if callable(closer):
-                closer()
-
-    def _next_job_id(self) -> int | None:
-        db = SessionLocal()
-        try:
-            # Indexer searches are quick, so they are allowed to jump a
-            # long-running streaming download.
-            job = db.scalar(
-                select(DownloadJob)
-                .where(DownloadJob.state == "searching", DownloadJob.source == "indexer")
-                .order_by(DownloadJob.created_at.asc())
-            )
-            if job:
-                return job.id
-            running = db.scalar(select(DownloadJob).where(DownloadJob.state == "running"))
-            if running:
-                return None
-            job = db.scalar(
-                select(DownloadJob)
-                .where(DownloadJob.state == "queued")
-                .order_by(DownloadJob.created_at.asc())
-            )
-            return job.id if job else None
-        finally:
-            db.close()
-
-    def _process_job(self, job_id: int) -> None:
+    def _process_job(self, job_id: int, *, already_claimed: bool = False) -> None:
         db = SessionLocal()
         try:
             job = db.get(DownloadJob, job_id)
             if not job:
                 return
-            if job.source == "indexer":
-                # Legacy auto-search jobs: fail with guidance (manual picker only).
-                if job.state == "searching":
-                    self._fail_indexer_job(
-                        db,
-                        job,
-                        "Automatic indexer grabs are disabled. Open Search indexers "
-                        "on the album and pick a release.",
-                        "config",
-                    )
-                return
-            if job.state != "queued":
+            if already_claimed:
+                if job.state != "running":
+                    return
+            elif job.state != "queued":
                 return
             settings = ensure_settings(db)
-            job.state = "running"
-            job.started_at = datetime.now(timezone.utc)
-            job.progress = 1.0
-            db.commit()
+            if not already_claimed:
+                job.state = "running"
+                job.started_at = datetime.now(timezone.utc)
+                job.progress = 1.0
+                db.commit()
 
             album = db.get(Album, job.album_id) if job.album_id else None
             if not album:
@@ -384,7 +390,6 @@ class DownloadQueue:
                     f"{job.artist_name} – {job.album_title}\n{exc}",
                     kind="auth" if category == "auth" else "failure",
                 )
-                self._maybe_fallback_to_indexer(db, job)
                 return
 
             from app.services.artists import sync_album_tracks
@@ -411,8 +416,10 @@ class DownloadQueue:
                     s.close()
 
             try:
+                from app.services.artists import effective_provider_album_id
+
                 result = provider.download_album(
-                    album.provider_id,
+                    effective_provider_album_id(album.provider_id),
                     staging,
                     settings.bitrate or "flac",
                     on_progress=on_progress,
@@ -466,7 +473,6 @@ class DownloadQueue:
                     kind="failure",
                 )
                 shutil.rmtree(staging, ignore_errors=True)
-                self._maybe_fallback_to_indexer(db, job)
                 return
 
             if self._is_cancelled(job_id):
@@ -531,6 +537,19 @@ class DownloadQueue:
             job.error = None
             job.error_category = ""
             db.commit()
+
+            if artist:
+                from app.services.artists import (
+                    mirror_downloaded_album_to_collaborators,
+                    retag_downloaded_album,
+                )
+
+                try:
+                    retag_downloaded_album(db, album, artist)
+                    mirror_downloaded_album_to_collaborators(db, album, artist)
+                except Exception:  # noqa: BLE001
+                    logger.exception("Collab retag/mirror failed for album %s", album.id)
+
             add_history(
                 db,
                 "downloaded",
@@ -551,57 +570,6 @@ class DownloadQueue:
             with self._lock:
                 self._cancel_ids.discard(job_id)
             db.close()
-
-    def _fail_indexer_job(
-        self,
-        db: Session,
-        job: DownloadJob,
-        message: str,
-        category: str,
-    ) -> None:
-        job.state = "failed"
-        job.error = message
-        job.error_category = category
-        job.finished_at = datetime.now(timezone.utc)
-        db.commit()
-        add_history(
-            db,
-            "download_failed",
-            f"Failed {job.artist_name} – {job.album_title}: {message}",
-        )
-        from app.services.notifications import send_notification
-
-        send_notification(
-            db,
-            "Download failed",
-            f"{job.artist_name} – {job.album_title}\n{message}",
-            kind="failure",
-        )
-
-    def _maybe_fallback_to_indexer(self, db: Session, job: DownloadJob) -> None:
-        """After streaming failure, nudge the user toward manual release search."""
-        if job.source != "streaming" or not job.album_id:
-            return
-        settings = ensure_settings(db)
-        if resolve_download_method(settings) != "streaming_then_indexer":
-            return
-        from app.models import Indexer
-
-        has_indexer = db.scalar(select(Indexer).where(Indexer.enabled.is_(True)))
-        if not has_indexer:
-            return
-        note = (
-            " Streaming failed — use Search indexers on this album to pick a torrent/NZB."
-        )
-        if job.error and note.strip() not in job.error:
-            job.error = f"{job.error}{note}"
-            db.commit()
-        add_history(
-            db,
-            "download_failed",
-            f"Streaming failed for {job.artist_name} – {job.album_title}; "
-            f"open Search indexers to grab manually",
-        )
 
     def _rematch_album_to_active(
         self,
@@ -727,12 +695,18 @@ class DownloadQueue:
                             None,
                         )
                         if not candidate:
-                            from app.services.artists import _legacy_id
+                            from app.services.artists import _legacy_id, _unique_provider_album_id
 
+                            unique_pid = _unique_provider_album_id(
+                                db,
+                                provider_name=active,
+                                provider_id=str(hit.provider_id),
+                                artist_id=existing.id,
+                            )
                             candidate = Album(
                                 provider=active,
-                                provider_id=hit.provider_id,
-                                deezer_id=_legacy_id(active, hit.provider_id),
+                                provider_id=unique_pid,
+                                deezer_id=_legacy_id(active, unique_pid),
                                 artist_id=existing.id,
                                 title=hit.title,
                                 album_type=hit.album_type or "album",

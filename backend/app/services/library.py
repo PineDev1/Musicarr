@@ -237,9 +237,15 @@ def _find_or_create_album(
     if candidate:
         return candidate
 
-    from app.services.artists import _legacy_id
+    from app.services.artists import _legacy_id, _unique_provider_album_id
 
-    pid = f"{_slug_id(album_title)}-{track_count}"
+    raw_pid = f"{_slug_id(album_title)}-{track_count}"
+    pid = _unique_provider_album_id(
+        db,
+        provider_name=artist.provider,
+        provider_id=raw_pid,
+        artist_id=artist.id,
+    )
     album = Album(
         provider=artist.provider,
         provider_id=pid,

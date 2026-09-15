@@ -76,9 +76,12 @@ def _current_player_user(request: Request, db: Session):
 
 
 def _require_admin(request: Request, db: Session) -> None:
-    """Admin session if admin auth is on; otherwise open (LAN trust)."""
+    """Require a valid admin session for player admin routes (never open by default)."""
     if not app_auth.auth_enabled(db):
-        return
+        raise HTTPException(
+            status_code=401,
+            detail="Enable Settings → Security login before managing player users",
+        )
     token = request.cookies.get(app_auth.COOKIE_NAME)
     if not app_auth.parse_session_token(db, token):
         raise HTTPException(status_code=401, detail="Admin authentication required")

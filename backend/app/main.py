@@ -5,11 +5,13 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
-from app.api import acquisition, albums, artists, auth, events, ops, player, settings
+from app.api import albums, artists, auth, events, musicbrainz_catalog, ops, player, settings
 from app.core.database import SessionLocal, ensure_dirs, init_db
 from app.services import app_auth, player_auth
-from app.services.completed_download_handler import completed_download_handler
+from app.services.cors_origins import LOCAL_CORS_ORIGINS, origin_is_allowed
 from app.services.download_queue import download_queue
 from app.services.monitor import release_monitor
 from app.services.settings_service import ensure_settings
@@ -38,22 +40,63 @@ async def lifespan(_: FastAPI):
         db.close()
     download_queue.start()
     release_monitor.start()
-    completed_download_handler.start()
     yield
     download_queue.stop()
     release_monitor.stop()
-    completed_download_handler.stop()
 
 
 app = FastAPI(title="Musicarr", version="0.1.0", lifespan=lifespan)
 
+# Static local origins at boot; DynamicCorsMiddleware also allows configured public_domain.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=sorted(LOCAL_CORS_ORIGINS),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class DynamicCorsMiddleware(BaseHTTPMiddleware):
+    """Allow credentialed CORS from Settings → public_domain in addition to localhost."""
+
+    async def dispatch(self, request: Request, call_next):
+        origin = request.headers.get("origin")
+        if request.method == "OPTIONS" and origin:
+            db = SessionLocal()
+            try:
+                allowed = origin_is_allowed(origin, db)
+            finally:
+                db.close()
+            if allowed:
+                headers = {
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+                    "Access-Control-Allow-Headers": request.headers.get(
+                        "access-control-request-headers", "*"
+                    ),
+                    "Vary": "Origin",
+                }
+                return Response(status_code=200, headers=headers)
+
+        response = await call_next(request)
+        if origin:
+            db = SessionLocal()
+            try:
+                allowed = origin_is_allowed(origin, db)
+            finally:
+                db.close()
+            if allowed and "access-control-allow-origin" not in {
+                k.lower() for k in response.headers.keys()
+            }:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Allow-Credentials"] = "true"
+                response.headers["Vary"] = "Origin"
+        return response
+
+
+app.add_middleware(DynamicCorsMiddleware)
 
 
 @app.middleware("http")
@@ -66,23 +109,25 @@ async def app_login_gate(request: Request, call_next):
     if path in PUBLIC_API_PATHS:
         return await call_next(request)
 
-    # Player APIs authenticate themselves (player cookie). Never treat player
-    # cookie as admin access. When player is disabled, return 404 for listener
-    # routes; admin user CRUD stays available for Settings → Player.
+    # Player listener APIs use the player cookie. Admin player routes (/users, /admin)
+    # fall through to the app login gate — never open without an admin session.
     if path.startswith("/api/player"):
-        if path.startswith("/api/player/users") or path.startswith("/api/player/admin"):
+        is_admin_player = path.startswith("/api/player/users") or path.startswith(
+            "/api/player/admin"
+        )
+        if not is_admin_player:
+            db = SessionLocal()
+            try:
+                if not player_auth.player_enabled(db):
+                    return JSONResponse(status_code=404, content={"detail": "Player is disabled"})
+            finally:
+                db.close()
             return await call_next(request)
-        db = SessionLocal()
-        try:
-            if not player_auth.player_enabled(db):
-                return JSONResponse(status_code=404, content={"detail": "Player is disabled"})
-        finally:
-            db.close()
-        return await call_next(request)
 
     db = SessionLocal()
     try:
         if not app_auth.auth_enabled(db):
+            # Auth off: most APIs are open, but player admin handlers still 401 via _require_admin.
             return await call_next(request)
         token = request.cookies.get(app_auth.COOKIE_NAME)
         if app_auth.parse_session_token(db, token):
@@ -111,9 +156,9 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(artists.router, prefix="/api")
 app.include_router(albums.router, prefix="/api")
 app.include_router(ops.router, prefix="/api")
-app.include_router(acquisition.router, prefix="/api")
 app.include_router(events.router, prefix="/api")
 app.include_router(player.router, prefix="/api")
+app.include_router(musicbrainz_catalog.router, prefix="/api")
 
 
 @app.get("/api")

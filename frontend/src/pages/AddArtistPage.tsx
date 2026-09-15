@@ -8,6 +8,7 @@ import { useToast } from '../Toast'
 export function AddArtistPage() {
   const [q, setQ] = useState('')
   const [submitted, setSubmitted] = useState('')
+  const [includeSingles, setIncludeSingles] = useState(false)
   const navigate = useNavigate()
   const qc = useQueryClient()
   const toast = useToast()
@@ -20,7 +21,10 @@ export function AddArtistPage() {
 
   const add = useMutation({
     mutationFn: (payload: { provider_id: string; provider: string }) =>
-      api.addArtist(payload.provider_id, payload.provider),
+      api.addArtist(payload.provider_id, payload.provider, {
+        include_singles: includeSingles,
+        download_missing: true,
+      }),
     onSuccess: (artist) => {
       qc.invalidateQueries({ queryKey: ['artists'] })
       qc.invalidateQueries({ queryKey: ['queue'] })
@@ -41,11 +45,13 @@ export function AddArtistPage() {
       <div className="page-header">
         <div>
           <h1>Add Artist</h1>
-          <p>Search your active provider, add an artist, and download their discography.</p>
+          <p>
+            Search your active provider, add an artist, and download MusicBrainz-matched releases.
+          </p>
         </div>
       </div>
 
-      <form className="toolbar" onSubmit={onSubmit}>
+      <form className="toolbar" onSubmit={onSubmit} style={{ flexWrap: 'wrap' }}>
         <input
           type="text"
           placeholder="Search artists…"
@@ -56,6 +62,14 @@ export function AddArtistPage() {
         <button className="btn" type="submit" disabled={!q.trim()}>
           Search
         </button>
+        <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            type="checkbox"
+            checked={includeSingles}
+            onChange={(e) => setIncludeSingles(e.target.checked)}
+          />
+          Include singles (MusicBrainz-matched)
+        </label>
       </form>
 
       {search.isFetching && <p className="muted">Searching…</p>}
@@ -80,7 +94,7 @@ export function AddArtistPage() {
                 <strong>{a.name}</strong>
                 <div className="muted">
                   <span className="badge queued">{a.provider}</span>{' '}
-                  {a.nb_album != null ? `${a.nb_album} albums` : ''}
+                  {a.nb_album != null ? `${a.nb_album} releases` : ''}
                 </div>
               </div>
               <button

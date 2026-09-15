@@ -6,13 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
 from app.models import Album, Artist, HistoryEvent, Track  # noqa: F401 — register tables
-from app.models import (  # noqa: F401
-    AppSettings,
-    DownloadClient,
-    DownloadJob,
-    Indexer,
-    RemotePathMapping,
-)
+from app.models import AppSettings, DownloadJob  # noqa: F401
 
 
 @pytest.fixture()
@@ -28,7 +22,15 @@ def db():
         engine.dispose()
 
 
-def _artist(db, *, name: str, provider: str, provider_id: str, link_group_id: str | None = None):
+def _artist(
+    db,
+    *,
+    name: str,
+    provider: str,
+    provider_id: str,
+    link_group_id: str | None = None,
+    musicbrainz_id: str | None = None,
+):
     row = Artist(
         provider=provider,
         provider_id=provider_id,
@@ -37,6 +39,7 @@ def _artist(db, *, name: str, provider: str, provider_id: str, link_group_id: st
         image_url=None,
         monitored=True,
         link_group_id=link_group_id,
+        musicbrainz_id=musicbrainz_id,
     )
     db.add(row)
     db.commit()

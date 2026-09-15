@@ -1,0 +1,337 @@
+from __future__ import annotations
+
+import logging
+import sqlite3
+import threading
+from difflib import SequenceMatcher
+from pathlib import Path
+
+from app.services.mb_catalog_paths import catalog_db_path
+from app.services.musicbrainz import (
+    CatalogResult,
+    CreditArtist,
+    ReleaseGroup,
+    _map_primary_type,
+    _should_keep_rg,
+    normalize_title,
+)
+
+logger = logging.getLogger("musicarr.mb_local")
+
+_lock = threading.Lock()
+_db_path: Path | None = None
+_conn: sqlite3.Connection | None = None
+
+
+def configure(path: Path | None = None) -> None:
+    global _db_path, _conn
+    with _lock:
+        if _conn is not None:
+            try:
+                _conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+            _conn = None
+        _db_path = path
+
+
+def reload() -> None:
+    configure(_db_path)
+
+
+def is_available() -> bool:
+    path = _db_path or catalog_db_path()
+    return path.is_file() and path.stat().st_size > 0
+
+
+def _connect() -> sqlite3.Connection:
+    global _conn, _db_path
+    with _lock:
+        path = _db_path or catalog_db_path()
+        if _conn is not None:
+            return _conn
+        if not path.is_file():
+            raise FileNotFoundError(f"MusicBrainz catalog not found: {path}")
+        _conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
+        _conn.row_factory = sqlite3.Row
+        return _conn
+
+
+def resolve_artist(name: str) -> str | None:
+    q = (name or "").strip()
+    if not q:
+        return None
+    con = _connect()
+    # Exact name / alias
+    row = con.execute(
+        """
+        SELECT gid FROM artist WHERE name = ? COLLATE NOCASE
+        UNION
+        SELECT a.gid FROM artist a
+        JOIN artist_alias aa ON aa.artist_id = a.id
+        WHERE aa.name = ? COLLATE NOCASE
+        LIMIT 1
+        """,
+        (q, q),
+    ).fetchone()
+    if row:
+        return str(row["gid"])
+    # Prefix / contains fallback (bounded)
+    like = f"%{q}%"
+    rows = con.execute(
+        """
+        SELECT gid, name FROM artist
+        WHERE name LIKE ? COLLATE NOCASE
+        ORDER BY LENGTH(name) ASC
+        LIMIT 25
+        """,
+        (like,),
+    ).fetchall()
+    best_gid = None
+    best_score = 0.0
+    qn = normalize_title(q)
+    for row in rows:
+        score = SequenceMatcher(None, qn, normalize_title(row["name"])).ratio()
+        if score > best_score:
+            best_score = score
+            best_gid = str(row["gid"])
+    if best_gid and best_score >= 0.86:
+        return best_gid
+    return None
+
+
+def _credits_for_artist_credit(con: sqlite3.Connection, credit_id: int) -> tuple[CreditArtist, ...]:
+    rows = con.execute(
+        """
+        SELECT acn.name AS credit_name, acn.join_phrase, a.gid, a.name AS artist_name
+        FROM artist_credit_name acn
+        JOIN artist a ON a.id = acn.artist_id
+        WHERE acn.artist_credit = ?
+        ORDER BY acn.position ASC
+        """,
+        (credit_id,),
+    ).fetchall()
+    out: list[CreditArtist] = []
+    for row in rows:
+        out.append(
+            CreditArtist(
+                mbid=str(row["gid"] or ""),
+                name=str(row["credit_name"] or row["artist_name"] or ""),
+                joinphrase=str(row["join_phrase"] or ""),
+            )
+        )
+    return tuple(out)
+
+
+def _secondary_types(con: sqlite3.Connection, rg_id: int) -> tuple[str, ...]:
+    rows = con.execute(
+        """
+        SELECT st.name
+        FROM release_group_secondary_type_join j
+        JOIN release_group_secondary_type st ON st.id = j.secondary_type
+        WHERE j.release_group = ?
+        """,
+        (rg_id,),
+    ).fetchall()
+    return tuple(str(r["name"]) for r in rows)
+
+
+def _row_to_rg(con: sqlite3.Connection, row: sqlite3.Row, *, with_credits: bool) -> ReleaseGroup | None:
+    secondary = _secondary_types(con, int(row["id"]))
+    if not _should_keep_rg(list(secondary)):
+        return None
+    primary_name = row["primary_type_name"]
+    year = ""
+    if row["first_release_year"] is not None:
+        year = str(int(row["first_release_year"]))
+    credits: tuple[CreditArtist, ...] = ()
+    if with_credits:
+        credits = _credits_for_artist_credit(con, int(row["artist_credit"]))
+    return ReleaseGroup(
+        mbid=str(row["gid"]),
+        title=str(row["name"]),
+        primary_type=_map_primary_type(primary_name, list(secondary)),
+        year=year,
+        secondary_types=secondary,
+        credits=credits,
+    )
+
+
+def fetch_catalog(mbid: str) -> CatalogResult:
+    key = (mbid or "").strip()
+    if not key:
+        return CatalogResult(error="No MusicBrainz artist id")
+    try:
+        con = _connect()
+    except FileNotFoundError as exc:
+        return CatalogResult(error=str(exc))
+
+    artist = con.execute("SELECT id FROM artist WHERE gid = ?", (key,)).fetchone()
+    if not artist:
+        return CatalogResult(error=f"Artist not found in local catalog: {key}")
+
+    rows = con.execute(
+        """
+        SELECT rg.id, rg.gid, rg.name, rg.artist_credit, rg.primary_type_id,
+               pt.name AS primary_type_name, meta.first_release_year
+        FROM artist_rg ar
+        JOIN release_group rg ON rg.id = ar.release_group_id
+        LEFT JOIN release_group_primary_type pt ON pt.id = rg.primary_type_id
+        LEFT JOIN release_group_meta meta ON meta.id = rg.id
+        WHERE ar.artist_id = ?
+        ORDER BY CASE WHEN meta.first_release_year IS NULL THEN 1 ELSE 0 END,
+                 meta.first_release_year DESC, rg.name COLLATE NOCASE
+        """,
+        (int(artist["id"]),),
+    ).fetchall()
+
+    out: list[ReleaseGroup] = []
+    collaborators: dict[str, CreditArtist] = {}
+    for row in rows:
+        rg = _row_to_rg(con, row, with_credits=True)
+        if not rg:
+            continue
+        out.append(rg)
+        for c in rg.credits:
+            if c.mbid and c.mbid != key:
+                collaborators[c.mbid] = c
+    return CatalogResult(release_groups=out, collaborators=list(collaborators.values()))
+
+
+def count_release_groups(mbid: str) -> int | None:
+    """Count catalog release-groups for an artist (same filters as fetch_catalog)."""
+    key = (mbid or "").strip()
+    if not key:
+        return None
+    try:
+        con = _connect()
+    except FileNotFoundError:
+        return None
+
+    artist = con.execute("SELECT id FROM artist WHERE gid = ?", (key,)).fetchone()
+    if not artist:
+        return None
+
+    rows = con.execute(
+        """
+        SELECT rg.id, rg.gid, rg.name, rg.artist_credit, rg.primary_type_id,
+               pt.name AS primary_type_name, meta.first_release_year
+        FROM artist_rg ar
+        JOIN release_group rg ON rg.id = ar.release_group_id
+        LEFT JOIN release_group_primary_type pt ON pt.id = rg.primary_type_id
+        LEFT JOIN release_group_meta meta ON meta.id = rg.id
+        WHERE ar.artist_id = ?
+        """,
+        (int(artist["id"]),),
+    ).fetchall()
+
+    total = 0
+    for row in rows:
+        rg = _row_to_rg(con, row, with_credits=False)
+        if rg and rg.primary_type != "other":
+            total += 1
+    return total
+
+
+def enrich_release_group_credits(rg: ReleaseGroup) -> ReleaseGroup:
+    if rg.credits or not rg.mbid:
+        return rg
+    try:
+        con = _connect()
+    except FileNotFoundError:
+        return rg
+    row = con.execute(
+        "SELECT id, artist_credit FROM release_group WHERE gid = ?",
+        (rg.mbid,),
+    ).fetchone()
+    if not row:
+        return rg
+    rg.credits = _credits_for_artist_credit(con, int(row["artist_credit"]))
+    return rg
+
+
+def search_release_group_for_artist(
+    title: str,
+    artist_mbid: str,
+    *,
+    limit: int = 5,
+) -> ReleaseGroup | None:
+    import re
+
+    search_title = re.sub(
+        r"\s*[\(\[][^)\]]*(?:feat\.?|ft\.?|featuring)[^)\]]*[\)\]]",
+        "",
+        title or "",
+        flags=re.I,
+    ).strip() or (title or "")
+    search_title = re.sub(
+        r"\s*(?:feat\.?|ft\.?|featuring)\s+.+$",
+        "",
+        search_title,
+        flags=re.I,
+    ).strip() or search_title
+    clean = normalize_title(search_title)
+    aid = (artist_mbid or "").strip()
+    if not clean or not aid:
+        return None
+    try:
+        con = _connect()
+    except FileNotFoundError:
+        return None
+
+    artist = con.execute("SELECT id FROM artist WHERE gid = ?", (aid,)).fetchone()
+    artist_id = int(artist["id"]) if artist else None
+
+    like = f"%{search_title}%"
+    params: list[object] = [like]
+    sql = """
+        SELECT rg.id, rg.gid, rg.name, rg.artist_credit, rg.primary_type_id,
+               pt.name AS primary_type_name, meta.first_release_year
+        FROM release_group rg
+        LEFT JOIN release_group_primary_type pt ON pt.id = rg.primary_type_id
+        LEFT JOIN release_group_meta meta ON meta.id = rg.id
+        WHERE rg.name LIKE ? COLLATE NOCASE
+    """
+    if artist_id is not None:
+        sql += " AND EXISTS (SELECT 1 FROM artist_rg ar WHERE ar.release_group_id = rg.id AND ar.artist_id = ?)"
+        params.append(artist_id)
+    sql += " LIMIT ?"
+    params.append(max(limit * 4, 20))
+
+    rows = con.execute(sql, params).fetchall()
+    # Wide search if arid-scoped miss and title looks like a collab
+    if not rows and re.search(r"feat\.?|ft\.?|featuring", title or "", re.I):
+        rows = con.execute(
+            """
+            SELECT rg.id, rg.gid, rg.name, rg.artist_credit, rg.primary_type_id,
+                   pt.name AS primary_type_name, meta.first_release_year
+            FROM release_group rg
+            LEFT JOIN release_group_primary_type pt ON pt.id = rg.primary_type_id
+            LEFT JOIN release_group_meta meta ON meta.id = rg.id
+            WHERE rg.name LIKE ? COLLATE NOCASE
+            LIMIT ?
+            """,
+            (like, max(limit * 4, 20)),
+        ).fetchall()
+
+    best: ReleaseGroup | None = None
+    best_score = 0.0
+    for row in rows:
+        rg = _row_to_rg(con, row, with_credits=True)
+        if not rg:
+            continue
+        cand = normalize_title(rg.title)
+        ratio = SequenceMatcher(None, clean, cand).ratio()
+        if cand == clean or clean in cand or cand in clean:
+            ratio = 1.0
+        credit_mbids = {c.mbid for c in rg.credits}
+        if aid in credit_mbids:
+            ratio += 0.15
+        elif rg.credits and aid not in credit_mbids:
+            ratio -= 0.35
+        if ratio > best_score:
+            best_score = ratio
+            best = rg
+    if best and best_score >= 0.75:
+        return best
+    return None

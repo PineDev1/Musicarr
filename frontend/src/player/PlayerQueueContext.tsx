@@ -85,6 +85,7 @@ export function PlayerQueueProvider({
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const ctxRef = useRef<AudioContext | null>(null)
   const sourceRef = useRef<MediaElementAudioSourceNode | null>(null)
+  const gainRef = useRef<GainNode | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const [tracks, setTracks] = useState<PlayerTrack[]>([])
   const [index, setIndex] = useState(0)
@@ -126,37 +127,42 @@ export function PlayerQueueProvider({
     }
     const ctx = ctxRef.current
     if (!sourceRef.current) {
+      // Once routed through Web Audio, element.volume is unreliable — use a GainNode.
+      audio.volume = 1
       sourceRef.current = ctx.createMediaElementSource(audio)
       const analyserNode = ctx.createAnalyser()
       analyserNode.fftSize = 64
+      const gain = ctx.createGain()
+      gain.gain.value = Math.max(0, Math.min(1, volumeRef.current))
       sourceRef.current.connect(analyserNode)
-      analyserNode.connect(ctx.destination)
+      analyserNode.connect(gain)
+      gain.connect(ctx.destination)
       analyserRef.current = analyserNode
+      gainRef.current = gain
       setAnalyser(analyserNode)
     }
   }, [])
 
-  /** Ramp element volume from 0 to the user level so track changes don't hard-cut. */
+  /** Ramp gain from 0 to the user level so track changes don't hard-cut. */
   const fadeIn = useCallback(() => {
+    const gain = gainRef.current
     const audio = audioRef.current
-    if (!audio) return
+    if (!gain && !audio) return
     if (fadeRef.current) window.clearInterval(fadeRef.current)
-    const target = volumeRef.current
+    const target = Math.max(0, Math.min(1, volumeRef.current))
     const started = performance.now()
-    audio.volume = 0
+    if (gain) gain.gain.value = 0
+    else if (audio) audio.volume = 0
     fadeRef.current = window.setInterval(() => {
-      const el = audioRef.current
-      if (!el) {
-        if (fadeRef.current) window.clearInterval(fadeRef.current)
-        fadeRef.current = null
-        return
-      }
       const ratio = Math.min(1, (performance.now() - started) / CROSSFADE_MS)
-      el.volume = Math.max(0, Math.min(1, volumeRef.current * ratio))
+      const level = Math.max(0, Math.min(1, volumeRef.current * ratio))
+      if (gainRef.current) gainRef.current.gain.value = level
+      else if (audioRef.current) audioRef.current.volume = level
       if (ratio >= 1) {
         window.clearInterval(fadeRef.current!)
         fadeRef.current = null
-        el.volume = Math.max(0, Math.min(1, target))
+        if (gainRef.current) gainRef.current.gain.value = target
+        else if (audioRef.current) audioRef.current.volume = target
       }
     }, 40)
   }, [])
@@ -484,11 +490,16 @@ export function PlayerQueueProvider({
   const setVolume = useCallback((v: number) => {
     const nv = Math.max(0, Math.min(1, v))
     setVolumeState(nv)
+    volumeRef.current = nv
     if (fadeRef.current) {
       window.clearInterval(fadeRef.current)
       fadeRef.current = null
     }
-    if (audioRef.current) audioRef.current.volume = nv
+    if (gainRef.current) {
+      gainRef.current.gain.value = nv
+    } else if (audioRef.current) {
+      audioRef.current.volume = nv
+    }
   }, [])
 
   // Global keyboard shortcuts, suppressed while typing.

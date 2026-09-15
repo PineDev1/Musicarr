@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useToast } from '../Toast'
 import {
@@ -32,6 +32,9 @@ export function ExpandedNowPlaying({ onClose }: { onClose: () => void }) {
   const toast = useToast()
   const track = q.tracks[q.index]
   const [sleepRemaining, setSleepRemaining] = useState<number | null>(null)
+  const [dragY, setDragY] = useState(0)
+  const [dragging, setDragging] = useState(false)
+  const dragStartY = useRef<number | null>(null)
 
   useEffect(() => {
     if (q.sleepUntil == null) {
@@ -82,12 +85,58 @@ export function ExpandedNowPlaying({ onClose }: { onClose: () => void }) {
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
+  const onHandlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    dragStartY.current = e.clientY
+    setDragging(true)
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+
+  const onHandlePointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragStartY.current == null) return
+    const dy = Math.max(0, e.clientY - dragStartY.current)
+    setDragY(dy)
+  }
+
+  const endDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragStartY.current == null) return
+    const dy = Math.max(0, e.clientY - dragStartY.current)
+    dragStartY.current = null
+    setDragging(false)
+    if (dy > 120) {
+      onClose()
+      return
+    }
+    setDragY(0)
+  }
+
   if (!track) return null
   const wave = prefs.data || DEFAULT_PREFS
   const upNext = q.tracks.slice(q.index + 1, q.index + 6)
+  const volPct = Math.round(q.volume * 100)
 
   return (
-    <div className="expanded-np" role="dialog" aria-label="Now playing">
+    <div
+      className={`expanded-np${dragging ? ' dragging' : ''}`}
+      role="dialog"
+      aria-label="Now playing"
+      style={{ transform: dragY ? `translateY(${dragY}px)` : undefined, opacity: dragY ? Math.max(0.35, 1 - dragY / 480) : undefined }}
+    >
+      <div
+        className="expanded-np-handle"
+        onPointerDown={onHandlePointerDown}
+        onPointerMove={onHandlePointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        role="button"
+        tabIndex={0}
+        aria-label="Swipe down to close"
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' || e.key === 'ArrowDown') onClose()
+        }}
+      >
+        <span className="expanded-np-grabber" />
+      </div>
+
       <div className="expanded-np-top">
         <button type="button" className="pill-icon-btn" aria-label="Close" onClick={onClose}>
           <IconClose size={20} />
@@ -183,16 +232,21 @@ export function ExpandedNowPlaying({ onClose }: { onClose: () => void }) {
             >
               <IconHeart filled={liked} size={20} />
             </button>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={q.volume}
-              onChange={(e) => q.setVolume(Number(e.target.value))}
-              aria-label="Volume"
-              className="pill-vol wide"
-            />
+            <label className="pill-vol-wrap wide">
+              <span className="sr-only">Volume</span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={q.volume}
+                onChange={(e) => q.setVolume(Number(e.target.value))}
+                onInput={(e) => q.setVolume(Number((e.target as HTMLInputElement).value))}
+                aria-label="Volume"
+                className="pill-vol"
+                style={{ '--vol': `${volPct}%` } as CSSProperties}
+              />
+            </label>
           </div>
 
           <div className="sleep-timer">

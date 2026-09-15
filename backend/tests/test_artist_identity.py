@@ -8,11 +8,9 @@ from app.services.artists import (
     find_linked_artists,
     list_artists_grouped,
 )
-from app.services.completed_download_handler import artist_tags_match_expected
 from app.services.download_queue import pick_unique_artist_search_hit
 from app.services.library import _find_artist_by_name
 from app.services.naming import artist_folder_name, build_album_folder
-from app.services.release_scoring import score_release
 from tests.conftest import _artist
 
 
@@ -83,59 +81,3 @@ def test_pick_unique_artist_search_hit():
     assert pick_unique_artist_search_hit("John Smith", hits) is None
     assert pick_unique_artist_search_hit("John Smith Band", hits).provider_id == "3"
     assert pick_unique_artist_search_hit("Nobody", hits) is None
-
-
-def test_score_release_prefers_year_match():
-    with_year = score_release(
-        "John Smith - Debut (2018) FLAC",
-        80_000_000,
-        20,
-        "torrent",
-        "John Smith",
-        "Debut",
-        year="2018",
-    )
-    wrong_year = score_release(
-        "John Smith - Debut (2001) FLAC",
-        80_000_000,
-        20,
-        "torrent",
-        "John Smith",
-        "Debut",
-        year="2018",
-    )
-    assert with_year > wrong_year
-    assert with_year >= 10
-
-
-def test_artist_tags_match_expected(monkeypatch):
-    files = [Path("/tmp/a.flac"), Path("/tmp/b.flac")]
-
-    def fake_tags(path: Path):
-        if path.name == "a.flac":
-            return {"album_artist": "Other Person", "artist": "Other Person"}
-        return {"album_artist": "Other Person", "artist": "Other Person"}
-
-    monkeypatch.setattr(
-        "app.services.completed_download_handler._read_tags",
-        fake_tags,
-    )
-    assert artist_tags_match_expected(files, "Wanted Artist") is False
-
-    def ok_tags(_path: Path):
-        return {"album_artist": "Wanted Artist", "artist": "Wanted Artist"}
-
-    monkeypatch.setattr(
-        "app.services.completed_download_handler._read_tags",
-        ok_tags,
-    )
-    assert artist_tags_match_expected(files, "Wanted Artist") is True
-
-    def empty_tags(_path: Path):
-        return {"album_artist": None, "artist": None}
-
-    monkeypatch.setattr(
-        "app.services.completed_download_handler._read_tags",
-        empty_tags,
-    )
-    assert artist_tags_match_expected(files, "Wanted Artist") is None
