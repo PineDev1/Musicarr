@@ -5,18 +5,23 @@ from app.core.database import get_db
 from app.models import Artist
 from app.models.schemas import (
     ArtistCreate,
+    ArtistMergeRequest,
     ArtistOut,
     ArtistPatch,
     ArtistSearchResult,
+    BulkArtistSearchRequest,
+    BulkArtistSearchResult,
 )
 from app.services.artists import (
     add_artist,
+    collision_groups,
     delete_artist,
     find_linked_artists,
     get_artist_detail,
     grouped_artist_stats,
     list_artists_grouped,
     merge_album_rows,
+    merge_artists,
     name_collision_ids,
     sync_artist_albums,
 )
@@ -212,6 +217,109 @@ def search_artists(q: str = Query(..., min_length=1), limit: int = 25, db: Sessi
             )
         )
     return out
+
+
+@router.post("/bulk-search", response_model=list[BulkArtistSearchResult])
+def bulk_search_artists(payload: BulkArtistSearchRequest, db: Session = Depends(get_db)):
+    names = []
+    for line in (payload.names or "").splitlines():
+        name = line.strip()
+        if name and name not in names:
+            names.append(name)
+        if len(names) >= 40:
+            break
+    if not names:
+        raise HTTPException(status_code=400, detail="Paste at least one artist name")
+    try:
+        provider = get_active_provider(db)
+    except ProviderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    from app.services import musicbrainz
+
+    out: list[BulkArtistSearchResult] = []
+    for name in names:
+        try:
+            hits = provider.search_artists(name, limit=5)
+        except ProviderError as exc:
+            out.append(
+                BulkArtistSearchResult(query=name, results=[], error=str(exc))
+            )
+            continue
+        results = []
+        for r in hits:
+            mbid = musicbrainz.resolve_artist(r.name)
+            mb_count = musicbrainz.count_release_groups(mbid) if mbid else None
+            results.append(
+                ArtistSearchResult(
+                    provider=provider.name,
+                    provider_id=r.provider_id,
+                    deezer_id=int(r.provider_id)
+                    if provider.name == "deezer" and r.provider_id.isdigit()
+                    else None,
+                    name=r.name,
+                    image_url=r.image_url,
+                    nb_album=mb_count if mb_count is not None else r.nb_album,
+                )
+            )
+        out.append(BulkArtistSearchResult(query=name, results=results))
+    return out
+
+
+@router.get("/collisions")
+def get_artist_collisions(db: Session = Depends(get_db)):
+    groups = collision_groups(db)
+    return {
+        "groups": [
+            [
+                {
+                    "id": a.id,
+                    "name": a.name,
+                    "provider": a.provider,
+                    "provider_id": a.provider_id,
+                    "musicbrainz_id": getattr(a, "musicbrainz_id", None),
+                    "link_group_id": getattr(a, "link_group_id", None),
+                    "image_url": a.image_url,
+                }
+                for a in group
+            ]
+            for group in groups
+        ]
+    }
+
+
+@router.post("/merge", response_model=list[ArtistOut])
+def merge_artist_rows(payload: ArtistMergeRequest, db: Session = Depends(get_db)):
+    settings = ensure_settings(db)
+    active = (settings.active_provider or "deezer").lower()
+    try:
+        merge_artists(db, payload.artist_ids, preferred_id=payload.preferred_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Return grouped outs for each preferred id after merge
+    seen: set[int] = set()
+    outs: list[ArtistOut] = []
+    collisions = name_collision_ids(db)
+    for aid in payload.artist_ids:
+        if aid in seen:
+            continue
+        detail = get_artist_detail(db, aid)
+        if not detail:
+            continue
+        linked = find_linked_artists(db, detail)
+        for a in linked:
+            seen.add(a.id)
+        outs.append(
+            _artist_group_out(
+                linked,
+                include_albums=False,
+                active=active,
+                target_bitrate=(settings.bitrate or "flac").lower(),
+                upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
+                collision_ids=collisions,
+            )
+        )
+    return outs
 
 
 @router.get("", response_model=list[ArtistOut])

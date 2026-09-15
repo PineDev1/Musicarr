@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { PlayerAlbumPage } from './PlayerAlbumPage'
 import { PlayerAlbumsPage } from './PlayerAlbumsPage'
@@ -13,6 +14,7 @@ import { PlayerQueueProvider } from './PlayerQueueContext'
 import { PlayerSearchPage } from './PlayerSearchPage'
 import { PlayerSongsPage } from './PlayerSongsPage'
 import { PlayerHistoryPage } from './PlayerHistoryPage'
+import { PlayerStatsPage } from './PlayerStatsPage'
 import { playerApi } from './playerApi'
 
 export function PlayerApp() {
@@ -22,6 +24,11 @@ export function PlayerApp() {
     queryFn: playerApi.status,
     retry: false,
   })
+
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return
+    navigator.serviceWorker.register('/sw.js').catch(() => {})
+  }, [])
 
   if (status.isLoading) {
     return (
@@ -88,6 +95,7 @@ export function PlayerApp() {
           <Route path="albums/:id" element={<PlayerAlbumPage />} />
           <Route path="songs" element={<PlayerSongsPage />} />
           <Route path="history" element={<PlayerHistoryPage />} />
+          <Route path="stats" element={<PlayerStatsPage />} />
           <Route path="playlists" element={<PlayerPlaylistsPage />} />
           <Route path="playlists/:id" element={<PlayerPlaylistDetailPage />} />
           <Route path="search" element={<PlayerSearchPage />} />

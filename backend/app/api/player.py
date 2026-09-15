@@ -1221,6 +1221,81 @@ def listen_history(request: Request, db: Session = Depends(get_db)):
     return _builtin_meta("history", "Listening History", tracks)
 
 
+@router.get("/library/stats")
+def listen_stats(request: Request, db: Session = Depends(get_db), range_days: int = 30):
+    """Aggregate play counts for the current listener."""
+    user = _current_player_user(request, db)
+    days = max(1, min(365, int(range_days or 30)))
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    events = list(
+        db.scalars(
+            select(PlayerPlayEvent)
+            .options(
+                joinedload(PlayerPlayEvent.track)
+                .joinedload(Track.album)
+                .joinedload(Album.artist)
+            )
+            .where(
+                PlayerPlayEvent.user_id == user.id,
+                PlayerPlayEvent.played_at >= since,
+            )
+            .order_by(PlayerPlayEvent.played_at.desc())
+        )
+        .unique()
+        .all()
+    )
+    track_counts: dict[int, dict] = {}
+    artist_counts: dict[int, dict] = {}
+    total_seconds = 0
+    for ev in events:
+        track = ev.track
+        if not track:
+            continue
+        dur = int(track.duration or 0)
+        total_seconds += dur
+        t_entry = track_counts.setdefault(
+            track.id,
+            {
+                "track_id": track.id,
+                "title": track.title,
+                "artist_name": track.album.artist.name
+                if track.album and track.album.artist
+                else "",
+                "cover_url": track.album.cover_url if track.album else None,
+                "plays": 0,
+                "seconds": 0,
+            },
+        )
+        t_entry["plays"] += 1
+        t_entry["seconds"] += dur
+        artist = track.album.artist if track.album else None
+        if artist:
+            a_entry = artist_counts.setdefault(
+                artist.id,
+                {
+                    "artist_id": artist.id,
+                    "name": artist.name,
+                    "image_url": artist.image_url,
+                    "plays": 0,
+                    "seconds": 0,
+                },
+            )
+            a_entry["plays"] += 1
+            a_entry["seconds"] += dur
+
+    top_tracks = sorted(track_counts.values(), key=lambda x: (-x["plays"], -x["seconds"]))[:20]
+    top_artists = sorted(artist_counts.values(), key=lambda x: (-x["plays"], -x["seconds"]))[:20]
+    return {
+        "range_days": days,
+        "play_events": len(events),
+        "unique_tracks": len(track_counts),
+        "unique_artists": len(artist_counts),
+        "total_seconds": total_seconds,
+        "top_tracks": top_tracks,
+        "top_artists": top_artists,
+    }
+
+
 _AVATAR_MAX_BYTES = 2 * 1024 * 1024
 _AVATAR_TYPES = {
     "image/jpeg": "jpg",

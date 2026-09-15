@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+import json
+
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
@@ -54,31 +56,11 @@ async def queue_sse(request: Request):
         while True:
             if await request.is_disconnected():
                 break
-            snap = _queue_snapshot()
+            snap = await asyncio.to_thread(_queue_snapshot)
             payload = str(snap)
             if payload != last:
                 last = payload
-                import json
-
                 yield f"data: {json.dumps(snap)}\n\n"
             await asyncio.sleep(1.0)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-
-@router.websocket("/ws/queue")
-async def queue_ws(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        last = None
-        while True:
-            import json
-
-            snap = _queue_snapshot()
-            payload = json.dumps(snap)
-            if payload != last:
-                last = payload
-                await websocket.send_text(payload)
-            await asyncio.sleep(1.0)
-    except WebSocketDisconnect:
-        return

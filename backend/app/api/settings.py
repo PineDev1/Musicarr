@@ -51,6 +51,20 @@ def put_settings(
     return out
 
 
+@router.post("/settings/notify-test")
+def notify_test(db: Session = Depends(get_db)):
+    from app.services.notifications import send_test_notification
+
+    row = ensure_settings(db)
+    if not (getattr(row, "notify_webhook_url", None) or "").strip():
+        raise HTTPException(status_code=400, detail="Set a notification URL first")
+    try:
+        send_test_notification(db)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"ok": True}
+
+
 @router.get("/health", response_model=HealthOut)
 def health(db: Session = Depends(get_db)):
     row = ensure_settings(db)

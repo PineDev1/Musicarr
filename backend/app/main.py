@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
@@ -15,6 +15,7 @@ from app.services.cors_origins import LOCAL_CORS_ORIGINS, origin_is_allowed
 from app.services.download_queue import download_queue
 from app.services.monitor import release_monitor
 from app.services.settings_service import ensure_settings
+from sqlalchemy import select
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -188,6 +189,97 @@ def favicon():
     if fav.exists():
         return FileResponse(fav)
     raise HTTPException(status_code=404)
+
+
+_OG_BOT_HINTS = (
+    "bot",
+    "crawl",
+    "slurp",
+    "spider",
+    "facebookexternalhit",
+    "discordbot",
+    "slackbot",
+    "twitterbot",
+    "linkedinbot",
+    "telegrambot",
+    "whatsapp",
+    "preview",
+    "embedly",
+    "quora link preview",
+    "applebot",
+)
+
+
+def _is_link_preview_agent(request: Request) -> bool:
+    ua = (request.headers.get("user-agent") or "").lower()
+    return any(h in ua for h in _OG_BOT_HINTS)
+
+
+@app.get("/s/{token}")
+def share_landing(token: str, request: Request):
+    """Serve Open Graph HTML for crawlers; SPA shell for browsers."""
+    if not _is_link_preview_agent(request):
+        index_file = STATIC_DIR / "index.html"
+        if index_file.exists():
+            return FileResponse(index_file)
+        # Dev without static build — let Vite SPA handle it via proxy miss
+        raise HTTPException(status_code=404, detail="Build frontend for share pages")
+
+    from html import escape
+
+    from app.models import Album, PlayerShareLink, Track
+    from app.services import player_auth
+    from sqlalchemy.orm import joinedload
+
+    db = SessionLocal()
+    try:
+        if not player_auth.player_enabled(db):
+            raise HTTPException(status_code=404, detail="Player is disabled")
+        link = db.scalar(
+            select(PlayerShareLink)
+            .options(
+                joinedload(PlayerShareLink.track)
+                .joinedload(Track.album)
+                .joinedload(Album.artist)
+            )
+            .where(PlayerShareLink.token == token)
+        )
+        if not link or getattr(link, "revoked", False):
+            raise HTTPException(status_code=404, detail="Share not found")
+        track = link.track
+        if not track:
+            raise HTTPException(status_code=404, detail="Track not found")
+        album = track.album
+        artist = album.artist if album else None
+        title = escape(track.title or "Track")
+        artist_name = escape(artist.name if artist else "Unknown artist")
+        album_title = escape(album.title if album else "")
+        cover = (album.cover_url if album else None) or ""
+        desc = f"{artist_name} — {album_title}".strip(" —")
+        page_url = str(request.url)
+        html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{title} · Musicarr</title>
+  <meta property="og:type" content="music.song" />
+  <meta property="og:title" content="{title}" />
+  <meta property="og:description" content="{escape(desc)}" />
+  <meta property="og:url" content="{escape(page_url)}" />
+  {"<meta property='og:image' content='" + escape(cover) + "' />" if cover else ""}
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="{title}" />
+  <meta name="twitter:description" content="{escape(desc)}" />
+  {"<meta name='twitter:image' content='" + escape(cover) + "' />" if cover else ""}
+</head>
+<body>
+  <p>{title} by {artist_name}</p>
+  <p><a href="{escape(page_url)}">Open in Musicarr</a></p>
+</body>
+</html>"""
+        return HTMLResponse(html)
+    finally:
+        db.close()
 
 
 @app.api_route("/{full_path:path}", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])

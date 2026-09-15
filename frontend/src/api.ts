@@ -42,6 +42,8 @@ export type Settings = {
   official_releases_only: boolean
   mb_catalog_mode: string
   notify_webhook_url: string
+  notify_channel: string
+  notify_token_set: boolean
   notify_on_complete: boolean
   notify_on_failure: boolean
   upgrade_enabled: boolean
@@ -81,6 +83,12 @@ export type ArtistSearchResult = {
   name: string
   image_url: string | null
   nb_album: number | null
+}
+
+export type BulkArtistSearchResult = {
+  query: string
+  results: ArtistSearchResult[]
+  error?: string | null
 }
 
 export type Track = {
@@ -238,6 +246,7 @@ export const api = {
   settings: (validate = false) => request<Settings>(`/settings?validate=${validate}`),
   updateSettings: (body: Record<string, unknown>) =>
     request<Settings>('/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  notifyTest: () => request<{ ok: boolean }>('/settings/notify-test', { method: 'POST' }),
   logout: (provider: string) =>
     request<Settings>(`/auth/${provider}/logout`, { method: 'POST' }),
   tidalDeviceStart: () =>
@@ -266,6 +275,28 @@ export const api = {
     }),
   searchArtists: (q: string) =>
     request<ArtistSearchResult[]>(`/artists/search?q=${encodeURIComponent(q)}`),
+  bulkSearchArtists: (names: string) =>
+    request<BulkArtistSearchResult[]>('/artists/bulk-search', {
+      method: 'POST',
+      body: JSON.stringify({ names }),
+    }),
+  artistCollisions: () =>
+    request<{
+      groups: {
+        id: number
+        name: string
+        provider: string
+        provider_id: string
+        musicbrainz_id?: string | null
+        link_group_id?: string | null
+        image_url?: string | null
+      }[][]
+    }>('/artists/collisions'),
+  mergeArtists: (artistIds: number[], preferredId?: number) =>
+    request<Artist[]>('/artists/merge', {
+      method: 'POST',
+      body: JSON.stringify({ artist_ids: artistIds, preferred_id: preferredId }),
+    }),
   artists: () => request<Artist[]>('/artists'),
   artist: (id: number) => request<Artist>(`/artists/${id}`),
   addArtist: (
@@ -303,6 +334,16 @@ export const api = {
     request<{ skipped: number }>('/albums/wanted/skip-singles', { method: 'POST' }),
   skipWantedJunk: () =>
     request<{ skipped: number }>('/albums/wanted/skip-junk', { method: 'POST' }),
+  bulkSkipAlbums: (albumIds: number[]) =>
+    request<{ skipped: number }>('/albums/bulk/skip', {
+      method: 'POST',
+      body: JSON.stringify({ album_ids: albumIds }),
+    }),
+  bulkDownloadAlbums: (albumIds: number[]) =>
+    request<{ queued: number }>('/albums/bulk/download', {
+      method: 'POST',
+      body: JSON.stringify({ album_ids: albumIds }),
+    }),
   upgradable: () => request<Album[]>('/albums/upgradable'),
   upgradeAll: () =>
     request<{ queued: number; target?: string; message?: string }>('/albums/upgrade-all', {
@@ -339,21 +380,9 @@ export const api = {
     request<{ cleared: number }>('/queue/clear-finished', { method: 'POST' }),
   history: () => request<HistoryEvent[]>('/history'),
   scan: () =>
-    request<{ files_seen: number; matched: number; unmatched: number; message: string }>(
-      '/library/scan',
-      { method: 'POST' },
-    ),
+    request<LibraryJob>('/library/scan', { method: 'POST' }),
   importLibrary: (linkProviders = true) =>
-    request<{
-      files_seen: number
-      artists_created: number
-      albums_imported: number
-      tracks_linked: number
-      provider_linked: number
-      matched: number
-      unmatched: number
-      message: string
-    }>(`/library/import?link_providers=${linkProviders}`, { method: 'POST' }),
+    request<LibraryJob>(`/library/import?link_providers=${linkProviders}`, { method: 'POST' }),
   importReview: (suggest = true) =>
     request<ImportReview>(`/library/review?suggest=${suggest}`),
   linkImportArtist: (artistId: number, providerId: string, provider?: string) =>
@@ -361,10 +390,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ provider_id: providerId, provider }),
     }),
-  reorganize: () =>
-    request<{ moved: number; skipped: number; message: string }>('/library/reorganize', {
-      method: 'POST',
-    }),
+  reorganize: () => request<LibraryJob>('/library/reorganize', { method: 'POST' }),
+  libraryJob: () => request<LibraryJob>('/library/job'),
   runMonitor: () =>
     request<{ artists_checked: number; new_albums: number }>('/monitor/run', {
       method: 'POST',
@@ -419,4 +446,27 @@ export type MbCatalogJob = {
   dump_version: string
   started_at: string
   finished_at: string
+}
+
+export type LibraryJob = {
+  state: string
+  kind: string
+  phase: string
+  progress_pct: number
+  message: string
+  error: string
+  started_at: string
+  finished_at: string
+  files_seen: number
+  files_done: number
+  artists_created: number
+  albums_imported: number
+  tracks_linked: number
+  provider_linked: number
+  matched: number
+  unmatched: number
+  moved: number
+  skipped: number
+  result: Record<string, unknown>
+  link_providers: boolean
 }

@@ -7,6 +7,9 @@ import { useToast } from '../Toast'
 
 export function LibraryPage() {
   const [filter, setFilter] = useState('')
+  const [mergeGroup, setMergeGroup] = useState<
+    { id: number; name: string; provider: string; provider_id: string }[] | null
+  >(null)
   const qc = useQueryClient()
   const toast = useToast()
   const { data, isLoading, error } = useQuery({
@@ -16,6 +19,10 @@ export function LibraryPage() {
   const { data: upgradable } = useQuery({
     queryKey: ['upgradable'],
     queryFn: api.upgradable,
+  })
+  const collisions = useQuery({
+    queryKey: ['artist-collisions'],
+    queryFn: api.artistCollisions,
   })
 
   const scan = useMutation({
@@ -49,6 +56,17 @@ export function LibraryPage() {
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
+  const merge = useMutation({
+    mutationFn: (ids: number[]) => api.mergeArtists(ids),
+    onSuccess: () => {
+      toast.push('Artists merged', 'ok')
+      setMergeGroup(null)
+      qc.invalidateQueries({ queryKey: ['artists'] })
+      qc.invalidateQueries({ queryKey: ['artist-collisions'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+
   const filtered = useMemo(() => {
     if (!data) return []
     const q = filter.trim().toLowerCase()
@@ -57,6 +75,7 @@ export function LibraryPage() {
   }, [data, filter])
 
   const upgradeCount = upgradable?.length || 0
+  const collisionGroups = collisions.data?.groups || []
 
   return (
     <div>
@@ -67,13 +86,18 @@ export function LibraryPage() {
         </div>
         <div className="toolbar" style={{ marginBottom: 0 }}>
           {upgradeCount > 0 && (
-            <button
-              className="btn secondary"
-              onClick={() => upgradeAll.mutate()}
-              disabled={upgradeAll.isPending}
-            >
-              {upgradeAll.isPending ? 'Queuing…' : `Upgrade all (${upgradeCount})`}
-            </button>
+            <>
+              <Link className="btn secondary" to="/upgrades">
+                Upgrades ({upgradeCount})
+              </Link>
+              <button
+                className="btn secondary"
+                onClick={() => upgradeAll.mutate()}
+                disabled={upgradeAll.isPending}
+              >
+                {upgradeAll.isPending ? 'Queuing…' : `Upgrade all (${upgradeCount})`}
+              </button>
+            </>
           )}
           <button
             className="btn secondary"
@@ -87,6 +111,66 @@ export function LibraryPage() {
           </Link>
         </div>
       </div>
+
+      {collisionGroups.length > 0 && (
+        <div className="banner" style={{ marginBottom: '1rem' }}>
+          <strong>{collisionGroups.length}</strong> possible duplicate artist name
+          {collisionGroups.length === 1 ? '' : 's'}.{' '}
+          <button
+            type="button"
+            className="btn ghost"
+            style={{ display: 'inline' }}
+            onClick={() => setMergeGroup(collisionGroups[0])}
+          >
+            Review first group
+          </button>
+        </div>
+      )}
+
+      {mergeGroup && (
+        <div className="banner" style={{ marginBottom: '1rem' }}>
+          <p style={{ marginTop: 0 }}>
+            These look like the same artist — merge into one library entry?
+          </p>
+          <ul style={{ margin: '0.5rem 0' }}>
+            {mergeGroup.map((a) => (
+              <li key={a.id}>
+                {a.name}{' '}
+                <span className="muted">
+                  ({a.provider} · {a.provider_id})
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div className="toolbar" style={{ marginBottom: 0 }}>
+            <button
+              className="btn"
+              disabled={merge.isPending}
+              onClick={() => merge.mutate(mergeGroup.map((a) => a.id))}
+            >
+              Merge
+            </button>
+            <button className="btn ghost" type="button" onClick={() => setMergeGroup(null)}>
+              Keep separate
+            </button>
+            {collisionGroups.length > 1 && (
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={() => {
+                  const idx = collisionGroups.findIndex(
+                    (g) => g[0]?.id === mergeGroup[0]?.id,
+                  )
+                  const next = collisionGroups[(idx + 1) % collisionGroups.length]
+                  setMergeGroup(next)
+                }}
+              >
+                Next group
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {data && data.length > 0 && (
         <div className="toolbar">

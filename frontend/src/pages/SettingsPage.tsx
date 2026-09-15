@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import { playerApi } from '../player/playerApi'
 import { useToast } from '../Toast'
@@ -66,7 +66,19 @@ function formatBytes(n: number): string {
 export function SettingsPage() {
   const qc = useQueryClient()
   const toast = useToast()
-  const [tab, setTab] = useState<TabId>('sources')
+  const [searchParams] = useSearchParams()
+  const initialTab = (searchParams.get('tab') as TabId | null) || 'sources'
+  const [tab, setTab] = useState<TabId>(
+    TABS.some((t) => t.id === initialTab) ? initialTab : 'sources',
+  )
+
+  useEffect(() => {
+    const fromUrl = searchParams.get('tab') as TabId | null
+    if (fromUrl && TABS.some((t) => t.id === fromUrl)) {
+      setTab(fromUrl)
+    }
+  }, [searchParams])
+
   const { data, isLoading, error } = useQuery({
     queryKey: ['settings'],
     queryFn: () => api.settings(true),
@@ -93,6 +105,8 @@ export function SettingsPage() {
   const [ignoreLive, setIgnoreLive] = useState(false)
   const [officialOnly, setOfficialOnly] = useState(true)
   const [notifyUrl, setNotifyUrl] = useState('')
+  const [notifyChannel, setNotifyChannel] = useState('discord')
+  const [notifyToken, setNotifyToken] = useState('')
   const [notifyComplete, setNotifyComplete] = useState(true)
   const [notifyFailure, setNotifyFailure] = useState(true)
   const [upgradeEnabled, setUpgradeEnabled] = useState(true)
@@ -139,6 +153,8 @@ export function SettingsPage() {
     setIgnoreLive(data.ignore_live_releases ?? false)
     setOfficialOnly(data.official_releases_only ?? true)
     setNotifyUrl(data.notify_webhook_url || '')
+    setNotifyChannel(data.notify_channel || 'discord')
+    setNotifyToken('')
     setNotifyComplete(data.notify_on_complete ?? true)
     setNotifyFailure(data.notify_on_failure ?? true)
     setUpgradeEnabled(data.upgrade_enabled ?? true)
@@ -180,6 +196,8 @@ export function SettingsPage() {
         ignore_live_releases: ignoreLive,
         official_releases_only: officialOnly,
         notify_webhook_url: notifyUrl.trim(),
+        notify_channel: notifyChannel,
+        ...(notifyToken.trim() ? { notify_token: notifyToken.trim() } : {}),
         notify_on_complete: notifyComplete,
         notify_on_failure: notifyFailure,
         upgrade_enabled: upgradeEnabled,
@@ -210,6 +228,12 @@ export function SettingsPage() {
       qc.invalidateQueries({ queryKey: ['health'] })
       qc.invalidateQueries({ queryKey: ['auth-status'] })
     },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+
+  const notifyTest = useMutation({
+    mutationFn: api.notifyTest,
+    onSuccess: () => toast.push('Test notification sent', 'ok'),
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
@@ -297,26 +321,51 @@ export function SettingsPage() {
 
   const scan = useMutation({
     mutationFn: api.scan,
-    onSuccess: (res) => toast.push(res.message, 'ok'),
+    onSuccess: () => {
+      toast.push('Library scan started', 'ok')
+      qc.invalidateQueries({ queryKey: ['library-job'] })
+    },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const importLib = useMutation({
     mutationFn: () => api.importLibrary(true),
-    onSuccess: (res) => {
-      toast.push(res.message, 'ok')
-      qc.invalidateQueries({ queryKey: ['artists'] })
-      qc.invalidateQueries({ queryKey: ['wanted'] })
-      qc.invalidateQueries({ queryKey: ['health'] })
-      qc.invalidateQueries({ queryKey: ['import-review'] })
-      qc.invalidateQueries({ queryKey: ['upgradable'] })
+    onSuccess: () => {
+      toast.push('Library import started', 'ok')
+      qc.invalidateQueries({ queryKey: ['library-job'] })
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const reorganize = useMutation({
     mutationFn: api.reorganize,
-    onSuccess: (res) => toast.push(res.message, 'ok'),
+    onSuccess: () => {
+      toast.push('Reorganize started', 'ok')
+      qc.invalidateQueries({ queryKey: ['library-job'] })
+    },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
+  const libraryJob = useQuery({
+    queryKey: ['library-job'],
+    queryFn: api.libraryJob,
+    refetchInterval: (q) => (q.state.data?.state === 'running' ? 1000 : false),
+  })
+  const libraryJobRunning = libraryJob.data?.state === 'running'
+  const prevLibraryJobState = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const state = libraryJob.data?.state
+    const prev = prevLibraryJobState.current
+    prevLibraryJobState.current = state
+    if (prev !== 'running') return
+    if (state === 'done') {
+      toast.push(libraryJob.data?.message || 'Library job finished', 'ok')
+      qc.invalidateQueries({ queryKey: ['artists'] })
+      qc.invalidateQueries({ queryKey: ['wanted'] })
+      qc.invalidateQueries({ queryKey: ['health'] })
+      qc.invalidateQueries({ queryKey: ['import-review'] })
+      qc.invalidateQueries({ queryKey: ['upgradable'] })
+    } else if (state === 'error') {
+      toast.push(libraryJob.data?.error || 'Library job failed', 'error')
+    }
+  }, [libraryJob.data?.state, libraryJob.data?.message, libraryJob.data?.error, qc, toast])
   const monitor = useMutation({
     mutationFn: api.runMonitor,
     onSuccess: (res) =>
@@ -906,14 +955,71 @@ export function SettingsPage() {
         {tab === 'notifications' && (
           <>
             <div className="field">
-              <label>Notification webhook URL (Discord or generic)</label>
+              <label>Channel preset</label>
+              <select
+                value={notifyChannel}
+                onChange={(e) => {
+                  const ch = e.target.value
+                  setNotifyChannel(ch)
+                  if (ch === 'discord' && !notifyUrl) {
+                    setNotifyUrl('https://discord.com/api/webhooks/')
+                  } else if (ch === 'slack' && !notifyUrl) {
+                    setNotifyUrl('https://hooks.slack.com/services/')
+                  } else if (ch === 'ntfy' && !notifyUrl) {
+                    setNotifyUrl('https://ntfy.sh/your-topic')
+                  } else if (ch === 'pushover') {
+                    setNotifyUrl('')
+                  }
+                }}
+              >
+                <option value="discord">Discord</option>
+                <option value="slack">Slack</option>
+                <option value="ntfy">ntfy</option>
+                <option value="pushover">Pushover</option>
+                <option value="custom">Custom webhook</option>
+              </select>
+              <p className="muted" style={{ fontSize: '0.85rem', marginTop: 6 }}>
+                {notifyChannel === 'discord' &&
+                  'Paste a Discord webhook URL. Musicarr sends an embed.'}
+                {notifyChannel === 'slack' &&
+                  'Paste a Slack Incoming Webhook URL.'}
+                {notifyChannel === 'ntfy' &&
+                  'Use your topic URL (e.g. https://ntfy.sh/musicarr). Optional bearer token below.'}
+                {notifyChannel === 'pushover' &&
+                  'URL field = application API token; token field = user key.'}
+                {notifyChannel === 'custom' &&
+                  'Generic JSON POST with title/message/content fields.'}
+              </p>
+            </div>
+            <div className="field">
+              <label>
+                {notifyChannel === 'pushover' ? 'Pushover app token' : 'Webhook / topic URL'}
+              </label>
               <input
-                type="url"
-                placeholder="https://discord.com/api/webhooks/…"
+                type={notifyChannel === 'pushover' ? 'text' : 'url'}
+                placeholder={
+                  notifyChannel === 'pushover'
+                    ? 'Application API token'
+                    : 'https://…'
+                }
                 value={notifyUrl}
                 onChange={(e) => setNotifyUrl(e.target.value)}
               />
             </div>
+            {(notifyChannel === 'ntfy' || notifyChannel === 'pushover') && (
+              <div className="field">
+                <label>
+                  {notifyChannel === 'pushover' ? 'User key' : 'Bearer token (optional)'}
+                  {data?.notify_token_set ? ' · saved' : ''}
+                </label>
+                <input
+                  type="password"
+                  placeholder={data?.notify_token_set ? 'Leave blank to keep' : 'Token'}
+                  value={notifyToken}
+                  onChange={(e) => setNotifyToken(e.target.value)}
+                />
+              </div>
+            )}
             <div className="field">
               <label>Notify when</label>
               <div className="checks">
@@ -934,6 +1040,16 @@ export function SettingsPage() {
                   Download / auth failure
                 </label>
               </div>
+            </div>
+            <div className="toolbar">
+              <button
+                type="button"
+                className="btn secondary"
+                onClick={() => notifyTest.mutate()}
+                disabled={notifyTest.isPending || !notifyUrl.trim()}
+              >
+                {notifyTest.isPending ? 'Sending…' : 'Send test notification'}
+              </button>
             </div>
           </>
         )}
@@ -1301,9 +1417,11 @@ export function SettingsPage() {
                     importLib.mutate()
                   }
                 }}
-                disabled={importLib.isPending}
+                disabled={importLib.isPending || libraryJobRunning}
               >
-                {importLib.isPending ? 'Importing…' : 'Import existing library'}
+                {libraryJobRunning && libraryJob.data?.kind === 'import'
+                  ? 'Importing…'
+                  : 'Import existing library'}
               </button>
               <Link className="btn secondary" to="/import-review">
                 Review imports
@@ -1312,17 +1430,21 @@ export function SettingsPage() {
                 type="button"
                 className="btn secondary"
                 onClick={() => scan.mutate()}
-                disabled={scan.isPending}
+                disabled={scan.isPending || libraryJobRunning}
               >
-                {scan.isPending ? 'Scanning…' : 'Match files to library'}
+                {libraryJobRunning && libraryJob.data?.kind === 'scan'
+                  ? 'Scanning…'
+                  : 'Match files to library'}
               </button>
               <button
                 type="button"
                 className="btn secondary"
                 onClick={() => reorganize.mutate()}
-                disabled={reorganize.isPending}
+                disabled={reorganize.isPending || libraryJobRunning}
               >
-                Reorganize files
+                {libraryJobRunning && libraryJob.data?.kind === 'reorganize'
+                  ? 'Reorganizing…'
+                  : 'Reorganize files'}
               </button>
               <button
                 type="button"
@@ -1333,6 +1455,50 @@ export function SettingsPage() {
                 Check for new releases
               </button>
             </div>
+            {(libraryJob.data?.state === 'running' ||
+              libraryJob.data?.state === 'error' ||
+              (libraryJob.data?.state === 'done' && libraryJob.data.message)) && (
+              <div style={{ marginTop: '1rem', maxWidth: 640 }}>
+                <p style={{ margin: '0 0 0.35rem' }}>
+                  {libraryJob.data.phase
+                    ? libraryJob.data.phase.charAt(0).toUpperCase() +
+                      libraryJob.data.phase.slice(1)
+                    : 'Library job'}
+                  {libraryJob.data.kind ? ` · ${libraryJob.data.kind}` : ''}
+                </p>
+                <p className="muted" style={{ margin: '0 0 0.5rem' }}>
+                  {libraryJob.data.message || '—'}
+                </p>
+                <div
+                  style={{
+                    height: 8,
+                    borderRadius: 4,
+                    background: 'var(--border, #333)',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div
+                    style={{
+                      height: '100%',
+                      width: `${Math.min(100, Math.max(2, libraryJob.data.progress_pct || 0))}%`,
+                      background: libraryJob.data.state === 'error' ? '#c44' : 'var(--accent, #3dba7a)',
+                      transition: 'width 0.3s ease',
+                    }}
+                  />
+                </div>
+                <p className="muted" style={{ marginTop: '0.35rem' }}>
+                  {(libraryJob.data.progress_pct || 0).toFixed(0)}%
+                  {libraryJob.data.files_seen
+                    ? ` · ${libraryJob.data.files_done || 0}/${libraryJob.data.files_seen} files`
+                    : ''}
+                </p>
+                {libraryJob.data.error && (
+                  <p className="error" style={{ marginTop: '0.5rem' }}>
+                    {libraryJob.data.error}
+                  </p>
+                )}
+              </div>
+            )}
             <p className="muted" style={{ marginTop: '0.75rem', maxWidth: 640 }}>
               <strong>Import existing library</strong> creates artists/albums from what’s already on
               disk. <strong>Review imports</strong> links local-only artists and flags weak tags.{' '}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from pathlib import Path
+from typing import Any, Callable
 
 from mutagen import File as MutagenFile
 from sqlalchemy import select
@@ -20,6 +21,12 @@ from app.services.settings_service import ensure_settings, library_root
 
 
 AUDIO_EXTS = {".flac", ".mp3", ".m4a", ".ogg", ".opus", ".wav", ".aac", ".aiff", ".aif"}
+ProgressCb = Callable[[dict[str, Any]], None]
+
+
+def _emit(on_progress: ProgressCb | None, **kwargs: Any) -> None:
+    if on_progress:
+        on_progress(kwargs)
 
 
 def _norm(s: str | None) -> str:
@@ -92,7 +99,7 @@ def _guess_from_path(path: Path, root: Path) -> dict:
     return {"artist": artist, "album": album, "title": title}
 
 
-def _collect_files(root: Path) -> list[dict]:
+def _collect_files(root: Path, *, on_progress: ProgressCb | None = None) -> list[dict]:
     out: list[dict] = []
     for path in root.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in AUDIO_EXTS:
@@ -126,6 +133,14 @@ def _collect_files(root: Path) -> list[dict]:
                 "year": year,
             }
         )
+        if len(out) % 50 == 0:
+            _emit(
+                on_progress,
+                phase="collecting",
+                message=f"Reading tags… {len(out)} files",
+                files_seen=len(out),
+                progress_pct=min(20.0, 5.0 + len(out) / 50.0),
+            )
     return out
 
 
@@ -265,6 +280,58 @@ def _find_or_create_album(
     return album
 
 
+def _tracks_for_album(db: Session, album: Album) -> list[Track]:
+    """Album.tracks often misses unflushed rows; merge relationship + session.new."""
+    tracks = list(album.tracks or [])
+    seen = {id(t) for t in tracks}
+    for obj in db.new:
+        if isinstance(obj, Track) and obj.album_id == album.id and id(obj) not in seen:
+            tracks.append(obj)
+            seen.add(id(obj))
+    return tracks
+
+
+def _unique_provider_track_id(
+    db: Session,
+    *,
+    provider_name: str,
+    provider_id: str,
+) -> str:
+    """Keep (provider, provider_id) unique across DB + unflushed session objects."""
+    import hashlib
+
+    base = str(provider_id)[:64]
+    pid = base
+
+    def taken(candidate: str) -> bool:
+        for obj in list(db.new) + list(db.dirty) + list(db.identity_map.values()):
+            if (
+                isinstance(obj, Track)
+                and obj.provider == provider_name
+                and str(obj.provider_id) == candidate
+            ):
+                return True
+        return (
+            db.scalar(
+                select(Track).where(
+                    Track.provider == provider_name,
+                    Track.provider_id == candidate,
+                )
+            )
+            is not None
+        )
+
+    if not taken(pid):
+        return pid
+    digest = hashlib.sha1(f"{provider_name}:{base}".encode("utf-8")).hexdigest()[:8]
+    for n in range(0, 50):
+        suffix = digest if n == 0 else f"{digest}{n}"
+        candidate = f"{base[: 64 - len(suffix) - 1]}-{suffix}"[:64]
+        if not taken(candidate):
+            return candidate
+    return f"{base[:55]}-{digest}"[:64]
+
+
 def _upsert_track(
     db: Session,
     album: Album,
@@ -275,7 +342,16 @@ def _upsert_track(
     isrc: str | None,
     path: str,
 ) -> Track:
-    tracks = list(album.tracks or [])
+    # Same file imported twice (or rematch): attach to existing row by path first.
+    path_key = str(path)
+    for obj in list(db.new) + list(db.dirty) + list(db.identity_map.values()):
+        if isinstance(obj, Track) and obj.path == path_key:
+            return obj
+    by_path = db.scalar(select(Track).where(Track.path == path_key))
+    if by_path is not None:
+        return by_path
+
+    tracks = _tracks_for_album(db, album)
     track = None
     if isrc:
         track = next((t for t in tracks if t.isrc and t.isrc == isrc), None)
@@ -313,7 +389,9 @@ def _upsert_track(
     except Exception:  # noqa: BLE001
         pass
 
-    pid = f"{album.provider_id}-t{disc_no}-{track_no or len(tracks)+1}-{_slug_id(title)[:20]}"
+    tn = track_no or (len(tracks) + 1)
+    raw_pid = f"{album.provider_id}-t{disc_no or 1}-{tn}-{_slug_id(title)[:20]}"
+    pid = _unique_provider_track_id(db, provider_name=album.provider, provider_id=raw_pid)
     track = Track(
         provider=album.provider,
         provider_id=pid,
@@ -327,16 +405,27 @@ def _upsert_track(
         path=path,
     )
     db.add(track)
+    # Keep relationship in sync so later upserts in this flush see the row.
+    try:
+        album.tracks.append(track)
+    except Exception:  # noqa: BLE001
+        pass
     return track
 
 
-def import_existing_library(db: Session, *, link_providers: bool = True) -> dict:
+def import_existing_library(
+    db: Session,
+    *,
+    link_providers: bool = True,
+    on_progress: ProgressCb | None = None,
+) -> dict:
     """
     Build Musicarr artists/albums/tracks from files already on disk.
     Optionally link artists to the active streaming provider when a clear name match exists.
     """
     root = library_root(db)
-    files = _collect_files(root)
+    _emit(on_progress, phase="collecting", message="Collecting audio files…", progress_pct=2)
+    files = _collect_files(root, on_progress=on_progress)
     if not files:
         msg = f"No audio files found under {root}"
         add_history(db, "library_import", msg)
@@ -359,8 +448,23 @@ def import_existing_library(db: Session, *, link_providers: bool = True) -> dict
     tracks_linked = 0
     provider_linked = 0
     known_artists_before = {a.id for a in db.scalars(select(Artist)).all()}
+    artist_total = max(1, len(grouped))
+    artist_idx = 0
 
     for artist_name, albums_map in grouped.items():
+        artist_idx += 1
+        _emit(
+            on_progress,
+            phase="importing",
+            message=f"Importing {artist_name} ({artist_idx}/{artist_total})",
+            files_seen=len(files),
+            files_done=tracks_linked,
+            artists_created=artists_created,
+            albums_imported=albums_imported,
+            tracks_linked=tracks_linked,
+            provider_linked=provider_linked,
+            progress_pct=20.0 + (60.0 * artist_idx / artist_total),
+        )
         artist = _find_artist_by_name(db, artist_name)
         if not artist and link_providers:
             linked = _try_link_provider_artist(db, artist_name)
@@ -439,7 +543,8 @@ def import_existing_library(db: Session, *, link_providers: bool = True) -> dict
             db.commit()
 
     # Pass 2: also run match-only scan for leftover DB tracks
-    scan = scan_library(db)
+    _emit(on_progress, phase="matching", message="Matching existing DB tracks…", progress_pct=85)
+    scan = scan_library(db, on_progress=None)
 
     try:
         from app.services.media_refresh import trigger_media_refresh
@@ -468,10 +573,11 @@ def import_existing_library(db: Session, *, link_providers: bool = True) -> dict
     }
 
 
-def scan_library(db: Session) -> dict:
+def scan_library(db: Session, *, on_progress: ProgressCb | None = None) -> dict:
     """Match on-disk files to tracks already in the database (no new artists)."""
     root = library_root(db)
-    files = _collect_files(root)
+    _emit(on_progress, phase="collecting", message="Collecting audio files…", progress_pct=2)
+    files = _collect_files(root, on_progress=on_progress)
     tracks = db.scalars(select(Track).options(joinedload(Track.album))).all()
     by_isrc = {t.isrc: t for t in tracks if t.isrc}
     by_path = {t.path: t for t in tracks if t.path}
@@ -488,8 +594,20 @@ def scan_library(db: Session) -> dict:
 
     matched = 0
     unmatched = 0
+    total = max(1, len(files))
 
-    for f in files:
+    for idx, f in enumerate(files, start=1):
+        if idx == 1 or idx % 25 == 0 or idx == total:
+            _emit(
+                on_progress,
+                phase="matching",
+                message=f"Matching files… {idx}/{total}",
+                files_seen=len(files),
+                files_done=idx,
+                matched=matched,
+                unmatched=unmatched,
+                progress_pct=20.0 + (70.0 * idx / total),
+            )
         sp = str(f["path"])
         if sp in by_path:
             matched += 1
@@ -767,7 +885,7 @@ def link_local_artist(
 
 
 
-def reorganize_library(db: Session) -> dict:
+def reorganize_library(db: Session, *, on_progress: ProgressCb | None = None) -> dict:
     settings = ensure_settings(db)
     root = library_root(db)
     moved = 0
@@ -775,7 +893,17 @@ def reorganize_library(db: Session) -> dict:
     albums = db.scalars(
         select(Album).options(joinedload(Album.tracks), joinedload(Album.artist))
     ).unique().all()
-    for album in albums:
+    total = max(1, len(albums))
+    for idx, album in enumerate(albums, start=1):
+        if idx == 1 or idx % 10 == 0 or idx == total:
+            _emit(
+                on_progress,
+                phase="moving",
+                message=f"Reorganizing albums… {idx}/{total}",
+                moved=moved,
+                skipped=skipped,
+                progress_pct=5.0 + (90.0 * idx / total),
+            )
         tracks = [t for t in album.tracks if t.path and Path(t.path).exists()]
         if not tracks:
             skipped += 1

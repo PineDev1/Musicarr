@@ -4,9 +4,10 @@ import logging
 import re
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 import httpx
 
@@ -19,10 +20,63 @@ SEARCH_SCORE_MIN = 80
 MATCH_RATIO_MIN = 0.78
 MAX_RETRIES = 5
 
+_RG_CACHE_MAX = 512
+_CREDIT_CACHE_MAX = 4096
+_CACHE_TTL_S = 3600.0
+
 _lock = threading.Lock()
 _last_request = 0.0
-_rg_cache: dict[str, list["ReleaseGroup"]] = {}
-_credit_cache: dict[str, tuple["CreditArtist", ...]] = {}
+
+_T = TypeVar("_T")
+
+
+class _TtlLruCache(Generic[_T]):
+    """Bounded in-process cache for live MusicBrainz responses only."""
+
+    def __init__(self, maxsize: int, ttl_s: float) -> None:
+        self._maxsize = max(1, maxsize)
+        self._ttl_s = max(0.001, ttl_s)
+        self._data: OrderedDict[str, tuple[float, _T]] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key: str) -> _T | None:
+        now = time.monotonic()
+        with self._lock:
+            item = self._data.get(key)
+            if item is None:
+                return None
+            expires_at, value = item
+            if expires_at <= now:
+                del self._data[key]
+                return None
+            self._data.move_to_end(key)
+            return value
+
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str) and self.get(key) is not None
+
+    def set(self, key: str, value: _T) -> None:
+        expires_at = time.monotonic() + self._ttl_s
+        with self._lock:
+            if key in self._data:
+                del self._data[key]
+            self._data[key] = (expires_at, value)
+            while len(self._data) > self._maxsize:
+                self._data.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._data.clear()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._data)
+
+
+_rg_cache: _TtlLruCache[list["ReleaseGroup"]] = _TtlLruCache(_RG_CACHE_MAX, _CACHE_TTL_S)
+_credit_cache: _TtlLruCache[tuple["CreditArtist", ...]] = _TtlLruCache(
+    _CREDIT_CACHE_MAX, _CACHE_TTL_S
+)
 
 _EDITION_NOISE = re.compile(
     r"\s*[\(\[][^)\]]*(remaster|deluxe|expanded|anniversary|edition|bonus|explicit|"
@@ -404,17 +458,19 @@ def fetch_catalog(mbid: str, *, use_cache: bool = True) -> CatalogResult:
     key = (mbid or "").strip()
     if not key:
         return CatalogResult(error="No MusicBrainz artist id")
-    if use_cache and key in _rg_cache:
-        return CatalogResult(release_groups=list(_rg_cache[key]))
+    if use_cache:
+        cached = _rg_cache.get(key)
+        if cached is not None:
+            return CatalogResult(release_groups=list(cached))
 
     if _prefer_local():
         from app.services import mb_local
 
         local = mb_local.fetch_catalog(key)
         if not local.error:
-            # Drop "other" types to match live filter behavior
+            # Drop "other" types to match live filter behavior.
+            # Local SQLite is the durable store — do not memoize into RAM.
             filtered = [rg for rg in local.release_groups if rg.primary_type != "other"]
-            _rg_cache[key] = filtered
             return CatalogResult(release_groups=list(filtered), collaborators=list(local.collaborators))
         if not _allow_live():
             return local
@@ -467,7 +523,8 @@ def fetch_catalog(mbid: str, *, use_cache: bool = True) -> CatalogResult:
         if offset >= count or len(rows) < 100:
             break
 
-    _rg_cache[key] = out
+    if use_cache:
+        _rg_cache.set(key, out)
     return CatalogResult(
         release_groups=list(out),
         collaborators=list(collaborators.values()),
@@ -502,21 +559,19 @@ def enrich_release_group_credits(rg: ReleaseGroup) -> ReleaseGroup:
 
         mb_local.enrich_release_group_credits(rg)
         if rg.credits:
-            _credit_cache[rg.mbid] = rg.credits
+            # Local hits stay out of the live RAM cache.
             return rg
         if not _allow_live():
-            _credit_cache[rg.mbid] = ()
             return rg
     elif not _allow_live():
-        _credit_cache[rg.mbid] = ()
         return rg
 
     data = _get(f"/release-group/{rg.mbid}", {"inc": "artists"})
     if data.get("_error") or not data.get("id"):
-        _credit_cache[rg.mbid] = ()
+        _credit_cache.set(rg.mbid, ())
         return rg
     credits = tuple(_parse_credits(data))
-    _credit_cache[rg.mbid] = credits
+    _credit_cache.set(rg.mbid, credits)
     rg.credits = credits
     return rg
 

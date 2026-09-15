@@ -7,6 +7,7 @@ const links = [
   { to: '/', label: 'Library', end: true },
   { to: '/add', label: 'Add Artist' },
   { to: '/wanted', label: 'Wanted' },
+  { to: '/upgrades', label: 'Upgrades' },
   { to: '/queue', label: 'Queue' },
   { to: '/now-playing', label: 'Now Playing' },
   { to: '/activity', label: 'Activity' },

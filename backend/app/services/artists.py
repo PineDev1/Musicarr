@@ -57,6 +57,56 @@ def link_artists_by_mbid(db: Session, mbid: str) -> list[Artist]:
     return rows
 
 
+def merge_artists(db: Session, artist_ids: list[int], *, preferred_id: int | None = None) -> list[Artist]:
+    """Merge artist rows into one link_group_id (same person across providers / collisions)."""
+    ids = sorted({int(i) for i in artist_ids if i})
+    if len(ids) < 2:
+        raise ValueError("Select at least two artists to merge")
+    rows = list(db.scalars(select(Artist).where(Artist.id.in_(ids)).order_by(Artist.id)).all())
+    if len(rows) < 2:
+        raise ValueError("Artists not found")
+    preferred = next((r for r in rows if preferred_id and r.id == preferred_id), rows[0])
+    mbids = [(getattr(r, "musicbrainz_id", None) or "").strip() for r in rows]
+    mbids = [m for m in mbids if m]
+    group = (getattr(preferred, "musicbrainz_id", None) or "").strip()
+    if not group and mbids:
+        group = mbids[0]
+    if not group:
+        existing = [(getattr(r, "link_group_id", None) or "").strip() for r in rows]
+        existing = [g for g in existing if g]
+        group = existing[0] if existing else f"merge:{preferred.id}"
+    for row in rows:
+        row.link_group_id = group
+        if mbids and not (getattr(row, "musicbrainz_id", None) or "").strip():
+            # Prefer a shared MBID when one exists
+            if len(set(mbids)) == 1:
+                row.musicbrainz_id = mbids[0]
+    if mbids and len(set(mbids)) == 1:
+        for row in rows:
+            row.musicbrainz_id = mbids[0]
+    db.commit()
+    for row in rows:
+        db.refresh(row)
+    add_history(
+        db,
+        "artists_merged",
+        f"Merged {len(rows)} artists as link group {group}",
+    )
+    return rows
+
+
+def collision_groups(db: Session) -> list[list[Artist]]:
+    """Groups of artists that share a normalized display name (2+ each)."""
+    artists = list(db.scalars(select(Artist).order_by(Artist.name, Artist.id)).all())
+    by_name: dict[str, list[Artist]] = {}
+    for artist in artists:
+        key = _norm_artist_name(artist.name)
+        if not key:
+            continue
+        by_name.setdefault(key, []).append(artist)
+    return [rows for rows in by_name.values() if len(rows) > 1]
+
+
 def ensure_musicbrainz_identity(db: Session, artist: Artist) -> str | None:
     """Resolve + store MusicBrainz ID and link cross-provider peers."""
     from app.services import musicbrainz

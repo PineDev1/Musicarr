@@ -67,6 +67,8 @@ def settings_to_out(row: AppSettings, validate: bool = False) -> SettingsOut:
         official_releases_only=bool(getattr(row, "official_releases_only", True)),
         mb_catalog_mode=(getattr(row, "mb_catalog_mode", None) or "local"),
         notify_webhook_url=getattr(row, "notify_webhook_url", "") or "",
+        notify_channel=(getattr(row, "notify_channel", None) or "discord"),
+        notify_token_set=bool((getattr(row, "notify_token", None) or "").strip()),
         notify_on_complete=bool(getattr(row, "notify_on_complete", True)),
         notify_on_failure=bool(getattr(row, "notify_on_failure", True)),
         upgrade_enabled=bool(getattr(row, "upgrade_enabled", True)),
@@ -124,6 +126,10 @@ def update_settings(db: Session, payload: SettingsUpdate) -> AppSettings:
         token = (data.pop("media_refresh_token") or "").strip()
         if token:
             row.media_refresh_token = token
+    if "notify_token" in data:
+        ntoken = (data.pop("notify_token") or "").strip()
+        if ntoken:
+            row.notify_token = ntoken
     if "auth_password" in data:
         password = (data.pop("auth_password") or "").strip()
         if password:

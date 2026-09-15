@@ -35,6 +35,8 @@ class SettingsOut(BaseModel):
     official_releases_only: bool = True
     mb_catalog_mode: str = "local"
     notify_webhook_url: str = ""
+    notify_channel: str = "discord"
+    notify_token_set: bool = False
     notify_on_complete: bool = True
     notify_on_failure: bool = True
     upgrade_enabled: bool = True
@@ -80,6 +82,8 @@ class SettingsUpdate(BaseModel):
     official_releases_only: bool | None = None
     mb_catalog_mode: Literal["local", "live", "local_with_live_fallback"] | None = None
     notify_webhook_url: str | None = None
+    notify_channel: str | None = None
+    notify_token: str | None = None
     notify_on_complete: bool | None = None
     notify_on_failure: bool | None = None
     upgrade_enabled: bool | None = None
@@ -122,6 +126,21 @@ class ArtistSearchResult(BaseModel):
     name: str
     image_url: str | None = None
     nb_album: int | None = None
+
+
+class BulkArtistSearchRequest(BaseModel):
+    names: str
+
+
+class BulkArtistSearchResult(BaseModel):
+    query: str
+    results: list[ArtistSearchResult] = []
+    error: str | None = None
+
+
+class ArtistMergeRequest(BaseModel):
+    artist_ids: list[int]
+    preferred_id: int | None = None
 
 
 class TrackOut(BaseModel):
@@ -303,6 +322,29 @@ class ReorganizeResult(BaseModel):
     moved: int
     skipped: int
     message: str
+
+
+class LibraryJobOut(BaseModel):
+    state: str
+    kind: str = ""
+    phase: str = ""
+    progress_pct: float = 0.0
+    message: str = ""
+    error: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    files_seen: int = 0
+    files_done: int = 0
+    artists_created: int = 0
+    albums_imported: int = 0
+    tracks_linked: int = 0
+    provider_linked: int = 0
+    matched: int = 0
+    unmatched: int = 0
+    moved: int = 0
+    skipped: int = 0
+    result: dict = {}
+    link_providers: bool = True
 
 
 class QobuzLoginRequest(BaseModel):

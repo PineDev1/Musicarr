@@ -9,6 +9,7 @@ export function WantedPage() {
   const qc = useQueryClient()
   const toast = useToast()
   const [typeFilter, setTypeFilter] = useState<string>('')
+  const [selected, setSelected] = useState<Set<number>>(new Set())
   const health = useQuery({ queryKey: ['health'], queryFn: api.health })
   const active = health.data?.active_provider || 'deezer'
   const { data, isLoading, error } = useQuery({
@@ -33,6 +34,30 @@ export function WantedPage() {
     }
   }, [data])
 
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every((a) => selected.has(a.id))
+
+  function toggleOne(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleAllFiltered() {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (allFilteredSelected) {
+        for (const a of filtered) next.delete(a.id)
+      } else {
+        for (const a of filtered) next.add(a.id)
+      }
+      return next
+    })
+  }
+
   const download = useMutation({
     mutationFn: (id: number) => api.downloadAlbum(id, false),
     onSuccess: (res) => {
@@ -49,6 +74,25 @@ export function WantedPage() {
   const skip = useMutation({
     mutationFn: (id: number) => api.patchAlbum(id, { status: 'skipped', monitored: false }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['wanted'] }),
+  })
+  const bulkDownload = useMutation({
+    mutationFn: () => api.bulkDownloadAlbums([...selected]),
+    onSuccess: (res) => {
+      toast.push(`Queued ${res.queued} album(s)`, 'ok')
+      setSelected(new Set())
+      qc.invalidateQueries({ queryKey: ['wanted'] })
+      qc.invalidateQueries({ queryKey: ['queue'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  const bulkSkip = useMutation({
+    mutationFn: () => api.bulkSkipAlbums([...selected]),
+    onSuccess: (res) => {
+      toast.push(`Skipped ${res.skipped} album(s)`, 'ok')
+      setSelected(new Set())
+      qc.invalidateQueries({ queryKey: ['wanted'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const downloadAll = useMutation({
     mutationFn: () => api.downloadAllWanted(),
@@ -111,7 +155,7 @@ export function WantedPage() {
         )}
       </div>
 
-      <div className="toolbar">
+      <div className="toolbar" style={{ flexWrap: 'wrap' }}>
         <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           Type
           <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
@@ -122,6 +166,30 @@ export function WantedPage() {
             <option value="compilation">Compilations ({counts.compilation})</option>
           </select>
         </label>
+        {filtered.length > 0 && (
+          <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="checkbox" checked={allFilteredSelected} onChange={toggleAllFiltered} />
+            Select shown
+          </label>
+        )}
+        {selected.size > 0 && (
+          <>
+            <button
+              className="btn"
+              onClick={() => bulkDownload.mutate()}
+              disabled={bulkDownload.isPending}
+            >
+              Download selected ({selected.size})
+            </button>
+            <button
+              className="btn ghost"
+              onClick={() => bulkSkip.mutate()}
+              disabled={bulkSkip.isPending}
+            >
+              Skip selected
+            </button>
+          </>
+        )}
       </div>
 
       {isLoading && <p className="muted">Loading…</p>}
@@ -141,6 +209,13 @@ export function WantedPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: Math.min(i * 0.03, 0.3) }}
           >
+            <label style={{ display: 'flex', alignItems: 'center', marginRight: 4 }}>
+              <input
+                type="checkbox"
+                checked={selected.has(album.id)}
+                onChange={() => toggleOne(album.id)}
+              />
+            </label>
             {album.cover_url ? (
               <img src={album.cover_url} alt="" />
             ) : (
@@ -161,6 +236,11 @@ export function WantedPage() {
                 {album.release_date ? ` · ${album.release_date}` : ''}
                 {album.track_count ? ` · ${album.track_count} tracks` : ''}
               </div>
+              {album.status_reason ? (
+                <div className="muted" style={{ fontSize: '0.85rem', marginTop: 2 }} title={album.status_reason}>
+                  Why missing: {album.status_reason}
+                </div>
+              ) : null}
             </div>
             <div className="row-actions">
               <button className="btn" onClick={() => download.mutate(album.id)}>
