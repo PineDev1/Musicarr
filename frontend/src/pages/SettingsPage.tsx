@@ -15,6 +15,7 @@ type TabId =
   | 'security'
   | 'player'
   | 'tools'
+  | 'backup'
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'sources', label: 'Sources' },
@@ -26,6 +27,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'security', label: 'Security' },
   { id: 'player', label: 'Player' },
   { id: 'tools', label: 'Tools' },
+  { id: 'backup', label: 'Backup' },
 ]
 
 function traefikLabels(domainRaw: string): string {
@@ -376,6 +378,22 @@ export function SettingsPage() {
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
+  const [restoreFile, setRestoreFile] = useState<File | null>(null)
+  const restoreMutation = useMutation({
+    mutationFn: (file: File) => api.restoreBackup(file),
+    onSuccess: () => {
+      toast.push('Restore started', 'ok')
+      qc.invalidateQueries({ queryKey: ['restore-job'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  const restoreJob = useQuery({
+    queryKey: ['restore-job'],
+    queryFn: api.restoreJob,
+    refetchInterval: (q) => (q.state.data?.state === 'running' ? 1000 : false),
+  })
+  const restoreJobRunning = restoreJob.data?.state === 'running'
+
   const mbStatus = useQuery({
     queryKey: ['mb-catalog-status'],
     queryFn: api.mbCatalogStatus,
@@ -471,7 +489,7 @@ export function SettingsPage() {
 
   function onSubmit(e: FormEvent) {
     e.preventDefault()
-    if (tab === 'tools' || tab === 'musicbrainz') return
+    if (tab === 'tools' || tab === 'musicbrainz' || tab === 'backup') return
     save.mutate()
   }
 
@@ -1530,7 +1548,94 @@ export function SettingsPage() {
           </>
         )}
 
-        {tab !== 'tools' && tab !== 'musicbrainz' && (
+        {tab === 'backup' && (
+          <>
+            <p className="muted" style={{ marginTop: 0, maxWidth: 640 }}>
+              Back up your settings and library metadata (artists, albums, tracks, history) to a
+              downloadable file. Provider logins and other credentials are never included — you'll
+              need to re-enter those after a restore.
+            </p>
+            <div className="field">
+              <label>Export</label>
+              <div className="toolbar" style={{ flexWrap: 'wrap' }}>
+                <a className="btn" href="/api/backup/export" download>
+                  Download backup
+                </a>
+              </div>
+            </div>
+            <div className="field">
+              <label>Restore</label>
+              <div className="toolbar" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+                <input
+                  type="file"
+                  accept=".zip"
+                  onChange={(e) => setRestoreFile(e.target.files?.[0] || null)}
+                  disabled={restoreMutation.isPending || restoreJobRunning}
+                />
+                <button
+                  type="button"
+                  className="btn danger"
+                  disabled={!restoreFile || restoreMutation.isPending || restoreJobRunning}
+                  onClick={() => {
+                    if (!restoreFile) return
+                    if (
+                      window.confirm(
+                        'Restore this backup? Your current settings and library metadata will be replaced. Your existing database is kept as a .before-restore file just in case. You will need to restart Musicarr afterward and re-enter provider credentials.',
+                      )
+                    ) {
+                      restoreMutation.mutate(restoreFile)
+                    }
+                  }}
+                >
+                  Restore
+                </button>
+              </div>
+            </div>
+            {(restoreJob.data?.state === 'running' ||
+              restoreJob.data?.state === 'error' ||
+              (restoreJob.data?.state === 'done' && restoreJob.data.message)) && (
+              <div style={{ marginTop: '1rem', maxWidth: 640 }}>
+                <p style={{ margin: '0 0 0.35rem' }}>
+                  {restoreJob.data.phase
+                    ? restoreJob.data.phase.charAt(0).toUpperCase() + restoreJob.data.phase.slice(1)
+                    : 'Restore'}
+                </p>
+                <p className="muted" style={{ margin: '0 0 0.5rem' }}>
+                  {restoreJob.data.message || '—'}
+                </p>
+                <div
+                  style={{
+                    height: 8,
+                    borderRadius: 4,
+                    background: 'var(--border, #333)',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div
+                    style={{
+                      height: '100%',
+                      width: `${Math.min(100, Math.max(2, restoreJob.data.progress_pct || 0))}%`,
+                      background: restoreJob.data.state === 'error' ? '#c44' : 'var(--accent, #3dba7a)',
+                      transition: 'width 0.3s ease',
+                    }}
+                  />
+                </div>
+                {restoreJob.data.error && (
+                  <p className="error" style={{ marginTop: '0.5rem' }}>
+                    {restoreJob.data.error}
+                  </p>
+                )}
+                {restoreJob.data.state === 'done' && restoreJob.data.detail && (
+                  <p className="muted" style={{ marginTop: '0.5rem' }}>
+                    {restoreJob.data.detail}
+                  </p>
+                )}
+              </div>
+            )}
+          </>
+        )}
+
+        {tab !== 'tools' && tab !== 'musicbrainz' && tab !== 'backup' && (
           <div className="toolbar">
             <button className="btn" type="submit" disabled={save.isPending}>
               Save settings

@@ -207,6 +207,17 @@ export type DownloadJob = {
 
 
 
+export type RestoreJob = {
+  state: string
+  phase: string
+  progress_pct: number
+  message: string
+  error: string
+  detail: string
+  started_at: string
+  finished_at: string
+}
+
 export type HistoryEvent = {
   id: number
   event_type: string
@@ -394,6 +405,27 @@ export const api = {
     }),
   reorganize: () => request<LibraryJob>('/library/reorganize', { method: 'POST' }),
   libraryJob: () => request<LibraryJob>('/library/job'),
+  restoreBackup: async (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await fetch('/api/backup/restore', {
+      method: 'POST',
+      credentials: 'include',
+      body: form,
+    })
+    if (!res.ok) {
+      let detail = res.statusText
+      try {
+        const body = await res.json()
+        detail = body.detail || JSON.stringify(body)
+      } catch {
+        /* ignore */
+      }
+      throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+    }
+    return res.json() as Promise<RestoreJob>
+  },
+  restoreJob: () => request<RestoreJob>('/backup/restore/job'),
   runMonitor: () =>
     request<{ artists_checked: number; new_albums: number }>('/monitor/run', {
       method: 'POST',

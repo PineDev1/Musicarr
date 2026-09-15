@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.core.config import settings
@@ -43,20 +44,33 @@ def get_db():
         db.close()
 
 
-def _existing_columns(table: str) -> set[str]:
-    insp = inspect(engine)
+def _existing_columns(table: str, engine_: Engine | None = None) -> set[str]:
+    insp = inspect(engine_ or engine)
     if table not in insp.get_table_names():
         return set()
     return {c["name"] for c in insp.get_columns(table)}
 
 
-def _add_column(table: str, column_def: str) -> None:
-    with engine.begin() as conn:
+def _add_column(table: str, column_def: str, engine_: Engine | None = None) -> None:
+    with (engine_ or engine).begin() as conn:
         conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column_def}"))
 
 
-def migrate_schema() -> None:
-    """Lightweight SQLite migrations for multi-provider fields."""
+def migrate_schema(engine_: Engine | None = None) -> None:
+    """Lightweight SQLite migrations for multi-provider fields.
+
+    Runs against the module-level `engine` by default; pass `engine_` to
+    migrate a different SQLite file in place (used by the backup/restore
+    feature to validate + upgrade a staged backup before it's swapped in).
+    """
+    eng = engine_ or engine
+
+    def existing_columns(table: str) -> set[str]:
+        return _existing_columns(table, engine_=eng)
+
+    def add_column(table: str, column_def: str) -> None:
+        _add_column(table, column_def, engine_=eng)
+
     settings_cols = {
         "active_provider": "VARCHAR(32) DEFAULT 'deezer'",
         "tidal_access_token": "TEXT DEFAULT ''",
@@ -97,50 +111,50 @@ def migrate_schema() -> None:
         "import_mechanism": "VARCHAR(16) DEFAULT 'hardlink'",
         "remove_completed_downloads": "BOOLEAN DEFAULT 0",
     }
-    existing = _existing_columns("app_settings")
+    existing = existing_columns("app_settings")
     for name, definition in settings_cols.items():
         if existing and name not in existing:
-            _add_column("app_settings", f"{name} {definition}")
+            add_column("app_settings", f"{name} {definition}")
 
-    artist_cols = _existing_columns("artists")
+    artist_cols = existing_columns("artists")
     if artist_cols:
         if "monitor_mode" not in artist_cols:
-            _add_column("artists", "monitor_mode VARCHAR(16) DEFAULT 'all'")
+            add_column("artists", "monitor_mode VARCHAR(16) DEFAULT 'all'")
         if "include_singles" not in artist_cols:
-            _add_column("artists", "include_singles BOOLEAN")
+            add_column("artists", "include_singles BOOLEAN")
         if "link_group_id" not in artist_cols:
-            _add_column("artists", "link_group_id VARCHAR(64)")
+            add_column("artists", "link_group_id VARCHAR(64)")
         if "musicbrainz_id" not in artist_cols:
-            _add_column("artists", "musicbrainz_id VARCHAR(64)")
+            add_column("artists", "musicbrainz_id VARCHAR(64)")
         if "related_artists_json" not in artist_cols:
-            _add_column("artists", "related_artists_json TEXT DEFAULT '[]'")
+            add_column("artists", "related_artists_json TEXT DEFAULT '[]'")
 
-    album_cols = _existing_columns("albums")
+    album_cols = existing_columns("albums")
     if album_cols:
         if "quality" not in album_cols:
-            _add_column("albums", "quality VARCHAR(16) DEFAULT ''")
+            add_column("albums", "quality VARCHAR(16) DEFAULT ''")
         if "musicbrainz_id" not in album_cols:
-            _add_column("albums", "musicbrainz_id VARCHAR(64)")
+            add_column("albums", "musicbrainz_id VARCHAR(64)")
         if "status_reason" not in album_cols:
-            _add_column("albums", "status_reason TEXT DEFAULT ''")
+            add_column("albums", "status_reason TEXT DEFAULT ''")
         if "collaborators_json" not in album_cols:
-            _add_column("albums", "collaborators_json TEXT DEFAULT '[]'")
+            add_column("albums", "collaborators_json TEXT DEFAULT '[]'")
         if "artist_credit" not in album_cols:
-            _add_column("albums", "artist_credit VARCHAR(1024) DEFAULT ''")
+            add_column("albums", "artist_credit VARCHAR(1024) DEFAULT ''")
 
     for table, id_col in (
         ("artists", "deezer_id"),
         ("albums", "deezer_id"),
         ("tracks", "deezer_id"),
     ):
-        cols = _existing_columns(table)
+        cols = existing_columns(table)
         if not cols:
             continue
         if "provider" not in cols:
-            _add_column(table, "provider VARCHAR(32) DEFAULT 'deezer'")
+            add_column(table, "provider VARCHAR(32) DEFAULT 'deezer'")
         if "provider_id" not in cols:
-            _add_column(table, "provider_id VARCHAR(64) DEFAULT ''")
-        with engine.begin() as conn:
+            add_column(table, "provider_id VARCHAR(64) DEFAULT ''")
+        with eng.begin() as conn:
             conn.execute(
                 text(
                     f"UPDATE {table} SET provider = 'deezer' "
@@ -154,7 +168,7 @@ def migrate_schema() -> None:
                 )
             )
 
-    job_cols = _existing_columns("download_jobs")
+    job_cols = existing_columns("download_jobs")
     download_job_cols = {
         "target_provider_id": "VARCHAR(64) DEFAULT ''",
         "error_category": "VARCHAR(32) DEFAULT ''",
@@ -168,7 +182,7 @@ def migrate_schema() -> None:
     }
     for name, definition in download_job_cols.items():
         if job_cols and name not in job_cols:
-            _add_column("download_jobs", f"{name} {definition}")
+            add_column("download_jobs", f"{name} {definition}")
 
     player_user_cols = {
         "show_recently_played": "BOOLEAN DEFAULT 1",
@@ -190,17 +204,17 @@ def migrate_schema() -> None:
         "continue_track_id": "INTEGER",
         "continue_position": "REAL DEFAULT 0",
     }
-    existing_pu = _existing_columns("player_users")
+    existing_pu = existing_columns("player_users")
     for name, definition in player_user_cols.items():
         if existing_pu and name not in existing_pu:
-            _add_column("player_users", f"{name} {definition}")
+            add_column("player_users", f"{name} {definition}")
 
-    pl_cols = _existing_columns("player_playlists")
+    pl_cols = existing_columns("player_playlists")
     if pl_cols and "is_smart" not in pl_cols:
-        _add_column("player_playlists", "is_smart BOOLEAN DEFAULT 0")
+        add_column("player_playlists", "is_smart BOOLEAN DEFAULT 0")
 
     # Drop retired indexer / download-client tables (streaming-only).
-    with engine.begin() as conn:
+    with eng.begin() as conn:
         for table in ("indexers", "download_clients", "remote_path_mappings"):
             conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
 

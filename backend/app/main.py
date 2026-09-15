@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
-from app.api import albums, artists, auth, events, musicbrainz_catalog, ops, player, settings
+from app.api import albums, artists, auth, backup, events, musicbrainz_catalog, ops, player, settings
 from app.core.database import SessionLocal, ensure_dirs, init_db
 from app.services import app_auth, player_auth
 from app.services.cors_origins import LOCAL_CORS_ORIGINS, origin_is_allowed
@@ -160,6 +160,7 @@ app.include_router(ops.router, prefix="/api")
 app.include_router(events.router, prefix="/api")
 app.include_router(player.router, prefix="/api")
 app.include_router(musicbrainz_catalog.router, prefix="/api")
+app.include_router(backup.router, prefix="/api")
 
 
 @app.get("/api")
