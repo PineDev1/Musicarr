@@ -696,6 +696,31 @@ def build_fixture_catalog(db_path: Path) -> None:
         )
         con.execute("INSERT INTO release_group_meta(id, first_release_year) VALUES (?, ?)", (101, 2017))
         con.execute("INSERT INTO artist_rg(artist_id, release_group_id) VALUES (?, ?)", (1, 101))
+        # Beyoncé (diacritic name) with a standard + deluxe edition of the same album,
+        # for diacritic-folding and edition-distinction tests.
+        con.execute(
+            "INSERT INTO artist(id, gid, name) VALUES (?, ?, ?)",
+            (4, "99999999-8888-7777-6666-555555555555", "Beyoncé"),
+        )
+        con.execute("INSERT INTO artist_credit(id, name) VALUES (?, ?)", (12, "Beyoncé"))
+        con.execute(
+            "INSERT INTO artist_credit_name(artist_credit, position, artist_id, name, join_phrase) VALUES (?, ?, ?, ?, ?)",
+            (12, 0, 4, "Beyoncé", ""),
+        )
+        con.execute(
+            "INSERT INTO release_group(id, gid, name, artist_credit, primary_type_id) VALUES (?, ?, ?, ?, ?)",
+            (102, "22222222-3333-4444-5555-666666666666", "Renaissance", 12, 1),
+        )
+        con.execute(
+            "INSERT INTO release_group(id, gid, name, artist_credit, primary_type_id) VALUES (?, ?, ?, ?, ?)",
+            (103, "33333333-4444-5555-6666-777777777777", "Renaissance (Deluxe Edition)", 12, 1),
+        )
+        con.execute("INSERT INTO release_group_meta(id, first_release_year) VALUES (?, ?)", (102, 2022))
+        con.execute("INSERT INTO release_group_meta(id, first_release_year) VALUES (?, ?)", (103, 2022))
+        con.executemany(
+            "INSERT INTO artist_rg(artist_id, release_group_id) VALUES (?, ?)",
+            [(4, 102), (4, 103)],
+        )
         con.executescript(
             """
             CREATE UNIQUE INDEX idx_artist_gid ON artist(gid);

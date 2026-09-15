@@ -81,3 +81,19 @@ def test_pick_unique_artist_search_hit():
     assert pick_unique_artist_search_hit("John Smith", hits) is None
     assert pick_unique_artist_search_hit("John Smith Band", hits).provider_id == "3"
     assert pick_unique_artist_search_hit("Nobody", hits) is None
+
+
+def test_find_artist_by_name_folds_diacritics_and_article(db):
+    beyonce = _artist(db, name="Beyoncé", provider="deezer", provider_id="1")
+    assert _find_artist_by_name(db, "Beyonce").id == beyonce.id
+
+    beatles = _artist(db, name="Beatles", provider="deezer", provider_id="2")
+    assert _find_artist_by_name(db, "The Beatles").id == beatles.id
+
+
+def test_pick_unique_artist_search_hit_folds_diacritics_and_article():
+    hits = [SimpleNamespace(name="Beyoncé", provider_id="1")]
+    assert pick_unique_artist_search_hit("Beyonce", hits).provider_id == "1"
+
+    hits2 = [SimpleNamespace(name="Beatles", provider_id="2")]
+    assert pick_unique_artist_search_hit("The Beatles", hits2).provider_id == "2"

@@ -11,6 +11,7 @@ from app.services.history import add_history
 from app.services.providers import get_active_provider
 from app.services.providers.base import ProviderError
 from app.services.settings_service import ensure_settings
+from app.services.text_match import fold_diacritics, normalize_key, strip_leading_article
 
 
 def _legacy_id(provider: str, provider_id: str) -> int:
@@ -1114,7 +1115,7 @@ def artist_stats(artist: Artist) -> tuple[int, int, int]:
 
 
 def _norm_artist_name(name: str) -> str:
-    return " ".join((name or "").strip().lower().split())
+    return normalize_key(name or "")
 
 
 def find_artist_by_normalized_name(db: Session, name: str, provider: str) -> Artist | None:
@@ -1146,11 +1147,14 @@ def find_artist_by_normalized_name(db: Session, name: str, provider: str) -> Art
 
 
 def _norm_album_title(title: str) -> str:
+    """Diacritic/article-folded title key. Deliberately keeps parenthetical
+    content (Deluxe/Live/Remaster/...) so distinct editions merge-display as
+    separate cards instead of one row silently swallowing the other.
+    """
     import re
 
-    t = (title or "").lower().strip()
-    t = re.sub(r"\([^)]*\)", "", t)
-    t = re.sub(r"\[[^\]]*\]", "", t)
+    t = fold_diacritics((title or "").lower().strip())
+    t = strip_leading_article(t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
 

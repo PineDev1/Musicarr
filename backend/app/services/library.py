@@ -18,6 +18,7 @@ from app.services.naming import (
     year_from_release,
 )
 from app.services.settings_service import ensure_settings, library_root
+from app.services.text_match import fold_diacritics, strip_leading_article
 
 
 AUDIO_EXTS = {".flac", ".mp3", ".m4a", ".ogg", ".opus", ".wav", ".aac", ".aiff", ".aif"}
@@ -30,9 +31,21 @@ def _emit(on_progress: ProgressCb | None, **kwargs: Any) -> None:
 
 
 def _norm(s: str | None) -> str:
-    t = (s or "").lower().strip()
+    t = fold_diacritics((s or "").lower().strip())
+    t = strip_leading_article(t)
     t = re.sub(r"\([^)]*\)", "", t)
     t = re.sub(r"\[[^\]]*\]", "", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def _norm_strict(s: str | None) -> str:
+    """Like _norm but keeps parenthetical/bracketed content, so edition
+    markers ("Deluxe", "Live", "Remaster", ...) stay distinguishing instead
+    of being stripped away and silently merged with the base title.
+    """
+    t = fold_diacritics((s or "").lower().strip())
+    t = strip_leading_article(t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
@@ -242,13 +255,28 @@ def _find_or_create_album(
         for a in linked:
             albums.extend(a.albums or [])
 
+    # Strict tier first: compare titles without stripping parenthetical/edition
+    # content, so "Album" and "Album (Deluxe Edition)" are matched to distinct
+    # rows instead of collapsing into whichever one was created first.
+    target_strict = _norm_strict(album_title)
     target = _norm(album_title)
-    candidate = next((a for a in albums if _norm(a.title) == target), None)
-    if not candidate:
-        candidate = next(
-            (a for a in albums if target and (target in _norm(a.title) or _norm(a.title) in target)),
-            None,
-        )
+    candidate = next((a for a in albums if _norm_strict(a.title) == target_strict), None)
+    # Loose tier: edition-agnostic exact/substring match, for tag variance
+    # that isn't a real edition difference (typos, punctuation, a provider
+    # formatting things slightly differently). Only applies when NEITHER side
+    # actually has parenthetical/edition content for the paren-stripping to
+    # discard — if either title has it, stay on the strict tier so editions
+    # never silently merge, in either direction.
+    query_has_parens = target_strict != target
+    if not candidate and not query_has_parens and target and len(target) >= 4:
+        for a in albums:
+            cand_strict = _norm_strict(a.title)
+            cand_loose = _norm(a.title)
+            if cand_strict != cand_loose:
+                continue  # candidate title has its own edition content — don't merge
+            if cand_loose == target or target in cand_loose or cand_loose in target:
+                candidate = a
+                break
     if candidate:
         return candidate
 

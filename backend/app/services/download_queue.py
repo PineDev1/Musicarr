@@ -23,6 +23,7 @@ from app.services.naming import (
 from app.services.providers import get_provider
 from app.services.providers.base import ProviderError
 from app.services.settings_service import ensure_settings, library_root
+from app.services.text_match import normalize_key
 
 logger = logging.getLogger("musicarr.download")
 
@@ -30,15 +31,15 @@ ACTIVE_JOB_STATES = ["queued", "running"]
 
 
 def pick_unique_artist_search_hit(artist_name: str, hits: list) -> object | None:
-    """Return the provider search hit only when exactly one exact name match exists."""
-    key = " ".join((artist_name or "").strip().lower().split())
+    """Return the provider search hit only when exactly one exact name match exists.
+
+    Matching folds diacritics and a leading "The"/"A"/"An" so e.g. a local tag
+    "The Beatles" still auto-links to a provider hit named "Beatles".
+    """
+    key = normalize_key(artist_name or "")
     if not key or not hits:
         return None
-    exact = [
-        h
-        for h in hits
-        if " ".join((getattr(h, "name", None) or "").strip().lower().split()) == key
-    ]
+    exact = [h for h in hits if normalize_key(getattr(h, "name", None) or "") == key]
     if len(exact) == 1:
         return exact[0]
     return None

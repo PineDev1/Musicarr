@@ -11,6 +11,8 @@ from typing import Any, Generic, TypeVar
 
 import httpx
 
+from app.services.text_match import fold_diacritics, strip_leading_article
+
 logger = logging.getLogger("musicarr.musicbrainz")
 
 API_BASE = "https://musicbrainz.org/ws/2"
@@ -111,9 +113,13 @@ class CatalogResult:
     error: str | None = None
 
 
-def normalize_title(title: str) -> str:
-    t = (title or "").strip().lower()
-    t = _EDITION_NOISE.sub("", t)
+def normalize_title_strict(title: str) -> str:
+    """Fold diacritics/articles/feat.-clauses but keep edition words (Deluxe,
+    Live, Remaster, ...) intact, so a distinct edition still compares as
+    distinct rather than being silently collapsed into the base title.
+    """
+    t = fold_diacritics((title or "").strip().lower())
+    t = strip_leading_article(t)
     # Strip (feat. X) / feat. X so provider collab titles match MB clean titles
     t = re.sub(
         r"\s*[\(\[][^)\]]*(?:feat\.?|ft\.?|featuring)[^)\]]*[\)\]]",
@@ -125,6 +131,16 @@ def normalize_title(title: str) -> str:
     t = _PUNCT.sub(" ", t)
     t = _SPACE.sub(" ", t).strip()
     return t
+
+
+def normalize_title(title: str) -> str:
+    """Loose normalization: also strips edition noise (Deluxe/Live/Remaster/...)
+    for the fallback matching tier, where two titles that only differ by an
+    edition marker should still be considered candidates.
+    """
+    t = fold_diacritics((title or "").strip().lower())
+    t = _EDITION_NOISE.sub("", t)
+    return normalize_title_strict(t)
 
 
 def _year_prefix(date_str: str | None) -> str:
@@ -370,6 +386,7 @@ def search_release_group_for_artist(
         flags=re.I,
     ).strip() or search_title
     clean = normalize_title(search_title)
+    clean_strict = normalize_title_strict(search_title)
     aid = (artist_mbid or "").strip()
     if not clean or not aid:
         return None
@@ -420,6 +437,8 @@ def search_release_group_for_artist(
         ratio = SequenceMatcher(None, clean, cand).ratio()
         if cand == clean or clean in cand or cand in clean:
             ratio = 1.0
+        if clean_strict and normalize_title_strict(rg.title) == clean_strict:
+            ratio += 0.1
         score = int(row.get("score") or 0)
         combined = ratio + (0.05 if score >= 90 else 0)
         if aid in credit_mbids:
@@ -602,6 +621,7 @@ def match_release(
     want = normalize_title(title)
     if not want or not catalog:
         return None
+    want_strict = normalize_title_strict(title)
     want_year = _year_prefix(year)
     want_type = (album_type or "album").lower()
     best: ReleaseGroup | None = None
@@ -615,6 +635,11 @@ def match_release(
             ratio = 1.0
         elif want in cand or cand in want:
             ratio = max(ratio, 0.9)
+        # Prefer the release-group whose edition wording (Deluxe/Live/Remaster/...)
+        # actually matches the query, instead of treating every edition as
+        # interchangeable once the noise-stripped titles tie.
+        if want_strict and normalize_title_strict(rg.title) == want_strict:
+            ratio += 0.1
         if want_type and rg.primary_type == want_type:
             ratio += 0.03
         elif want_type == "album" and rg.primary_type == "compilation":
@@ -639,10 +664,12 @@ def match_provider_album(rg: ReleaseGroup, provider_albums: list[Any]) -> Any | 
     want = normalize_title(rg.title)
     if not want:
         return None
+    want_strict = normalize_title_strict(rg.title)
     best = None
     best_score = 0.0
     for alb in provider_albums:
-        title = normalize_title(getattr(alb, "title", "") or "")
+        raw_title = getattr(alb, "title", "") or ""
+        title = normalize_title(raw_title)
         if not title:
             continue
         ratio = SequenceMatcher(None, want, title).ratio()
@@ -650,6 +677,8 @@ def match_provider_album(rg: ReleaseGroup, provider_albums: list[Any]) -> Any | 
             ratio = 1.0
         elif want in title or title in want:
             ratio = max(ratio, 0.9)
+        if want_strict and normalize_title_strict(raw_title) == want_strict:
+            ratio += 0.1
         year = _year_prefix(getattr(alb, "release_date", None))
         if year and rg.year:
             if year == rg.year:

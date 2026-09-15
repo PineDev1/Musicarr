@@ -96,6 +96,27 @@ def test_catalog_status_shape(fixture_catalog):
     assert "message" in job
 
 
+def test_resolve_artist_folds_diacritics(fixture_catalog):
+    beyonce_mbid = "99999999-8888-7777-6666-555555555555"
+    # Exact accented name still resolves.
+    assert mb_local.resolve_artist("Beyoncé") == beyonce_mbid
+    # ASCII query with no accent must still find the accented DB row.
+    assert mb_local.resolve_artist("Beyonce") == beyonce_mbid
+
+
+def test_search_release_group_distinguishes_editions(fixture_catalog):
+    beyonce_mbid = "99999999-8888-7777-6666-555555555555"
+    standard = mb_local.search_release_group_for_artist("Renaissance", beyonce_mbid)
+    assert standard is not None
+    assert standard.title == "Renaissance"
+
+    deluxe = mb_local.search_release_group_for_artist(
+        "Renaissance (Deluxe Edition)", beyonce_mbid
+    )
+    assert deluxe is not None
+    assert deluxe.title == "Renaissance (Deluxe Edition)"
+
+
 def test_job_idle_shape():
     job = mb_catalog_import.get_job()
     assert job.state in {"idle", "running", "done", "error"}
