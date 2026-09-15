@@ -13,14 +13,14 @@ from app.models import PlayerUser
 from app.models.schemas import PlayerUserOut
 from app.services.app_auth import hash_password, verify_password
 from app.services.proxy import cookie_domain_for_settings, ssl_enabled
-from app.services.settings_service import ensure_settings
+from app.services.settings_service import ensure_settings, get_setting_cached
 
 COOKIE_NAME = "musicarr_player_session"
 SESSION_DAYS = 30
 
 
 def player_enabled(db: Session) -> bool:
-    return bool(getattr(ensure_settings(db), "player_enabled", False))
+    return bool(get_setting_cached(db, "player_enabled", False))
 
 
 def avatar_url_for_user(user: PlayerUser | None) -> str | None:

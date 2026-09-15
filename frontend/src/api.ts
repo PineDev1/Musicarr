@@ -42,9 +42,12 @@ export type Settings = {
   official_releases_only: boolean
   mb_catalog_mode: string
   notify_webhook_url: string
+  notify_channel: string
+  notify_token_set: boolean
   notify_on_complete: boolean
   notify_on_failure: boolean
   upgrade_enabled: boolean
+  fallback_providers_enabled: boolean
   media_refresh_url: string
   media_refresh_token_set: boolean
   media_refresh_type: string
@@ -81,6 +84,12 @@ export type ArtistSearchResult = {
   name: string
   image_url: string | null
   nb_album: number | null
+}
+
+export type BulkArtistSearchResult = {
+  query: string
+  results: ArtistSearchResult[]
+  error?: string | null
 }
 
 export type Track = {
@@ -198,6 +207,35 @@ export type DownloadJob = {
 
 
 
+export type RestoreJob = {
+  state: string
+  phase: string
+  progress_pct: number
+  message: string
+  error: string
+  detail: string
+  started_at: string
+  finished_at: string
+}
+
+export type ImportList = {
+  id: number
+  name: string
+  names_raw: string
+  interval_minutes: number
+  enabled: boolean
+  last_run_at: string | null
+  last_result: string
+  created_at: string
+}
+
+export type ImportListRunResult = {
+  added: string[]
+  skipped: string[]
+  errors: string[]
+  summary: string
+}
+
 export type HistoryEvent = {
   id: number
   event_type: string
@@ -238,6 +276,8 @@ export const api = {
   settings: (validate = false) => request<Settings>(`/settings?validate=${validate}`),
   updateSettings: (body: Record<string, unknown>) =>
     request<Settings>('/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  notifyTest: (body: { notify_webhook_url?: string; notify_channel?: string; notify_token?: string } = {}) =>
+    request<{ ok: boolean }>('/settings/notify-test', { method: 'POST', body: JSON.stringify(body) }),
   logout: (provider: string) =>
     request<Settings>(`/auth/${provider}/logout`, { method: 'POST' }),
   tidalDeviceStart: () =>
@@ -266,6 +306,28 @@ export const api = {
     }),
   searchArtists: (q: string) =>
     request<ArtistSearchResult[]>(`/artists/search?q=${encodeURIComponent(q)}`),
+  bulkSearchArtists: (names: string) =>
+    request<BulkArtistSearchResult[]>('/artists/bulk-search', {
+      method: 'POST',
+      body: JSON.stringify({ names }),
+    }),
+  artistCollisions: () =>
+    request<{
+      groups: {
+        id: number
+        name: string
+        provider: string
+        provider_id: string
+        musicbrainz_id?: string | null
+        link_group_id?: string | null
+        image_url?: string | null
+      }[][]
+    }>('/artists/collisions'),
+  mergeArtists: (artistIds: number[], preferredId?: number) =>
+    request<Artist[]>('/artists/merge', {
+      method: 'POST',
+      body: JSON.stringify({ artist_ids: artistIds, preferred_id: preferredId }),
+    }),
   artists: () => request<Artist[]>('/artists'),
   artist: (id: number) => request<Artist>(`/artists/${id}`),
   addArtist: (
@@ -303,6 +365,16 @@ export const api = {
     request<{ skipped: number }>('/albums/wanted/skip-singles', { method: 'POST' }),
   skipWantedJunk: () =>
     request<{ skipped: number }>('/albums/wanted/skip-junk', { method: 'POST' }),
+  bulkSkipAlbums: (albumIds: number[]) =>
+    request<{ skipped: number }>('/albums/bulk/skip', {
+      method: 'POST',
+      body: JSON.stringify({ album_ids: albumIds }),
+    }),
+  bulkDownloadAlbums: (albumIds: number[]) =>
+    request<{ queued: number }>('/albums/bulk/download', {
+      method: 'POST',
+      body: JSON.stringify({ album_ids: albumIds }),
+    }),
   upgradable: () => request<Album[]>('/albums/upgradable'),
   upgradeAll: () =>
     request<{ queued: number; target?: string; message?: string }>('/albums/upgrade-all', {
@@ -339,21 +411,9 @@ export const api = {
     request<{ cleared: number }>('/queue/clear-finished', { method: 'POST' }),
   history: () => request<HistoryEvent[]>('/history'),
   scan: () =>
-    request<{ files_seen: number; matched: number; unmatched: number; message: string }>(
-      '/library/scan',
-      { method: 'POST' },
-    ),
+    request<LibraryJob>('/library/scan', { method: 'POST' }),
   importLibrary: (linkProviders = true) =>
-    request<{
-      files_seen: number
-      artists_created: number
-      albums_imported: number
-      tracks_linked: number
-      provider_linked: number
-      matched: number
-      unmatched: number
-      message: string
-    }>(`/library/import?link_providers=${linkProviders}`, { method: 'POST' }),
+    request<LibraryJob>(`/library/import?link_providers=${linkProviders}`, { method: 'POST' }),
   importReview: (suggest = true) =>
     request<ImportReview>(`/library/review?suggest=${suggest}`),
   linkImportArtist: (artistId: number, providerId: string, provider?: string) =>
@@ -361,10 +421,38 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ provider_id: providerId, provider }),
     }),
-  reorganize: () =>
-    request<{ moved: number; skipped: number; message: string }>('/library/reorganize', {
+  reorganize: () => request<LibraryJob>('/library/reorganize', { method: 'POST' }),
+  libraryJob: () => request<LibraryJob>('/library/job'),
+  restoreBackup: async (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await fetch('/api/backup/restore', {
       method: 'POST',
-    }),
+      credentials: 'include',
+      body: form,
+    })
+    if (!res.ok) {
+      let detail = res.statusText
+      try {
+        const body = await res.json()
+        detail = body.detail || JSON.stringify(body)
+      } catch {
+        /* ignore */
+      }
+      throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+    }
+    return res.json() as Promise<RestoreJob>
+  },
+  restoreJob: () => request<RestoreJob>('/backup/restore/job'),
+  importLists: () => request<ImportList[]>('/import-lists'),
+  createImportList: (body: { name: string; names_raw: string; interval_minutes: number; enabled: boolean }) =>
+    request<ImportList>('/import-lists', { method: 'POST', body: JSON.stringify(body) }),
+  updateImportList: (id: number, body: Partial<Pick<ImportList, 'name' | 'names_raw' | 'interval_minutes' | 'enabled'>>) =>
+    request<ImportList>(`/import-lists/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteImportList: (id: number) =>
+    request<void>(`/import-lists/${id}`, { method: 'DELETE' }),
+  runImportList: (id: number) =>
+    request<ImportListRunResult>(`/import-lists/${id}/run`, { method: 'POST' }),
   runMonitor: () =>
     request<{ artists_checked: number; new_albums: number }>('/monitor/run', {
       method: 'POST',
@@ -419,4 +507,27 @@ export type MbCatalogJob = {
   dump_version: string
   started_at: string
   finished_at: string
+}
+
+export type LibraryJob = {
+  state: string
+  kind: string
+  phase: string
+  progress_pct: number
+  message: string
+  error: string
+  started_at: string
+  finished_at: string
+  files_seen: number
+  files_done: number
+  artists_created: number
+  albums_imported: number
+  tracks_linked: number
+  provider_linked: number
+  matched: number
+  unmatched: number
+  moved: number
+  skipped: number
+  result: Record<string, unknown>
+  link_providers: boolean
 }

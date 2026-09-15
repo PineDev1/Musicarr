@@ -4,11 +4,14 @@ import logging
 import re
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 import httpx
+
+from app.services.text_match import fold_diacritics, strip_leading_article
 
 logger = logging.getLogger("musicarr.musicbrainz")
 
@@ -19,10 +22,63 @@ SEARCH_SCORE_MIN = 80
 MATCH_RATIO_MIN = 0.78
 MAX_RETRIES = 5
 
+_RG_CACHE_MAX = 512
+_CREDIT_CACHE_MAX = 4096
+_CACHE_TTL_S = 3600.0
+
 _lock = threading.Lock()
 _last_request = 0.0
-_rg_cache: dict[str, list["ReleaseGroup"]] = {}
-_credit_cache: dict[str, tuple["CreditArtist", ...]] = {}
+
+_T = TypeVar("_T")
+
+
+class _TtlLruCache(Generic[_T]):
+    """Bounded in-process cache for live MusicBrainz responses only."""
+
+    def __init__(self, maxsize: int, ttl_s: float) -> None:
+        self._maxsize = max(1, maxsize)
+        self._ttl_s = max(0.001, ttl_s)
+        self._data: OrderedDict[str, tuple[float, _T]] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key: str) -> _T | None:
+        now = time.monotonic()
+        with self._lock:
+            item = self._data.get(key)
+            if item is None:
+                return None
+            expires_at, value = item
+            if expires_at <= now:
+                del self._data[key]
+                return None
+            self._data.move_to_end(key)
+            return value
+
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str) and self.get(key) is not None
+
+    def set(self, key: str, value: _T) -> None:
+        expires_at = time.monotonic() + self._ttl_s
+        with self._lock:
+            if key in self._data:
+                del self._data[key]
+            self._data[key] = (expires_at, value)
+            while len(self._data) > self._maxsize:
+                self._data.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._data.clear()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._data)
+
+
+_rg_cache: _TtlLruCache[list["ReleaseGroup"]] = _TtlLruCache(_RG_CACHE_MAX, _CACHE_TTL_S)
+_credit_cache: _TtlLruCache[tuple["CreditArtist", ...]] = _TtlLruCache(
+    _CREDIT_CACHE_MAX, _CACHE_TTL_S
+)
 
 _EDITION_NOISE = re.compile(
     r"\s*[\(\[][^)\]]*(remaster|deluxe|expanded|anniversary|edition|bonus|explicit|"
@@ -57,9 +113,13 @@ class CatalogResult:
     error: str | None = None
 
 
-def normalize_title(title: str) -> str:
-    t = (title or "").strip().lower()
-    t = _EDITION_NOISE.sub("", t)
+def normalize_title_strict(title: str) -> str:
+    """Fold diacritics/articles/feat.-clauses but keep edition words (Deluxe,
+    Live, Remaster, ...) intact, so a distinct edition still compares as
+    distinct rather than being silently collapsed into the base title.
+    """
+    t = fold_diacritics((title or "").strip().lower())
+    t = strip_leading_article(t)
     # Strip (feat. X) / feat. X so provider collab titles match MB clean titles
     t = re.sub(
         r"\s*[\(\[][^)\]]*(?:feat\.?|ft\.?|featuring)[^)\]]*[\)\]]",
@@ -71,6 +131,16 @@ def normalize_title(title: str) -> str:
     t = _PUNCT.sub(" ", t)
     t = _SPACE.sub(" ", t).strip()
     return t
+
+
+def normalize_title(title: str) -> str:
+    """Loose normalization: also strips edition noise (Deluxe/Live/Remaster/...)
+    for the fallback matching tier, where two titles that only differ by an
+    edition marker should still be considered candidates.
+    """
+    t = fold_diacritics((title or "").strip().lower())
+    t = _EDITION_NOISE.sub("", t)
+    return normalize_title_strict(t)
 
 
 def _year_prefix(date_str: str | None) -> str:
@@ -316,6 +386,7 @@ def search_release_group_for_artist(
         flags=re.I,
     ).strip() or search_title
     clean = normalize_title(search_title)
+    clean_strict = normalize_title_strict(search_title)
     aid = (artist_mbid or "").strip()
     if not clean or not aid:
         return None
@@ -366,13 +437,17 @@ def search_release_group_for_artist(
         ratio = SequenceMatcher(None, clean, cand).ratio()
         if cand == clean or clean in cand or cand in clean:
             ratio = 1.0
+        if rg.credits and aid not in credit_mbids:
+            # This release-group has known credits and our artist isn't one
+            # of them — never a valid match, regardless of title similarity
+            # (common titles like "Life Goes On" have many unrelated hits).
+            continue
+        if clean_strict and normalize_title_strict(rg.title) == clean_strict:
+            ratio += 0.1
         score = int(row.get("score") or 0)
         combined = ratio + (0.05 if score >= 90 else 0)
         if aid in credit_mbids:
             combined += 0.15
-        elif rg.credits and aid not in credit_mbids:
-            # Wide search hit that doesn't credit this artist at all
-            combined -= 0.35
         if combined > best_score:
             best_score = combined
             best = rg
@@ -404,17 +479,19 @@ def fetch_catalog(mbid: str, *, use_cache: bool = True) -> CatalogResult:
     key = (mbid or "").strip()
     if not key:
         return CatalogResult(error="No MusicBrainz artist id")
-    if use_cache and key in _rg_cache:
-        return CatalogResult(release_groups=list(_rg_cache[key]))
+    if use_cache:
+        cached = _rg_cache.get(key)
+        if cached is not None:
+            return CatalogResult(release_groups=list(cached))
 
     if _prefer_local():
         from app.services import mb_local
 
         local = mb_local.fetch_catalog(key)
         if not local.error:
-            # Drop "other" types to match live filter behavior
+            # Drop "other" types to match live filter behavior.
+            # Local SQLite is the durable store — do not memoize into RAM.
             filtered = [rg for rg in local.release_groups if rg.primary_type != "other"]
-            _rg_cache[key] = filtered
             return CatalogResult(release_groups=list(filtered), collaborators=list(local.collaborators))
         if not _allow_live():
             return local
@@ -467,7 +544,8 @@ def fetch_catalog(mbid: str, *, use_cache: bool = True) -> CatalogResult:
         if offset >= count or len(rows) < 100:
             break
 
-    _rg_cache[key] = out
+    if use_cache:
+        _rg_cache.set(key, out)
     return CatalogResult(
         release_groups=list(out),
         collaborators=list(collaborators.values()),
@@ -502,21 +580,19 @@ def enrich_release_group_credits(rg: ReleaseGroup) -> ReleaseGroup:
 
         mb_local.enrich_release_group_credits(rg)
         if rg.credits:
-            _credit_cache[rg.mbid] = rg.credits
+            # Local hits stay out of the live RAM cache.
             return rg
         if not _allow_live():
-            _credit_cache[rg.mbid] = ()
             return rg
     elif not _allow_live():
-        _credit_cache[rg.mbid] = ()
         return rg
 
     data = _get(f"/release-group/{rg.mbid}", {"inc": "artists"})
     if data.get("_error") or not data.get("id"):
-        _credit_cache[rg.mbid] = ()
+        _credit_cache.set(rg.mbid, ())
         return rg
     credits = tuple(_parse_credits(data))
-    _credit_cache[rg.mbid] = credits
+    _credit_cache.set(rg.mbid, credits)
     rg.credits = credits
     return rg
 
@@ -547,6 +623,7 @@ def match_release(
     want = normalize_title(title)
     if not want or not catalog:
         return None
+    want_strict = normalize_title_strict(title)
     want_year = _year_prefix(year)
     want_type = (album_type or "album").lower()
     best: ReleaseGroup | None = None
@@ -560,6 +637,11 @@ def match_release(
             ratio = 1.0
         elif want in cand or cand in want:
             ratio = max(ratio, 0.9)
+        # Prefer the release-group whose edition wording (Deluxe/Live/Remaster/...)
+        # actually matches the query, instead of treating every edition as
+        # interchangeable once the noise-stripped titles tie.
+        if want_strict and normalize_title_strict(rg.title) == want_strict:
+            ratio += 0.1
         if want_type and rg.primary_type == want_type:
             ratio += 0.03
         elif want_type == "album" and rg.primary_type == "compilation":
@@ -584,10 +666,12 @@ def match_provider_album(rg: ReleaseGroup, provider_albums: list[Any]) -> Any | 
     want = normalize_title(rg.title)
     if not want:
         return None
+    want_strict = normalize_title_strict(rg.title)
     best = None
     best_score = 0.0
     for alb in provider_albums:
-        title = normalize_title(getattr(alb, "title", "") or "")
+        raw_title = getattr(alb, "title", "") or ""
+        title = normalize_title(raw_title)
         if not title:
             continue
         ratio = SequenceMatcher(None, want, title).ratio()
@@ -595,6 +679,8 @@ def match_provider_album(rg: ReleaseGroup, provider_albums: list[Any]) -> Any | 
             ratio = 1.0
         elif want in title or title in want:
             ratio = max(ratio, 0.9)
+        if want_strict and normalize_title_strict(raw_title) == want_strict:
+            ratio += 0.1
         year = _year_prefix(getattr(alb, "release_date", None))
         if year and rg.year:
             if year == rg.year:

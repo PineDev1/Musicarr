@@ -5,27 +5,22 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models import DownloadJob, HistoryEvent
 from app.models.schemas import (
+    ArtistOut,
     DownloadJobOut,
     HistoryOut,
-    ImportResult,
     ImportReviewOut,
+    LibraryJobOut,
     LinkArtistRequest,
-    ReorganizeResult,
-    ScanResult,
 )
 from app.services.download_queue import ACTIVE_JOB_STATES, download_queue
 from app.services.library import (
     build_import_review,
-    import_existing_library,
     link_local_artist,
-    reorganize_library,
-    scan_library,
 )
 from app.services.monitor import release_monitor
 from app.services.settings_service import ensure_settings
 from app.api.artists import _artist_group_out
 from app.services.artists import find_linked_artists, get_artist_detail
-from app.models.schemas import ArtistOut
 
 router = APIRouter(tags=["ops"])
 
@@ -104,15 +99,38 @@ def clear_finished(db: Session = Depends(get_db)):
     return {"cleared": cleared}
 
 
-@router.post("/library/scan", response_model=ScanResult)
-def library_scan(db: Session = Depends(get_db)):
-    return scan_library(db)
+@router.post("/library/scan", response_model=LibraryJobOut, status_code=202)
+def library_scan():
+    from app.services import library_jobs
+
+    if library_jobs.get_job().state == "running":
+        raise HTTPException(status_code=409, detail="Library job already running")
+    try:
+        library_jobs.start_library_job("scan")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return library_jobs.job_dict()
 
 
-@router.post("/library/import", response_model=ImportResult)
-def library_import(db: Session = Depends(get_db), link_providers: bool = True):
-    """Import a previous on-disk music library into Musicarr."""
-    return import_existing_library(db, link_providers=link_providers)
+@router.post("/library/import", response_model=LibraryJobOut, status_code=202)
+def library_import(link_providers: bool = True):
+    """Import a previous on-disk music library into Musicarr (background job)."""
+    from app.services import library_jobs
+
+    if library_jobs.get_job().state == "running":
+        raise HTTPException(status_code=409, detail="Library job already running")
+    try:
+        library_jobs.start_library_job("import", link_providers=link_providers)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return library_jobs.job_dict()
+
+
+@router.get("/library/job", response_model=LibraryJobOut)
+def library_job():
+    from app.services import library_jobs
+
+    return library_jobs.job_dict()
 
 
 @router.get("/library/review", response_model=ImportReviewOut)
@@ -150,9 +168,17 @@ def library_review_link(
     )
 
 
-@router.post("/library/reorganize", response_model=ReorganizeResult)
-def library_reorganize(db: Session = Depends(get_db)):
-    return reorganize_library(db)
+@router.post("/library/reorganize", response_model=LibraryJobOut, status_code=202)
+def library_reorganize():
+    from app.services import library_jobs
+
+    if library_jobs.get_job().state == "running":
+        raise HTTPException(status_code=409, detail="Library job already running")
+    try:
+        library_jobs.start_library_job("reorganize")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return library_jobs.job_dict()
 
 
 @router.post("/monitor/run")

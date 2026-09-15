@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { Layout } from './Layout'
 import { ToastProvider } from './Toast'
@@ -7,11 +8,14 @@ import { ActivityPage } from './pages/ActivityPage'
 import { AddArtistPage } from './pages/AddArtistPage'
 import { AlbumPage } from './pages/AlbumPage'
 import { ArtistPage } from './pages/ArtistPage'
+import { ImportListsPage } from './pages/ImportListsPage'
 import { ImportReviewPage } from './pages/ImportReviewPage'
 import { LibraryPage } from './pages/LibraryPage'
 import { LoginPage } from './pages/LoginPage'
 import { QueuePage } from './pages/QueuePage'
 import { SettingsPage } from './pages/SettingsPage'
+import { SetupWizardPage, isSetupComplete, markSetupDone } from './pages/SetupWizardPage'
+import { UpgradesPage } from './pages/UpgradesPage'
 import { WantedPage } from './pages/WantedPage'
 import { NowPlayingPage } from './pages/NowPlayingPage'
 import { PlayerApp } from './player/PlayerApp'
@@ -34,8 +38,27 @@ function AdminApp() {
     retry: false,
     refetchOnWindowFocus: true,
   })
+  const health = useQuery({
+    queryKey: ['health'],
+    queryFn: api.health,
+    retry: false,
+    enabled: Boolean(auth.data && (!auth.data.enabled || auth.data.authenticated)),
+  })
 
-  if (auth.isLoading) {
+  const anyProvider =
+    Boolean(health.data?.deezer_ok) ||
+    Boolean(health.data?.tidal_ok) ||
+    Boolean(health.data?.qobuz_ok)
+  const configured = Boolean(health.data?.library_writable) && anyProvider
+  const needsSetup = Boolean(health.data) && !isSetupComplete() && !configured
+
+  useEffect(() => {
+    if (configured && !isSetupComplete()) {
+      markSetupDone()
+    }
+  }, [configured])
+
+  if (auth.isLoading || (auth.data && (!auth.data.enabled || auth.data.authenticated) && health.isLoading)) {
     return (
       <div className="login-shell">
         <p className="muted">Loading…</p>
@@ -55,19 +78,26 @@ function AdminApp() {
 
   return (
     <Routes>
-      <Route element={<Layout />}>
-        <Route index element={<LibraryPage />} />
-        <Route path="add" element={<AddArtistPage />} />
-        <Route path="artists/:id" element={<ArtistPage />} />
-        <Route path="albums/:id" element={<AlbumPage />} />
-        <Route path="wanted" element={<WantedPage />} />
-        <Route path="queue" element={<QueuePage />} />
-        <Route path="now-playing" element={<NowPlayingPage />} />
-        <Route path="activity" element={<ActivityPage />} />
-        <Route path="settings" element={<SettingsPage />} />
-        <Route path="import-review" element={<ImportReviewPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Route>
+      <Route path="setup" element={<SetupWizardPage />} />
+      {needsSetup ? (
+        <Route path="*" element={<Navigate to="/setup" replace />} />
+      ) : (
+        <Route element={<Layout />}>
+          <Route index element={<LibraryPage />} />
+          <Route path="add" element={<AddArtistPage />} />
+          <Route path="artists/:id" element={<ArtistPage />} />
+          <Route path="albums/:id" element={<AlbumPage />} />
+          <Route path="wanted" element={<WantedPage />} />
+          <Route path="upgrades" element={<UpgradesPage />} />
+          <Route path="queue" element={<QueuePage />} />
+          <Route path="now-playing" element={<NowPlayingPage />} />
+          <Route path="activity" element={<ActivityPage />} />
+          <Route path="settings" element={<SettingsPage />} />
+          <Route path="import-review" element={<ImportReviewPage />} />
+          <Route path="import-lists" element={<ImportListsPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      )}
     </Routes>
   )
 }

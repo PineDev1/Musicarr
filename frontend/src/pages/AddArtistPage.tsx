@@ -2,12 +2,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { api } from '../api'
+import { api, type ArtistSearchResult, type BulkArtistSearchResult } from '../api'
 import { useToast } from '../Toast'
 
 export function AddArtistPage() {
   const [q, setQ] = useState('')
   const [submitted, setSubmitted] = useState('')
+  const [bulkText, setBulkText] = useState('')
+  const [bulkMode, setBulkMode] = useState(false)
+  const [bulkResults, setBulkResults] = useState<BulkArtistSearchResult[] | null>(null)
+  const [picks, setPicks] = useState<Record<string, ArtistSearchResult>>({})
   const [includeSingles, setIncludeSingles] = useState(false)
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -16,7 +20,7 @@ export function AddArtistPage() {
   const search = useQuery({
     queryKey: ['search', submitted],
     queryFn: () => api.searchArtists(submitted),
-    enabled: submitted.length > 0,
+    enabled: submitted.length > 0 && !bulkMode,
   })
 
   const add = useMutation({
@@ -35,6 +39,45 @@ export function AddArtistPage() {
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
+  const bulkSearch = useMutation({
+    mutationFn: () => api.bulkSearchArtists(bulkText),
+    onSuccess: (rows) => {
+      setBulkResults(rows)
+      const next: Record<string, ArtistSearchResult> = {}
+      for (const row of rows) {
+        if (row.results[0]) next[row.query] = row.results[0]
+      }
+      setPicks(next)
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+
+  const bulkAdd = useMutation({
+    mutationFn: async () => {
+      const selected = Object.values(picks)
+      let added = 0
+      for (const hit of selected) {
+        await api.addArtist(hit.provider_id, hit.provider, {
+          include_singles: includeSingles,
+          download_missing: true,
+        })
+        added += 1
+      }
+      return added
+    },
+    onSuccess: (added) => {
+      qc.invalidateQueries({ queryKey: ['artists'] })
+      qc.invalidateQueries({ queryKey: ['queue'] })
+      qc.invalidateQueries({ queryKey: ['health'] })
+      toast.push(`Added ${added} artist(s)`, 'ok')
+      setBulkResults(null)
+      setBulkText('')
+      setPicks({})
+      navigate('/')
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+
   function onSubmit(e: FormEvent) {
     e.preventDefault()
     setSubmitted(q.trim())
@@ -49,65 +92,171 @@ export function AddArtistPage() {
             Search your active provider, add an artist, and download MusicBrainz-matched releases.
           </p>
         </div>
+        <button
+          type="button"
+          className="btn secondary"
+          onClick={() => {
+            setBulkMode((v) => !v)
+            setBulkResults(null)
+            setSubmitted('')
+          }}
+        >
+          {bulkMode ? 'Single search' : 'Paste a list'}
+        </button>
       </div>
 
-      <form className="toolbar" onSubmit={onSubmit} style={{ flexWrap: 'wrap' }}>
-        <input
-          type="text"
-          placeholder="Search artists…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          style={{ flex: 1, minWidth: 200 }}
-        />
-        <button className="btn" type="submit" disabled={!q.trim()}>
-          Search
-        </button>
-        <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input
-            type="checkbox"
-            checked={includeSingles}
-            onChange={(e) => setIncludeSingles(e.target.checked)}
+      {!bulkMode ? (
+        <>
+          <form className="toolbar" onSubmit={onSubmit} style={{ flexWrap: 'wrap' }}>
+            <input
+              type="text"
+              placeholder="Search artists…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              style={{ flex: 1, minWidth: 200 }}
+            />
+            <button className="btn" type="submit" disabled={!q.trim()}>
+              Search
+            </button>
+            <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                type="checkbox"
+                checked={includeSingles}
+                onChange={(e) => setIncludeSingles(e.target.checked)}
+              />
+              Include singles (MusicBrainz-matched)
+            </label>
+          </form>
+
+          {search.isFetching && <p className="muted">Searching…</p>}
+          {search.error && <p className="error">{(search.error as Error).message}</p>}
+
+          {search.data && (
+            <div className="search-results">
+              {search.data.map((a, i) => (
+                <motion.div
+                  key={`${a.provider}-${a.provider_id}`}
+                  className="search-row"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: Math.min(i * 0.03, 0.3) }}
+                >
+                  {a.image_url ? (
+                    <img src={a.image_url} alt="" />
+                  ) : (
+                    <div className="placeholder-art" style={{ width: 56, height: 56 }} />
+                  )}
+                  <div className="grow">
+                    <strong>{a.name}</strong>
+                    <div className="muted">
+                      <span className="badge queued">{a.provider}</span>{' '}
+                      {a.nb_album != null ? `${a.nb_album} releases` : ''}
+                    </div>
+                  </div>
+                  <button
+                    className="btn"
+                    disabled={add.isPending}
+                    onClick={() => add.mutate({ provider_id: a.provider_id, provider: a.provider })}
+                  >
+                    {add.isPending ? 'Adding…' : 'Add'}
+                  </button>
+                </motion.div>
+              ))}
+              {search.data.length === 0 && <p className="muted">No artists found.</p>}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="muted">Paste one artist name per line (up to 40).</p>
+          <textarea
+            value={bulkText}
+            onChange={(e) => setBulkText(e.target.value)}
+            rows={8}
+            style={{ width: '100%', marginBottom: '0.75rem' }}
+            placeholder={'Daft Punk\nRadiohead\nBjörk'}
           />
-          Include singles (MusicBrainz-matched)
-        </label>
-      </form>
-
-      {search.isFetching && <p className="muted">Searching…</p>}
-      {search.error && <p className="error">{(search.error as Error).message}</p>}
-
-      {search.data && (
-        <div className="search-results">
-          {search.data.map((a, i) => (
-            <motion.div
-              key={`${a.provider}-${a.provider_id}`}
-              className="search-row"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: Math.min(i * 0.03, 0.3) }}
+          <div className="toolbar" style={{ flexWrap: 'wrap' }}>
+            <button
+              className="btn"
+              type="button"
+              disabled={!bulkText.trim() || bulkSearch.isPending}
+              onClick={() => bulkSearch.mutate()}
             >
-              {a.image_url ? (
-                <img src={a.image_url} alt="" />
-              ) : (
-                <div className="placeholder-art" style={{ width: 56, height: 56 }} />
-              )}
-              <div className="grow">
-                <strong>{a.name}</strong>
-                <div className="muted">
-                  <span className="badge queued">{a.provider}</span>{' '}
-                  {a.nb_album != null ? `${a.nb_album} releases` : ''}
-                </div>
-              </div>
+              {bulkSearch.isPending ? 'Searching…' : 'Search all'}
+            </button>
+            <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                type="checkbox"
+                checked={includeSingles}
+                onChange={(e) => setIncludeSingles(e.target.checked)}
+              />
+              Include singles
+            </label>
+            {bulkResults && Object.keys(picks).length > 0 && (
               <button
                 className="btn"
-                disabled={add.isPending}
-                onClick={() => add.mutate({ provider_id: a.provider_id, provider: a.provider })}
+                type="button"
+                disabled={bulkAdd.isPending}
+                onClick={() => bulkAdd.mutate()}
               >
-                {add.isPending ? 'Adding…' : 'Add'}
+                {bulkAdd.isPending
+                  ? 'Adding…'
+                  : `Add selected (${Object.keys(picks).length})`}
               </button>
-            </motion.div>
-          ))}
-          {search.data.length === 0 && <p className="muted">No artists found.</p>}
-        </div>
+            )}
+          </div>
+
+          {bulkResults && (
+            <div className="search-results" style={{ marginTop: '1rem' }}>
+              {bulkResults.map((row) => (
+                <div key={row.query} style={{ marginBottom: '1rem' }}>
+                  <strong>{row.query}</strong>
+                  {row.error && <p className="error">{row.error}</p>}
+                  {!row.error && row.results.length === 0 && (
+                    <p className="muted">No matches</p>
+                  )}
+                  {row.results.map((a) => {
+                    const key = row.query
+                    const picked = picks[key]
+                    const isPick =
+                      picked?.provider_id === a.provider_id && picked?.provider === a.provider
+                    return (
+                      <div key={`${a.provider}-${a.provider_id}`} className="search-row">
+                        {a.image_url ? (
+                          <img src={a.image_url} alt="" />
+                        ) : (
+                          <div className="placeholder-art" style={{ width: 56, height: 56 }} />
+                        )}
+                        <div className="grow">
+                          <strong>{a.name}</strong>
+                          <div className="muted">
+                            <span className="badge queued">{a.provider}</span>{' '}
+                            {a.nb_album != null ? `${a.nb_album} releases` : ''}
+                          </div>
+                        </div>
+                        <button
+                          className={isPick ? 'btn' : 'btn ghost'}
+                          type="button"
+                          onClick={() =>
+                            setPicks((prev) => {
+                              const next = { ...prev }
+                              if (isPick) delete next[key]
+                              else next[key] = a
+                              return next
+                            })
+                          }
+                        >
+                          {isPick ? 'Selected' : 'Select'}
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   )

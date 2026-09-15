@@ -55,9 +55,12 @@ class AppSettings(Base):
     # local | live | local_with_live_fallback
     mb_catalog_mode: Mapped[str] = mapped_column(String(32), default="local")
     notify_webhook_url: Mapped[str] = mapped_column(Text, default="")
+    notify_channel: Mapped[str] = mapped_column(String(32), default="custom")
+    notify_token: Mapped[str] = mapped_column(Text, default="")
     notify_on_complete: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_on_failure: Mapped[bool] = mapped_column(Boolean, default=True)
     upgrade_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    fallback_providers_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     media_refresh_url: Mapped[str] = mapped_column(Text, default="")
     media_refresh_token: Mapped[str] = mapped_column(Text, default="")
     media_refresh_type: Mapped[str] = mapped_column(String(32), default="webhook")
@@ -94,7 +97,7 @@ class Artist(Base):
     musicbrainz_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     # JSON list of {id,name,musicbrainz_id} featured / collaborating artists
     related_artists_json: Mapped[str] = mapped_column(Text, default="[]")
-    monitored: Mapped[bool] = mapped_column(Boolean, default=True)
+    monitored: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     # all = full discography; new = only releases after added_at; none = never auto-grab
     monitor_mode: Mapped[str] = mapped_column(String(16), default="all")
     # None/empty = inherit global include_singles; "0"/"1" stored as bool
@@ -119,14 +122,16 @@ class Album(Base):
     provider: Mapped[str] = mapped_column(String(32), default="deezer", index=True)
     provider_id: Mapped[str] = mapped_column(String(64), index=True)
     deezer_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
-    artist_id: Mapped[int] = mapped_column(ForeignKey("artists.id", ondelete="CASCADE"))
+    artist_id: Mapped[int] = mapped_column(
+        ForeignKey("artists.id", ondelete="CASCADE"), index=True
+    )
     title: Mapped[str] = mapped_column(String(512))
     album_type: Mapped[str] = mapped_column(String(64), default="album")
     release_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
     cover_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     track_count: Mapped[int] = mapped_column(Integer, default=0)
-    monitored: Mapped[bool] = mapped_column(Boolean, default=True)
-    status: Mapped[str] = mapped_column(String(32), default="wanted")
+    monitored: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="wanted", index=True)
     # e.g. "Qobuz doesn't have this release"
     status_reason: Mapped[str] = mapped_column(Text, default="")
     musicbrainz_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
@@ -173,11 +178,11 @@ class DownloadJob(Base):
     target_id: Mapped[int] = mapped_column(Integer, default=0)
     target_provider_id: Mapped[str] = mapped_column(String(64), default="")
     album_id: Mapped[int | None] = mapped_column(
-        ForeignKey("albums.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("albums.id", ondelete="SET NULL"), nullable=True, index=True
     )
     artist_name: Mapped[str] = mapped_column(String(512), default="")
     album_title: Mapped[str] = mapped_column(String(512), default="")
-    state: Mapped[str] = mapped_column(String(32), default="queued")
+    state: Mapped[str] = mapped_column(String(32), default="queued", index=True)
     progress: Mapped[float] = mapped_column(Float, default=0.0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_category: Mapped[str] = mapped_column(String(32), default="")
@@ -205,6 +210,19 @@ class HistoryEvent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     event_type: Mapped[str] = mapped_column(String(64))
     message: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ImportList(Base):
+    __tablename__ = "import_lists"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), default="")
+    names_raw: Mapped[str] = mapped_column(Text, default="")
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=720)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_result: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

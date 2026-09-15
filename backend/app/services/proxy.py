@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from fastapi import Request
 from sqlalchemy.orm import Session
 
-from app.services.settings_service import ensure_settings
+from app.services.settings_service import get_setting_cached
 
 
 def normalize_public_domain(raw: str) -> str:
@@ -21,11 +21,11 @@ def normalize_public_domain(raw: str) -> str:
 
 
 def ssl_enabled(db: Session) -> bool:
-    return bool(getattr(ensure_settings(db), "ssl_enabled", False))
+    return bool(get_setting_cached(db, "ssl_enabled", False))
 
 
 def public_domain(db: Session) -> str:
-    return (getattr(ensure_settings(db), "public_domain", None) or "").strip()
+    return (get_setting_cached(db, "public_domain", None) or "").strip()
 
 
 def cookie_domain_for_settings(db: Session) -> str | None:

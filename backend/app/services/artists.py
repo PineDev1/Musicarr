@@ -11,6 +11,7 @@ from app.services.history import add_history
 from app.services.providers import get_active_provider
 from app.services.providers.base import ProviderError
 from app.services.settings_service import ensure_settings
+from app.services.text_match import fold_diacritics, normalize_key, strip_leading_article
 
 
 def _legacy_id(provider: str, provider_id: str) -> int:
@@ -55,6 +56,65 @@ def link_artists_by_mbid(db: Session, mbid: str) -> list[Artist]:
     for row in rows:
         db.refresh(row)
     return rows
+
+
+def merge_artists(db: Session, artist_ids: list[int], *, preferred_id: int | None = None) -> list[Artist]:
+    """Merge artist rows into one link_group_id (same person across providers / collisions)."""
+    ids = sorted({int(i) for i in artist_ids if i})
+    if len(ids) < 2:
+        raise ValueError("Select at least two artists to merge")
+    rows = list(db.scalars(select(Artist).where(Artist.id.in_(ids)).order_by(Artist.id)).all())
+    if len(rows) < 2:
+        raise ValueError("Artists not found")
+    preferred = next((r for r in rows if preferred_id and r.id == preferred_id), rows[0])
+    mbids = [(getattr(r, "musicbrainz_id", None) or "").strip() for r in rows]
+    mbids = [m for m in mbids if m]
+    group = (getattr(preferred, "musicbrainz_id", None) or "").strip()
+    if not group and mbids:
+        group = mbids[0]
+    if not group:
+        existing = [(getattr(r, "link_group_id", None) or "").strip() for r in rows]
+        existing = [g for g in existing if g]
+        group = existing[0] if existing else f"merge:{preferred.id}"
+    for row in rows:
+        row.link_group_id = group
+        if mbids and not (getattr(row, "musicbrainz_id", None) or "").strip():
+            # Prefer a shared MBID when one exists
+            if len(set(mbids)) == 1:
+                row.musicbrainz_id = mbids[0]
+    if mbids and len(set(mbids)) == 1:
+        for row in rows:
+            row.musicbrainz_id = mbids[0]
+    db.commit()
+    for row in rows:
+        db.refresh(row)
+    add_history(
+        db,
+        "artists_merged",
+        f"Merged {len(rows)} artists as link group {group}",
+    )
+    return rows
+
+
+def collision_groups(db: Session) -> list[list[Artist]]:
+    """Groups of artists that share a normalized display name (2+ each) and aren't already merged."""
+    artists = list(db.scalars(select(Artist).order_by(Artist.name, Artist.id)).all())
+    by_name: dict[str, list[Artist]] = {}
+    for artist in artists:
+        key = _norm_artist_name(artist.name)
+        if not key:
+            continue
+        by_name.setdefault(key, []).append(artist)
+    groups: list[list[Artist]] = []
+    for rows in by_name.values():
+        if len(rows) < 2:
+            continue
+        # Rows already sharing a link_group_id are treated as one merged entity;
+        # only flag the group if distinct (unmerged) artists remain.
+        distinct = {(getattr(r, "link_group_id", None) or "").strip() or f"id:{r.id}" for r in rows}
+        if len(distinct) > 1:
+            groups.append(rows)
+    return groups
 
 
 def ensure_musicbrainz_identity(db: Session, artist: Artist) -> str | None:
@@ -210,6 +270,39 @@ def _unique_provider_album_id(
     return f"collab:{artist_id}:{pid}"
 
 
+def _dedupe_pid_for_write(
+    db: Session,
+    *,
+    provider_name: str,
+    pid: str,
+    artist_id: int,
+    current_album_id: int,
+) -> str:
+    """Re-check right before actually writing `pid` to an existing row's
+    provider_id. `_unique_provider_album_id` can only compare against the
+    artist_id it's told, not the specific row it'll end up written to — so a
+    same-artist duplicate row already sitting on this pid (an older
+    duplicate, or one this same sync run just updated moments ago) can slip
+    through it. This catches that right before the write, excluding the row
+    being written to itself.
+    """
+    for obj in list(db.new) + list(db.dirty) + list(db.identity_map.values()):
+        if not isinstance(obj, Album) or obj.id == current_album_id:
+            continue
+        if obj.provider == provider_name and str(obj.provider_id) == pid:
+            return f"collab:{artist_id}:{effective_provider_album_id(pid)}"
+    conflict = db.scalar(
+        select(Album).where(
+            Album.provider == provider_name,
+            Album.provider_id == pid,
+            Album.id != current_album_id,
+        )
+    )
+    if conflict is not None:
+        return f"collab:{artist_id}:{effective_provider_album_id(pid)}"
+    return pid
+
+
 def _upsert_mb_album(
     db: Session,
     *,
@@ -278,8 +371,15 @@ def _upsert_mb_album(
         if collaborator_names is not None:
             _set_album_collaborators(album, collaborator_names, primary_name=artist.name)
         if provider_hit and (album.provider_id or "").startswith("mb:"):
-            album.provider_id = pid
-            album.deezer_id = _legacy_id(provider_name, pid)
+            safe_pid = _dedupe_pid_for_write(
+                db,
+                provider_name=provider_name,
+                pid=pid,
+                artist_id=artist.id,
+                current_album_id=album.id,
+            )
+            album.provider_id = safe_pid
+            album.deezer_id = _legacy_id(provider_name, safe_pid)
         return album
 
     if album is None:
@@ -307,7 +407,17 @@ def _upsert_mb_album(
     if provider_hit:
         from sqlalchemy import inspect as sa_inspect
 
-        conflict = existing_by_pid.get(pid)
+        # Live re-check rather than trusting existing_by_pid: that dict is a
+        # snapshot from the start of the sync and isn't updated by every
+        # write, so a same-artist duplicate row another branch just touched
+        # moments ago could otherwise slip through here.
+        conflict = existing_by_pid.get(pid) or db.scalar(
+            select(Album).where(
+                Album.provider == provider_name,
+                Album.provider_id == pid,
+                Album.id != album.id,
+            )
+        )
         if conflict is not None and conflict is not album:
             if (conflict.status or "") == "downloaded":
                 # Keep the downloaded row; this album gets a disambiguated id.
@@ -316,6 +426,12 @@ def _upsert_mb_album(
                 insp = sa_inspect(conflict)
                 if insp.persistent:
                     db.delete(conflict)
+                    # Without an explicit flush here, SQLAlchemy doesn't
+                    # guarantee the DELETE executes before the UPDATE below
+                    # reuses the same (provider, provider_id) — both hitting
+                    # the DB in the same flush can trip the unique
+                    # constraint even though the end state is valid.
+                    db.flush()
                 elif insp.pending:
                     db.expunge(conflict)
                 existing_by_pid.pop(conflict.provider_id, None)
@@ -534,12 +650,18 @@ def _sync_from_musicbrainz(
         pid = str(raw.provider_id)
         if pid in matched_provider_ids:
             continue
-        album = existing_by_pid.get(pid)
+        album = existing_by_pid.get(pid) or existing_by_pid.get(f"collab:{artist.id}:{pid}")
         title_l = (raw.title or (album.title if album else "") or "").lower()
         looks_collab = "feat" in title_l or " ft." in title_l or " ft " in title_l
+        already_downloaded = bool(album and (album.status or "") == "downloaded")
         if looks_collab and collab_searches < max_collab_searches:
-            # Skip MB search for types this artist isn't monitoring (usually singles).
-            if not album_type_allowed_for_artist(db, artist, raw.album_type or "single"):
+            # Skip MB search for types this artist isn't monitoring (usually
+            # singles) — unless the album is already downloaded, in which case
+            # we're only correcting its collab credit metadata, not deciding
+            # whether to add it, so the type filter shouldn't block that.
+            if not already_downloaded and not album_type_allowed_for_artist(
+                db, artist, raw.album_type or "single"
+            ):
                 pass
             else:
                 collab_searches += 1
@@ -808,8 +930,13 @@ def _sync_provider_albums(
     touched: list[Album] = []
     for raw in provider_albums:
         pid = raw.provider_id
-        if pid in existing:
-            album = existing[pid]
+        # A collab row for this same raw pid may already exist under its
+        # disambiguated "collab:{artist_id}:{pid}" key (see
+        # _unique_provider_album_id) — checking only the raw key here missed
+        # it and inserted a second row with the same disambiguated id,
+        # crashing on the (provider, provider_id) unique constraint.
+        album = existing.get(pid) or existing.get(f"collab:{artist.id}:{pid}")
+        if album is not None:
             album.title = raw.title or album.title
             album.cover_url = raw.cover_url or album.cover_url
             album.release_date = raw.release_date or album.release_date
@@ -1055,7 +1182,7 @@ def artist_stats(artist: Artist) -> tuple[int, int, int]:
 
 
 def _norm_artist_name(name: str) -> str:
-    return " ".join((name or "").strip().lower().split())
+    return normalize_key(name or "")
 
 
 def find_artist_by_normalized_name(db: Session, name: str, provider: str) -> Artist | None:
@@ -1087,11 +1214,14 @@ def find_artist_by_normalized_name(db: Session, name: str, provider: str) -> Art
 
 
 def _norm_album_title(title: str) -> str:
+    """Diacritic/article-folded title key. Deliberately keeps parenthetical
+    content (Deluxe/Live/Remaster/...) so distinct editions merge-display as
+    separate cards instead of one row silently swallowing the other.
+    """
     import re
 
-    t = (title or "").lower().strip()
-    t = re.sub(r"\([^)]*\)", "", t)
-    t = re.sub(r"\[[^\]]*\]", "", t)
+    t = fold_diacritics((title or "").lower().strip())
+    t = strip_leading_article(t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
 

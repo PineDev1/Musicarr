@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -8,6 +10,51 @@ from app.core.config import settings as app_config
 from app.models import AppSettings
 from app.models.schemas import SettingsOut, SettingsUpdate
 from app.services.deezer_client import deezer_session, default_library_path
+
+# A handful of low-churn settings fields (auth/CORS/proxy flags) are read on
+# almost every HTTP request via middleware (app_auth, player_auth, cors_origins,
+# proxy). Each read otherwise means a fresh SessionLocal() + SQLite query on
+# the event loop thread for every single request, which can stall behind a
+# writer holding the DB lock (e.g. the download queue or monitor job) and
+# freeze the whole app. These fields change only when a human edits Settings,
+# so a short TTL cache removes that DB round-trip from the hot path.
+_CACHE_TTL_SECONDS = 2.0
+_cache: dict[str, Any] = {}
+_cache_at: float = 0.0
+_cache_bind_id: int | None = None
+
+
+def invalidate_settings_cache() -> None:
+    global _cache, _cache_at, _cache_bind_id
+    _cache = {}
+    _cache_at = 0.0
+    _cache_bind_id = None
+
+
+def get_setting_cached(db: Session, field: str, default: Any = None) -> Any:
+    global _cache, _cache_at, _cache_bind_id
+    now = time.monotonic()
+    # Keyed by engine identity too, not just TTL: tests (and the backup/restore
+    # flow) spin up separate SQLite engines, and a stale value from a
+    # different engine must never leak across that boundary.
+    bind_id = id(db.get_bind())
+    if (
+        bind_id != _cache_bind_id
+        or (now - _cache_at) >= _CACHE_TTL_SECONDS
+        or field not in _cache
+    ):
+        row = ensure_settings(db)
+        _cache = {
+            "auth_enabled": getattr(row, "auth_enabled", False),
+            "auth_username": getattr(row, "auth_username", None),
+            "auth_secret": getattr(row, "auth_secret", None),
+            "player_enabled": getattr(row, "player_enabled", False),
+            "public_domain": getattr(row, "public_domain", None),
+            "ssl_enabled": getattr(row, "ssl_enabled", False),
+        }
+        _cache_at = now
+        _cache_bind_id = bind_id
+    return _cache.get(field, default)
 
 
 def ensure_settings(db: Session) -> AppSettings:
@@ -67,9 +114,12 @@ def settings_to_out(row: AppSettings, validate: bool = False) -> SettingsOut:
         official_releases_only=bool(getattr(row, "official_releases_only", True)),
         mb_catalog_mode=(getattr(row, "mb_catalog_mode", None) or "local"),
         notify_webhook_url=getattr(row, "notify_webhook_url", "") or "",
+        notify_channel=(getattr(row, "notify_channel", None) or "custom"),
+        notify_token_set=bool((getattr(row, "notify_token", None) or "").strip()),
         notify_on_complete=bool(getattr(row, "notify_on_complete", True)),
         notify_on_failure=bool(getattr(row, "notify_on_failure", True)),
         upgrade_enabled=bool(getattr(row, "upgrade_enabled", True)),
+        fallback_providers_enabled=bool(getattr(row, "fallback_providers_enabled", True)),
         media_refresh_url=getattr(row, "media_refresh_url", "") or "",
         media_refresh_token_set=bool(getattr(row, "media_refresh_token", "") or ""),
         media_refresh_type=getattr(row, "media_refresh_type", None) or "webhook",
@@ -124,6 +174,10 @@ def update_settings(db: Session, payload: SettingsUpdate) -> AppSettings:
         token = (data.pop("media_refresh_token") or "").strip()
         if token:
             row.media_refresh_token = token
+    if "notify_token" in data:
+        ntoken = (data.pop("notify_token") or "").strip()
+        if ntoken:
+            row.notify_token = ntoken
     if "auth_password" in data:
         password = (data.pop("auth_password") or "").strip()
         if password:
@@ -146,6 +200,7 @@ def update_settings(db: Session, payload: SettingsUpdate) -> AppSettings:
         Path(row.library_path).mkdir(parents=True, exist_ok=True)
     db.commit()
     db.refresh(row)
+    invalidate_settings_cache()
     return row
 
 

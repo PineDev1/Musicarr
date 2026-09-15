@@ -226,6 +226,29 @@ export const playerApi = {
       `/library/songs?q=${encodeURIComponent(q)}&offset=${offset}&limit=${limit}`,
     ),
   continueListening: () => request<PlayerContinue>('/library/continue'),
+  stats: (rangeDays = 30) =>
+    request<{
+      range_days: number
+      play_events: number
+      unique_tracks: number
+      unique_artists: number
+      total_seconds: number
+      top_tracks: {
+        track_id: number
+        title: string
+        artist_name: string
+        cover_url: string | null
+        plays: number
+        seconds: number
+      }[]
+      top_artists: {
+        artist_id: number
+        name: string
+        image_url: string | null
+        plays: number
+        seconds: number
+      }[]
+    }>(`/library/stats?range_days=${rangeDays}`),
   listenHistory: () => request<PlayerPlaylist>('/library/history'),
   clearHistory: () => request<{ ok: boolean }>('/library/history', { method: 'DELETE' }),
   streamUrl: (trackId: number) => `/api/player/stream/${trackId}`,

@@ -23,6 +23,7 @@ from app.services.naming import (
 from app.services.providers import get_provider
 from app.services.providers.base import ProviderError
 from app.services.settings_service import ensure_settings, library_root
+from app.services.text_match import normalize_key
 
 logger = logging.getLogger("musicarr.download")
 
@@ -30,15 +31,15 @@ ACTIVE_JOB_STATES = ["queued", "running"]
 
 
 def pick_unique_artist_search_hit(artist_name: str, hits: list) -> object | None:
-    """Return the provider search hit only when exactly one exact name match exists."""
-    key = " ".join((artist_name or "").strip().lower().split())
+    """Return the provider search hit only when exactly one exact name match exists.
+
+    Matching folds diacritics and a leading "The"/"A"/"An" so e.g. a local tag
+    "The Beatles" still auto-links to a provider hit named "Beatles".
+    """
+    key = normalize_key(artist_name or "")
     if not key or not hits:
         return None
-    exact = [
-        h
-        for h in hits
-        if " ".join((getattr(h, "name", None) or "").strip().lower().split()) == key
-    ]
+    exact = [h for h in hits if normalize_key(getattr(h, "name", None) or "") == key]
     if len(exact) == 1:
         return exact[0]
     return None
@@ -340,37 +341,20 @@ class DownloadQueue:
                 return
 
             try:
-                active = (settings.active_provider or "deezer").lower()
-                # Always download through the active source — never keep using
-                # a previous provider just because that album row still exists.
-                if album.provider != active:
-                    rematched = self._rematch_album_to_active(db, album, artist, active)
-                    if not rematched:
-                        raise ProviderError(
-                            f"This album is from {album.provider}, but active source is {active}. "
-                            f"Could not find a matching release on {active}. "
-                            f"Re-add the artist while {active} is selected."
-                        )
-                    album = rematched
-                    job.album_id = album.id
-                    job.target_provider_id = album.provider_id
-                    job.album_title = album.title
-                    if album.artist:
-                        job.artist_name = album.artist.name
-                    db.commit()
-                    artist = db.get(Artist, album.artist_id)
-
-                provider = get_provider(db, active)
-                ok, err = provider.validate_session()
-                if not ok:
-                    raise ProviderError(
-                        err
-                        or f"{active} is not connected. Log in under Settings."
-                    )
+                provider, album, candidate_name = self._resolve_download_target(
+                    db, album, artist, settings
+                )
+                job.album_id = album.id
+                job.target_provider_id = album.provider_id
+                job.album_title = album.title
+                if album.artist:
+                    job.artist_name = album.artist.name
+                db.commit()
+                artist = db.get(Artist, album.artist_id)
                 logger.info(
                     "Downloading '%s' via %s (id=%s)",
                     album.title,
-                    active,
+                    candidate_name,
                     album.provider_id,
                 )
             except ProviderError as exc:
@@ -403,14 +387,33 @@ class DownloadQueue:
                 shutil.rmtree(staging, ignore_errors=True)
             staging.mkdir(parents=True, exist_ok=True)
 
+            # Provider download loops call this many times per second (once per
+            # chunk). Each call used to open a session and commit unconditionally,
+            # which meant a download in progress held SQLite's single writer lock
+            # almost continuously — starving other writes (like pressing Cancel,
+            # or the queue polling for status) behind busy_timeout waits. Only
+            # persist when progress has moved meaningfully or enough time has
+            # passed, so the UI still updates smoothly but the DB isn't hammered.
+            progress_state = {"value": -1.0, "at": 0.0}
+
             def on_progress(value):
                 if value is None:
                     return
+                value = float(value)
+                now = time.monotonic()
+                if (
+                    value < 1.0
+                    and value - progress_state["value"] < 0.01
+                    and now - progress_state["at"] < 0.5
+                ):
+                    return
+                progress_state["value"] = value
+                progress_state["at"] = now
                 s = SessionLocal()
                 try:
                     j = s.get(DownloadJob, job_id)
                     if j and j.state == "running":
-                        j.progress = float(value)
+                        j.progress = value
                         s.commit()
                 finally:
                     s.close()
@@ -571,26 +574,98 @@ class DownloadQueue:
                 self._cancel_ids.discard(job_id)
             db.close()
 
-    def _rematch_album_to_active(
+    def _resolve_download_target(
+        self,
+        db: Session,
+        album: Album,
+        artist: Artist | None,
+        settings,
+    ) -> tuple[object, Album, str]:
+        """Pick a provider + Album row to download, trying the active provider
+        first and falling back to other authenticated providers if enabled.
+
+        Raises the last ProviderError if no candidate provider could resolve
+        this album.
+        """
+        active = (settings.active_provider or "deezer").lower()
+        fallback_enabled = getattr(settings, "fallback_providers_enabled", True)
+        # Active provider always goes first — other providers are only even
+        # checked (each check can be a network call, e.g. Qobuz's
+        # validate_session) once the active one actually fails to resolve
+        # this album, so the common case pays no extra cost.
+        order = [active]
+        if fallback_enabled:
+            order += [p for p in ("deezer", "tidal", "qobuz") if p != active]
+
+        last_error: ProviderError | None = None
+        for candidate_name in order:
+            try:
+                provider, resolved_album = self._resolve_for_provider(db, album, artist, candidate_name)
+            except ProviderError as exc:
+                last_error = exc
+                if candidate_name != active:
+                    logger.info(
+                        "Fallback candidate %s could not resolve '%s': %s",
+                        candidate_name,
+                        album.title,
+                        exc,
+                    )
+                continue
+            if candidate_name != active:
+                add_history(
+                    db,
+                    "rematch",
+                    f"'{resolved_album.title}' unavailable on {active}, using {candidate_name} instead",
+                )
+            return provider, resolved_album, candidate_name
+        raise last_error or ProviderError("No provider available")
+
+    def _resolve_for_provider(
+        self,
+        db: Session,
+        album: Album,
+        artist: Artist | None,
+        provider_name: str,
+    ) -> tuple[object, Album]:
+        """Get a validated provider + the Album row to download from it.
+
+        Rematches to `provider_name`'s catalog first if the current Album row
+        belongs to a different provider. Raises ProviderError if the provider
+        isn't authenticated or no matching release could be found there.
+        """
+        if album.provider != provider_name:
+            rematched = self._rematch_album_to_provider(db, album, artist, provider_name)
+            if not rematched:
+                raise ProviderError(
+                    f"This album is from {album.provider}. Could not find a matching "
+                    f"release on {provider_name}."
+                )
+            album = rematched
+        provider = get_provider(db, provider_name)
+        ok, err = provider.validate_session()
+        if not ok:
+            raise ProviderError(err or f"{provider_name} is not connected. Log in under Settings.")
+        return provider, album
+
+    def _rematch_album_to_provider(
         self,
         db: Session,
         album: Album,
         artist: Artist | None,
         active: str,
     ) -> Album | None:
-        """Find the same album on the active provider and return/update that Album row."""
+        """Find the same album on the given provider and return/update that Album row.
+
+        `active` names the target provider to search — despite the historical
+        name it's just "the provider to try," which is what lets this same
+        function serve both the active-provider rematch case and multi-provider
+        fallback (see _process_job).
+        """
         from app.services.artists import add_artist, sync_album_tracks, sync_artist_albums
         from app.services.providers import get_provider
+        from app.services.text_match import normalize_key as norm
         from sqlalchemy import select
         from sqlalchemy.orm import joinedload
-        import re
-
-        def norm(title: str) -> str:
-            t = (title or "").lower().strip()
-            t = re.sub(r"\([^)]*\)", "", t)
-            t = re.sub(r"\[[^\]]*\]", "", t)
-            t = re.sub(r"\s+", " ", t).strip()
-            return t
 
         try:
             provider = get_provider(db, active)

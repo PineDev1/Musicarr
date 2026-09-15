@@ -132,7 +132,11 @@ export function QueuePage() {
           </button>
           <button
             className="btn secondary"
-            onClick={() => clearFinished.mutate()}
+            onClick={() => {
+              if (window.confirm('Clear finished jobs from the queue history? This cannot be undone.')) {
+                clearFinished.mutate()
+              }
+            }}
             disabled={clearFinished.isPending}
           >
             Clear finished

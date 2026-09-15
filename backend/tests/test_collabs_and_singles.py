@@ -64,7 +64,11 @@ def test_enrich_release_group_uses_inc_artists():
             ],
         }
 
-    with patch("app.services.musicbrainz._get", side_effect=fake_get):
+    with (
+        patch("app.services.musicbrainz._prefer_local", return_value=False),
+        patch("app.services.musicbrainz._allow_live", return_value=True),
+        patch("app.services.musicbrainz._get", side_effect=fake_get),
+    ):
         enriched = enrich_release_group_credits(rg)
     assert len(enriched.credits) == 2
     assert enriched.credits[0].name == "Ed Sheeran"

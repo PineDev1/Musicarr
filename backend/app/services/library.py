@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from pathlib import Path
+from typing import Any, Callable
 
 from mutagen import File as MutagenFile
 from sqlalchemy import select
@@ -17,15 +18,34 @@ from app.services.naming import (
     year_from_release,
 )
 from app.services.settings_service import ensure_settings, library_root
+from app.services.text_match import fold_diacritics, strip_leading_article
 
 
 AUDIO_EXTS = {".flac", ".mp3", ".m4a", ".ogg", ".opus", ".wav", ".aac", ".aiff", ".aif"}
+ProgressCb = Callable[[dict[str, Any]], None]
+
+
+def _emit(on_progress: ProgressCb | None, **kwargs: Any) -> None:
+    if on_progress:
+        on_progress(kwargs)
 
 
 def _norm(s: str | None) -> str:
-    t = (s or "").lower().strip()
+    t = fold_diacritics((s or "").lower().strip())
+    t = strip_leading_article(t)
     t = re.sub(r"\([^)]*\)", "", t)
     t = re.sub(r"\[[^\]]*\]", "", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def _norm_strict(s: str | None) -> str:
+    """Like _norm but keeps parenthetical/bracketed content, so edition
+    markers ("Deluxe", "Live", "Remaster", ...) stay distinguishing instead
+    of being stripped away and silently merged with the base title.
+    """
+    t = fold_diacritics((s or "").lower().strip())
+    t = strip_leading_article(t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
@@ -92,7 +112,7 @@ def _guess_from_path(path: Path, root: Path) -> dict:
     return {"artist": artist, "album": album, "title": title}
 
 
-def _collect_files(root: Path) -> list[dict]:
+def _collect_files(root: Path, *, on_progress: ProgressCb | None = None) -> list[dict]:
     out: list[dict] = []
     for path in root.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in AUDIO_EXTS:
@@ -126,6 +146,14 @@ def _collect_files(root: Path) -> list[dict]:
                 "year": year,
             }
         )
+        if len(out) % 50 == 0:
+            _emit(
+                on_progress,
+                phase="collecting",
+                message=f"Reading tags… {len(out)} files",
+                files_seen=len(out),
+                progress_pct=min(20.0, 5.0 + len(out) / 50.0),
+            )
     return out
 
 
@@ -227,13 +255,28 @@ def _find_or_create_album(
         for a in linked:
             albums.extend(a.albums or [])
 
+    # Strict tier first: compare titles without stripping parenthetical/edition
+    # content, so "Album" and "Album (Deluxe Edition)" are matched to distinct
+    # rows instead of collapsing into whichever one was created first.
+    target_strict = _norm_strict(album_title)
     target = _norm(album_title)
-    candidate = next((a for a in albums if _norm(a.title) == target), None)
-    if not candidate:
-        candidate = next(
-            (a for a in albums if target and (target in _norm(a.title) or _norm(a.title) in target)),
-            None,
-        )
+    candidate = next((a for a in albums if _norm_strict(a.title) == target_strict), None)
+    # Loose tier: edition-agnostic exact/substring match, for tag variance
+    # that isn't a real edition difference (typos, punctuation, a provider
+    # formatting things slightly differently). Only applies when NEITHER side
+    # actually has parenthetical/edition content for the paren-stripping to
+    # discard — if either title has it, stay on the strict tier so editions
+    # never silently merge, in either direction.
+    query_has_parens = target_strict != target
+    if not candidate and not query_has_parens and target and len(target) >= 4:
+        for a in albums:
+            cand_strict = _norm_strict(a.title)
+            cand_loose = _norm(a.title)
+            if cand_strict != cand_loose:
+                continue  # candidate title has its own edition content — don't merge
+            if cand_loose == target or target in cand_loose or cand_loose in target:
+                candidate = a
+                break
     if candidate:
         return candidate
 
@@ -265,8 +308,74 @@ def _find_or_create_album(
     return album
 
 
+def _tracks_for_album(db: Session, album: Album) -> list[Track]:
+    """Album.tracks often misses unflushed rows; merge relationship + session.new."""
+    tracks = list(album.tracks or [])
+    seen = {id(t) for t in tracks}
+    for obj in db.new:
+        if isinstance(obj, Track) and obj.album_id == album.id and id(obj) not in seen:
+            tracks.append(obj)
+            seen.add(id(obj))
+    return tracks
+
+
+class TrackIndex:
+    """O(1) lookup of existing Track rows by path / (provider, provider_id).
+
+    Built once per import (a single query) instead of re-scanning the whole
+    session identity map on every track — that scan is O(n) per call and the
+    identity map only grows over an import, making a full-library import
+    O(n^2) in the number of tracks.
+    """
+
+    def __init__(self, db: Session) -> None:
+        self.by_path: dict[str, Track] = {}
+        self.by_pid: dict[tuple[str, str], Track] = {}
+        for t in db.scalars(select(Track)).all():
+            if t.path:
+                self.by_path[t.path] = t
+            self.by_pid[(t.provider, str(t.provider_id))] = t
+
+    def add(self, track: Track) -> None:
+        if track.path:
+            self.by_path[track.path] = track
+        self.by_pid[(track.provider, str(track.provider_id))] = track
+
+    def rename_path(self, old_path: str | None, new_path: str, track: Track) -> None:
+        if old_path and old_path != new_path:
+            self.by_path.pop(old_path, None)
+        self.by_path[new_path] = track
+
+
+def _unique_provider_track_id(
+    index: TrackIndex,
+    *,
+    provider_name: str,
+    provider_id: str,
+) -> str:
+    """Keep (provider, provider_id) unique using the pre-built index."""
+    import hashlib
+
+    base = str(provider_id)[:64]
+    pid = base
+
+    def taken(candidate: str) -> bool:
+        return (provider_name, candidate) in index.by_pid
+
+    if not taken(pid):
+        return pid
+    digest = hashlib.sha1(f"{provider_name}:{base}".encode("utf-8")).hexdigest()[:8]
+    for n in range(0, 50):
+        suffix = digest if n == 0 else f"{digest}{n}"
+        candidate = f"{base[: 64 - len(suffix) - 1]}-{suffix}"[:64]
+        if not taken(candidate):
+            return candidate
+    return f"{base[:55]}-{digest}"[:64]
+
+
 def _upsert_track(
     db: Session,
+    index: TrackIndex,
     album: Album,
     *,
     title: str,
@@ -275,7 +384,20 @@ def _upsert_track(
     isrc: str | None,
     path: str,
 ) -> Track:
-    tracks = list(album.tracks or [])
+    # Same file imported twice (or rematch): attach to existing row by path first.
+    path_key = str(path)
+    existing = index.by_path.get(path_key)
+    if existing is not None:
+        # Retagged file: re-home the track if it now belongs to a different album.
+        if existing.album_id != album.id:
+            existing.album_id = album.id
+            existing.title = title or existing.title
+            existing.track_no = track_no or existing.track_no
+            existing.disc_no = disc_no or existing.disc_no
+            existing.isrc = isrc or existing.isrc
+        return existing
+
+    tracks = _tracks_for_album(db, album)
     track = None
     if isrc:
         track = next((t for t in tracks if t.isrc and t.isrc == isrc), None)
@@ -287,7 +409,9 @@ def _upsert_track(
     if not track:
         track = next((t for t in tracks if _norm(t.title) == _norm(title)), None)
     if track:
+        old_path = track.path
         track.path = path
+        index.rename_path(old_path, path_key, track)
         if isrc and not track.isrc:
             track.isrc = isrc
         if title and not track.title:
@@ -313,7 +437,9 @@ def _upsert_track(
     except Exception:  # noqa: BLE001
         pass
 
-    pid = f"{album.provider_id}-t{disc_no}-{track_no or len(tracks)+1}-{_slug_id(title)[:20]}"
+    tn = track_no or (len(tracks) + 1)
+    raw_pid = f"{album.provider_id}-t{disc_no or 1}-{tn}-{_slug_id(title)[:20]}"
+    pid = _unique_provider_track_id(index, provider_name=album.provider, provider_id=raw_pid)
     track = Track(
         provider=album.provider,
         provider_id=pid,
@@ -327,16 +453,28 @@ def _upsert_track(
         path=path,
     )
     db.add(track)
+    index.add(track)
+    # Keep relationship in sync so later upserts in this flush see the row.
+    try:
+        album.tracks.append(track)
+    except Exception:  # noqa: BLE001
+        pass
     return track
 
 
-def import_existing_library(db: Session, *, link_providers: bool = True) -> dict:
+def import_existing_library(
+    db: Session,
+    *,
+    link_providers: bool = True,
+    on_progress: ProgressCb | None = None,
+) -> dict:
     """
     Build Musicarr artists/albums/tracks from files already on disk.
     Optionally link artists to the active streaming provider when a clear name match exists.
     """
     root = library_root(db)
-    files = _collect_files(root)
+    _emit(on_progress, phase="collecting", message="Collecting audio files…", progress_pct=2)
+    files = _collect_files(root, on_progress=on_progress)
     if not files:
         msg = f"No audio files found under {root}"
         add_history(db, "library_import", msg)
@@ -358,120 +496,151 @@ def import_existing_library(db: Session, *, link_providers: bool = True) -> dict
     albums_imported = 0
     tracks_linked = 0
     provider_linked = 0
+    track_index = TrackIndex(db)
     known_artists_before = {a.id for a in db.scalars(select(Artist)).all()}
+    artist_total = max(1, len(grouped))
+    artist_idx = 0
 
-    for artist_name, albums_map in grouped.items():
-        artist = _find_artist_by_name(db, artist_name)
-        if not artist and link_providers:
-            linked = _try_link_provider_artist(db, artist_name)
-            if linked:
-                artist = linked
-                provider_linked += 1
-                # Refresh albums from provider without downloading
-                db.refresh(artist)
-        if not artist:
-            # Ambiguous same-name or unknown: create a distinct local row
-            sample_path = ""
-            for album_files in albums_map.values():
-                if album_files:
-                    sample_path = str(album_files[0].get("path") or "")
-                    break
-            artist = _ensure_local_artist(
-                db,
-                artist_name,
-                uniq_key=sample_path or f"{artist_name}:{sorted(albums_map.keys())[0]}",
-            )
-            if artist.id not in known_artists_before:
-                artists_created += 1
-                known_artists_before.add(artist.id)
-
-        # Reload albums relationship
-        artist = db.scalar(
-            select(Artist).options(joinedload(Artist.albums).joinedload(Album.tracks)).where(Artist.id == artist.id)
-        )
-        assert artist is not None
-
-        for album_title, album_files in albums_map.items():
-            year = next((f["year"] for f in album_files if f.get("year")), None)
-            existed_ids = {a.id for a in (artist.albums or [])}
-            album = _find_or_create_album(
-                db,
-                artist,
-                album_title,
-                year=year,
-                track_count=len(album_files),
-            )
-            if album.id not in existed_ids and album.provider == "local":
-                albums_imported += 1
-            elif album.id not in existed_ids:
-                albums_imported += 1
-
-            album = db.scalar(
-                select(Album).options(joinedload(Album.tracks)).where(Album.id == album.id)
-            )
-            assert album is not None
-
-            folder = None
-            for f in sorted(album_files, key=lambda x: (x["disc_no"], x["track_no"], x["title"])):
-                _upsert_track(
-                    db,
-                    album,
-                    title=f["title"],
-                    track_no=f["track_no"],
-                    disc_no=f["disc_no"],
-                    isrc=f.get("isrc"),
-                    path=str(f["path"]),
-                )
-                tracks_linked += 1
-                folder = str(f["path"].parent)
-
-            album.status = "downloaded"
-            album.monitored = True
-            album.track_count = max(album.track_count or 0, len(album_files))
-            if folder:
-                album.path = folder
-            from app.services.quality import detect_file_quality, quality_rank
-
-            qualities = [detect_file_quality(f["path"]) for f in album_files]
-            best = max(qualities, key=quality_rank, default="")
-            if best:
-                album.quality = best
-            db.commit()
-
-    # Pass 2: also run match-only scan for leftover DB tracks
-    scan = scan_library(db)
-
+    # A full import commits once per album, and the session never shrinks in
+    # between; with the default expire-on-commit, each commit re-expires every
+    # object seen so far (O(session size)), which makes a big import
+    # progressively slower album over album. Nothing below relies on
+    # transparent auto-refresh of already-loaded attributes.
+    prev_expire_on_commit = db.expire_on_commit
+    db.expire_on_commit = False
     try:
-        from app.services.media_refresh import trigger_media_refresh
+        for artist_name, albums_map in grouped.items():
+            artist_idx += 1
+            _emit(
+                on_progress,
+                phase="importing",
+                message=f"Importing {artist_name} ({artist_idx}/{artist_total})",
+                files_seen=len(files),
+                files_done=tracks_linked,
+                artists_created=artists_created,
+                albums_imported=albums_imported,
+                tracks_linked=tracks_linked,
+                provider_linked=provider_linked,
+                progress_pct=20.0 + (60.0 * artist_idx / artist_total),
+            )
+            artist = _find_artist_by_name(db, artist_name)
+            if not artist and link_providers:
+                linked = _try_link_provider_artist(db, artist_name)
+                if linked:
+                    artist = linked
+                    provider_linked += 1
+                    # Refresh albums from provider without downloading
+                    db.refresh(artist)
+            if not artist:
+                # Ambiguous same-name or unknown: create a distinct local row
+                sample_path = ""
+                for album_files in albums_map.values():
+                    if album_files:
+                        sample_path = str(album_files[0].get("path") or "")
+                        break
+                artist = _ensure_local_artist(
+                    db,
+                    artist_name,
+                    uniq_key=sample_path or f"{artist_name}:{sorted(albums_map.keys())[0]}",
+                )
+                if artist.id not in known_artists_before:
+                    artists_created += 1
+                    known_artists_before.add(artist.id)
 
-        trigger_media_refresh(db, reason="import")
-    except Exception:  # noqa: BLE001
-        pass
+            # Reload albums relationship
+            artist = db.scalar(
+                select(Artist)
+                .options(joinedload(Artist.albums).joinedload(Album.tracks))
+                .where(Artist.id == artist.id)
+            )
+            assert artist is not None
 
-    msg = (
-        f"Import complete: {len(files)} files → "
-        f"{artists_created} new artists, {albums_imported} albums, "
-        f"{tracks_linked} tracks linked"
-        + (f", {provider_linked} linked to active provider" if provider_linked else "")
-        + f". Scan also matched {scan['matched']} existing DB tracks."
-    )
-    add_history(db, "library_import", msg)
-    return {
-        "files_seen": len(files),
-        "artists_created": artists_created,
-        "albums_imported": albums_imported,
-        "tracks_linked": tracks_linked,
-        "provider_linked": provider_linked,
-        "matched": scan["matched"],
-        "unmatched": scan["unmatched"],
-        "message": msg,
-    }
+            for album_title, album_files in albums_map.items():
+                year = next((f["year"] for f in album_files if f.get("year")), None)
+                existed_ids = {a.id for a in (artist.albums or [])}
+                album = _find_or_create_album(
+                    db,
+                    artist,
+                    album_title,
+                    year=year,
+                    track_count=len(album_files),
+                )
+                if album.id not in existed_ids and album.provider == "local":
+                    albums_imported += 1
+                elif album.id not in existed_ids:
+                    albums_imported += 1
+
+                album = db.scalar(
+                    select(Album).options(joinedload(Album.tracks)).where(Album.id == album.id)
+                )
+                assert album is not None
+
+                folder = None
+                for f in sorted(album_files, key=lambda x: (x["disc_no"], x["track_no"], x["title"])):
+                    _upsert_track(
+                        db,
+                        track_index,
+                        album,
+                        title=f["title"],
+                        track_no=f["track_no"],
+                        disc_no=f["disc_no"],
+                        isrc=f.get("isrc"),
+                        path=str(f["path"]),
+                    )
+                    tracks_linked += 1
+                    folder = str(f["path"].parent)
+
+                album.status = "downloaded"
+                album.monitored = True
+                album.track_count = max(album.track_count or 0, len(album_files))
+                if folder:
+                    album.path = folder
+                from app.services.quality import detect_file_quality, quality_rank
+
+                qualities = [detect_file_quality(f["path"]) for f in album_files]
+                best = max(qualities, key=quality_rank, default="")
+                if best:
+                    album.quality = best
+                db.commit()
+
+        # Pass 2: also run match-only scan for leftover DB tracks
+        _emit(on_progress, phase="matching", message="Matching existing DB tracks…", progress_pct=85)
+        scan = scan_library(db, on_progress=None)
+
+        try:
+            from app.services.media_refresh import trigger_media_refresh
+
+            trigger_media_refresh(db, reason="import")
+        except Exception:  # noqa: BLE001
+            pass
+
+        msg = (
+            f"Import complete: {len(files)} files → "
+            f"{artists_created} new artists, {albums_imported} albums, "
+            f"{tracks_linked} tracks linked"
+            + (f", {provider_linked} linked to active provider" if provider_linked else "")
+            + f". Scan also matched {scan['matched']} existing DB tracks."
+        )
+        add_history(db, "library_import", msg)
+        return {
+            "files_seen": len(files),
+            "artists_created": artists_created,
+            "albums_imported": albums_imported,
+            "tracks_linked": tracks_linked,
+            "provider_linked": provider_linked,
+            "matched": scan["matched"],
+            "unmatched": scan["unmatched"],
+            "message": msg,
+        }
+    finally:
+        db.expire_on_commit = prev_expire_on_commit
 
 
-def scan_library(db: Session) -> dict:
+def scan_library(db: Session, *, on_progress: ProgressCb | None = None) -> dict:
     """Match on-disk files to tracks already in the database (no new artists)."""
     root = library_root(db)
-    files = _collect_files(root)
+    _emit(on_progress, phase="collecting", message="Collecting audio files…", progress_pct=2)
+    files = _collect_files(root, on_progress=on_progress)
     tracks = db.scalars(select(Track).options(joinedload(Track.album))).all()
     by_isrc = {t.isrc: t for t in tracks if t.isrc}
     by_path = {t.path: t for t in tracks if t.path}
@@ -488,8 +657,20 @@ def scan_library(db: Session) -> dict:
 
     matched = 0
     unmatched = 0
+    total = max(1, len(files))
 
-    for f in files:
+    for idx, f in enumerate(files, start=1):
+        if idx == 1 or idx % 25 == 0 or idx == total:
+            _emit(
+                on_progress,
+                phase="matching",
+                message=f"Matching files… {idx}/{total}",
+                files_seen=len(files),
+                files_done=idx,
+                matched=matched,
+                unmatched=unmatched,
+                progress_pct=20.0 + (70.0 * idx / total),
+            )
         sp = str(f["path"])
         if sp in by_path:
             matched += 1
@@ -767,7 +948,7 @@ def link_local_artist(
 
 
 
-def reorganize_library(db: Session) -> dict:
+def reorganize_library(db: Session, *, on_progress: ProgressCb | None = None) -> dict:
     settings = ensure_settings(db)
     root = library_root(db)
     moved = 0
@@ -775,7 +956,17 @@ def reorganize_library(db: Session) -> dict:
     albums = db.scalars(
         select(Album).options(joinedload(Album.tracks), joinedload(Album.artist))
     ).unique().all()
-    for album in albums:
+    total = max(1, len(albums))
+    for idx, album in enumerate(albums, start=1):
+        if idx == 1 or idx % 10 == 0 or idx == total:
+            _emit(
+                on_progress,
+                phase="moving",
+                message=f"Reorganizing albums… {idx}/{total}",
+                moved=moved,
+                skipped=skipped,
+                progress_pct=5.0 + (90.0 * idx / total),
+            )
         tracks = [t for t in album.tracks if t.path and Path(t.path).exists()]
         if not tracks:
             skipped += 1
