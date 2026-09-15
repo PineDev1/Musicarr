@@ -387,14 +387,33 @@ class DownloadQueue:
                 shutil.rmtree(staging, ignore_errors=True)
             staging.mkdir(parents=True, exist_ok=True)
 
+            # Provider download loops call this many times per second (once per
+            # chunk). Each call used to open a session and commit unconditionally,
+            # which meant a download in progress held SQLite's single writer lock
+            # almost continuously — starving other writes (like pressing Cancel,
+            # or the queue polling for status) behind busy_timeout waits. Only
+            # persist when progress has moved meaningfully or enough time has
+            # passed, so the UI still updates smoothly but the DB isn't hammered.
+            progress_state = {"value": -1.0, "at": 0.0}
+
             def on_progress(value):
                 if value is None:
                     return
+                value = float(value)
+                now = time.monotonic()
+                if (
+                    value < 1.0
+                    and value - progress_state["value"] < 0.01
+                    and now - progress_state["at"] < 0.5
+                ):
+                    return
+                progress_state["value"] = value
+                progress_state["at"] = now
                 s = SessionLocal()
                 try:
                     j = s.get(DownloadJob, job_id)
                     if j and j.state == "running":
-                        j.progress = float(value)
+                        j.progress = value
                         s.commit()
                 finally:
                     s.close()

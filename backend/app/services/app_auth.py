@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import Response
 from sqlalchemy.orm import Session
 
-from app.services.settings_service import ensure_settings
+from app.services.settings_service import ensure_settings, get_setting_cached, invalidate_settings_cache
 
 COOKIE_NAME = "musicarr_session"
 SESSION_DAYS = 14
@@ -36,6 +36,9 @@ def verify_password(password: str, stored: str | None) -> bool:
 
 
 def ensure_auth_secret(db: Session) -> str:
+    cached = (get_setting_cached(db, "auth_secret", None) or "").strip()
+    if cached:
+        return cached
     settings = ensure_settings(db)
     secret = (getattr(settings, "auth_secret", None) or "").strip()
     if not secret:
@@ -43,6 +46,7 @@ def ensure_auth_secret(db: Session) -> str:
         settings.auth_secret = secret
         db.commit()
         db.refresh(settings)
+        invalidate_settings_cache()
     return secret
 
 
@@ -76,16 +80,14 @@ def parse_session_token(db: Session, token: str | None) -> str | None:
     expected = _sign(secret, payload)
     if not hmac.compare_digest(sig, expected):
         return None
-    settings = ensure_settings(db)
-    expected_user = (getattr(settings, "auth_username", None) or "admin").strip() or "admin"
+    expected_user = (get_setting_cached(db, "auth_username", None) or "admin").strip() or "admin"
     if not hmac.compare_digest(username, expected_user):
         return None
     return username
 
 
 def auth_enabled(db: Session) -> bool:
-    settings = ensure_settings(db)
-    return bool(getattr(settings, "auth_enabled", False))
+    return bool(get_setting_cached(db, "auth_enabled", False))
 
 
 def password_is_set(db: Session) -> bool:

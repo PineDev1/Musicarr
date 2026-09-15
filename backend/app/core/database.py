@@ -218,6 +218,31 @@ def migrate_schema(engine_: Engine | None = None) -> None:
         for table in ("indexers", "download_clients", "remote_path_mappings"):
             conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
 
+    # Indexes added after these tables already existed in the wild — create_all()
+    # only creates indexes for brand-new tables, so add them explicitly here.
+    # These back the hottest queries (download queue polling, monitor's per-tick
+    # artist scan, library filtering) which were doing full table scans.
+    indexes = {
+        "artists": [("ix_artists_monitored", "monitored")],
+        "albums": [
+            ("ix_albums_artist_id", "artist_id"),
+            ("ix_albums_monitored", "monitored"),
+            ("ix_albums_status", "status"),
+        ],
+        "download_jobs": [
+            ("ix_download_jobs_album_id", "album_id"),
+            ("ix_download_jobs_state", "state"),
+            ("ix_download_jobs_state_created_at", "state, created_at"),
+        ],
+    }
+    existing_tables = set(inspect(eng).get_table_names())
+    with eng.begin() as conn:
+        for table, cols in indexes.items():
+            if table not in existing_tables:
+                continue
+            for name, expr in cols:
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({expr})"))
+
 
 def init_db() -> None:
     from app import models  # noqa: F401
