@@ -35,6 +35,12 @@ export function ArtistPage() {
     queryFn: () => api.queue(true),
     refetchInterval: 2000,
   })
+  const similar = useQuery({
+    queryKey: ['similar-artists', artistId],
+    queryFn: () => api.similarArtists(artistId),
+    enabled: Number.isFinite(artistId),
+    retry: false,
+  })
 
   useEffect(() => {
     const es = new EventSource('/api/events/queue')
@@ -145,6 +151,26 @@ export function ArtistPage() {
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
+  const approve = useMutation({
+    mutationFn: () => api.approveArtist(artistId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['artist', artistId] })
+      qc.invalidateQueries({ queryKey: ['pending-artists'] })
+      qc.invalidateQueries({ queryKey: ['health'] })
+      toast.push('Artist approved', 'ok')
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  const reject = useMutation({
+    mutationFn: () => api.rejectArtist(artistId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pending-artists'] })
+      qc.invalidateQueries({ queryKey: ['health'] })
+      toast.push('Artist rejected', 'ok')
+      window.location.href = '/pending-artists'
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
   const patchAlbum = useMutation({
     mutationFn: ({ albumId, body }: { albumId: number; body: Record<string, unknown> }) =>
       api.patchAlbum(albumId, body),
@@ -203,9 +229,11 @@ export function ArtistPage() {
     data.missing_count ??
     (data.albums || []).filter((a) => a.status === 'missing').length
   const related = data.related_artists || []
+  const mainAlbums = data.albums.filter((a) => a.skip_reason_code !== 'junk')
+  const junkAlbums = data.albums.filter((a) => a.skip_reason_code === 'junk')
 
   const jobForRow = (album: (typeof data.albums)[number]) => jobForAlbum(album.id, album.title)
-  const selectableIds = data.albums
+  const selectableIds = mainAlbums
     .filter((a) => {
       const job = jobForRow(a)
       const downloading = job && (job.state === 'queued' || job.state === 'running')
@@ -238,6 +266,24 @@ export function ArtistPage() {
 
   return (
     <div>
+      {data.status === 'pending' && (
+        <div className="banner" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+          <span>
+            This artist is awaiting your approval
+            {data.pending_reason === 'import_list' ? ' (added by an import list)' : ''}
+            {data.pending_reason === 'featured' ? ' (discovered as a featured artist)' : ''}
+            {' '}— nothing will download until you approve it.
+          </span>
+          <div className="row-actions">
+            <button className="btn" onClick={() => approve.mutate()} disabled={approve.isPending}>
+              Approve
+            </button>
+            <button className="btn ghost" onClick={() => reject.mutate()} disabled={reject.isPending}>
+              Reject
+            </button>
+          </div>
+        </div>
+      )}
       <div className="page-header">
         <div>
           <p className="muted" style={{ marginBottom: '0.5rem' }}>
@@ -290,6 +336,21 @@ export function ArtistPage() {
               ))}
             </p>
           )}
+          {!!similar.data?.length && (
+            <p className="muted" style={{ marginTop: '0.5rem' }}>
+              You might also like:{' '}
+              {similar.data.map((s, i) => (
+                <span key={`${s.name}-${i}`}>
+                  {i > 0 ? ', ' : ''}
+                  {s.already_in_library ? (
+                    <Link to={`/artists/${s.already_in_library}`}>{s.name}</Link>
+                  ) : (
+                    <Link to={`/add?q=${encodeURIComponent(s.name)}`}>{s.name}</Link>
+                  )}
+                </span>
+              ))}
+            </p>
+          )}
         </div>
         {data.image_url && (
           <img
@@ -311,6 +372,35 @@ export function ArtistPage() {
             <option value="all">All albums</option>
             <option value="new">New albums only</option>
             <option value="none">Unmonitored</option>
+          </select>
+        </div>
+        <div className="field" style={{ margin: 0, minWidth: 180 }}>
+          <label>Downloads</label>
+          <select
+            value={data.download_mode || ''}
+            onChange={(e) =>
+              patchArtist.mutate({ download_mode: e.target.value || null })
+            }
+            disabled={patchArtist.isPending}
+          >
+            <option value="">Use default</option>
+            <option value="auto">Auto-download</option>
+            <option value="manual">Manual approval</option>
+          </select>
+        </div>
+        <div className="field" style={{ margin: 0, minWidth: 180 }}>
+          <label>Quality</label>
+          <select
+            value={data.quality_pref || ''}
+            onChange={(e) =>
+              patchArtist.mutate({ quality_pref: e.target.value || null })
+            }
+            disabled={patchArtist.isPending}
+          >
+            <option value="">Inherit default</option>
+            <option value="flac">FLAC (lossless)</option>
+            <option value="320">MP3 320kbps</option>
+            <option value="128">MP3 128kbps</option>
           </select>
         </div>
         <div className="field" style={{ margin: 0, minWidth: 220 }}>
@@ -373,7 +463,7 @@ export function ArtistPage() {
       )}
 
       <div className="album-list">
-        {data.albums.map((album) => {
+        {mainAlbums.map((album) => {
           const isDownloaded = album.status === 'downloaded'
           const via = (album.provider || 'unknown').toLowerCase()
           const job = jobForAlbum(album.id, album.title)
@@ -518,6 +608,61 @@ export function ArtistPage() {
         })}
       </div>
 
+      {junkAlbums.length > 0 && (
+        <details className="junk-releases">
+          <summary>Junk releases ({junkAlbums.length})</summary>
+          <div className="album-list">
+            {junkAlbums.map((album) => {
+              const via = (album.provider || 'unknown').toLowerCase()
+              const isDownloaded = album.status === 'downloaded'
+              return (
+                <div key={album.id} className="album-row">
+                  {album.cover_url ? (
+                    <img src={album.cover_url} alt="" />
+                  ) : (
+                    <div className="placeholder-art" style={{ width: 64, height: 64 }} />
+                  )}
+                  <div style={{ minWidth: 0 }}>
+                    <div>
+                      <Link to={`/albums/${album.id}`}>
+                        <strong>{album.title}</strong>
+                      </Link>{' '}
+                      <span className={`badge ${album.status}`}>{album.status}</span>
+                    </div>
+                    <div className="muted">
+                      {album.release_date || 'Unknown date'} · {album.album_type} ·{' '}
+                      {album.track_count} tracks
+                    </div>
+                    {album.status_reason ? (
+                      <div className="muted" style={{ marginTop: 4, fontSize: '0.85rem' }}>
+                        {album.status_reason}
+                      </div>
+                    ) : null}
+                    {isDownloaded && (
+                      <span className="badge downloaded" style={{ textTransform: 'capitalize' }}>
+                        Via {via}
+                      </span>
+                    )}
+                  </div>
+                  <div className="row-actions">
+                    <button
+                      className="btn ghost"
+                      onClick={() =>
+                        patchAlbum.mutate({
+                          albumId: album.id,
+                          body: { status: 'wanted', monitored: true },
+                        })
+                      }
+                    >
+                      Want
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </details>
+      )}
     </div>
   )
 }

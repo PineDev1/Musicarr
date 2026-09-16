@@ -291,20 +291,26 @@ def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     return {"_error": str(last_exc or "MusicBrainz unavailable")}
 
 
-def resolve_artist(name: str) -> str | None:
-    """Return MusicBrainz artist MBID when the search hit is confident."""
+def resolve_artist(name: str, *, fast: bool = False) -> str | None:
+    """Return MusicBrainz artist MBID when the search hit is confident.
+
+    `fast=True` skips the live API fallback and the local catalog's slower
+    substring/diacritic scans, keeping only indexed exact-match lookups —
+    for callers resolving many names in one request (e.g. search results)
+    where an occasional miss is fine.
+    """
     q = (name or "").strip()
     if not q:
         return None
     if _prefer_local():
         from app.services import mb_local
 
-        hit = mb_local.resolve_artist(q)
+        hit = mb_local.resolve_artist(q, fast=fast)
         if hit:
             return hit
-        if not _allow_live():
+        if fast or not _allow_live():
             return None
-    elif not _allow_live():
+    elif fast or not _allow_live():
         return None
 
     data = _get("/artist/", {"query": f'artist:"{q}"', "limit": 5})

@@ -103,6 +103,24 @@ def health(db: Session = Depends(get_db)):
         .select_from(DownloadJob)
         .where(DownloadJob.state.in_(ACTIVE_JOB_STATES))
     ) or 0
+    pending_artists = db.scalar(
+        select(func.count()).select_from(Artist).where(Artist.status == "pending")
+    ) or 0
+    skipped_albums = db.scalar(
+        select(func.count())
+        .select_from(Album)
+        .where(Album.status == "skipped", Album.dismissed.is_(False))
+    ) or 0
+    disk_free_bytes = None
+    low_disk_warning = False
+    try:
+        import shutil
+
+        disk_free_bytes = shutil.disk_usage(lib).free
+        threshold = max(1, int(getattr(row, "low_disk_threshold_gb", 10) or 10)) * (1024**3)
+        low_disk_warning = disk_free_bytes < threshold
+    except OSError:
+        pass
     return HealthOut(
         status="ok" if path_is_writable(lib) else "degraded",
         active_provider=active,
@@ -119,4 +137,8 @@ def health(db: Session = Depends(get_db)):
         monitored_artists=artists,
         wanted_albums=wanted,
         queue_size=queue,
+        pending_artists=pending_artists,
+        skipped_albums=skipped_albums,
+        disk_free_bytes=disk_free_bytes,
+        low_disk_warning=low_disk_warning,
     )

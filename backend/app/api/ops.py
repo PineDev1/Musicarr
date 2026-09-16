@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -20,9 +21,13 @@ from app.services.library import (
 from app.services.monitor import release_monitor
 from app.services.settings_service import ensure_settings
 from app.api.artists import _artist_group_out
-from app.services.artists import find_linked_artists, get_artist_detail
+from app.services.artists import effective_quality, find_linked_artists, get_artist_detail
 
 router = APIRouter(tags=["ops"])
+
+
+class BulkJobIds(BaseModel):
+    job_ids: list[int]
 
 
 def _job_out(job: DownloadJob) -> DownloadJobOut:
@@ -68,6 +73,18 @@ def retry_job(job_id: int, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return _job_out(job)
+
+
+@router.post("/queue/bulk-cancel")
+def bulk_cancel_jobs(payload: BulkJobIds, db: Session = Depends(get_db)):
+    cancelled = sum(1 for jid in payload.job_ids if download_queue.cancel(db, jid))
+    return {"cancelled": cancelled}
+
+
+@router.post("/queue/bulk-retry")
+def bulk_retry_jobs(payload: BulkJobIds, db: Session = Depends(get_db)):
+    retried = sum(1 for jid in payload.job_ids if download_queue.retry(db, jid))
+    return {"retried": retried}
 
 
 @router.post("/queue/retry-failed")
@@ -133,6 +150,21 @@ def library_job():
     return library_jobs.job_dict()
 
 
+@router.get("/library/genres")
+def library_genres(db: Session = Depends(get_db)):
+    from sqlalchemy import func
+
+    from app.models import Track
+
+    rows = db.execute(
+        select(Track.genre, func.count())
+        .where(Track.genre.is_not(None), Track.genre != "")
+        .group_by(Track.genre)
+        .order_by(func.count().desc())
+    ).all()
+    return [{"genre": g, "count": c} for g, c in rows]
+
+
 @router.get("/library/review", response_model=ImportReviewOut)
 def library_review(db: Session = Depends(get_db), suggest: bool = True):
     """Show local / weakly tagged imports that need manual linking."""
@@ -159,11 +191,13 @@ def library_review_link(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     detail = get_artist_detail(db, linked.id)
     group = find_linked_artists(db, detail or linked)
+    primary = group[0] if group else None
+    target = effective_quality(db, primary) if primary else (settings.bitrate or "flac").lower()
     return _artist_group_out(
         group,
         include_albums=True,
         active=(settings.active_provider or "deezer").lower(),
-        target_bitrate=(settings.bitrate or "flac").lower(),
+        target_bitrate=target,
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
     )
 

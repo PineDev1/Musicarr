@@ -104,6 +104,38 @@ def test_resolve_artist_folds_diacritics(fixture_catalog):
     assert mb_local.resolve_artist("Beyonce") == beyonce_mbid
 
 
+def test_resolve_artist_fast_skips_slow_fallback_scans(fixture_catalog):
+    """fast=True must still hit the indexed exact/alias tier (cheap, used by
+    every real caller) but skip the substring/diacritic full-table scans —
+    those dominate latency when resolving many names per request, e.g. one
+    per artist-search result."""
+    # Exact name and alias resolve identically with fast=True.
+    assert mb_local.resolve_artist("Luke Combs", fast=True) == (
+        "c20ee61f-071f-4e65-9c81-45ee931a54ce"
+    )
+    assert mb_local.resolve_artist("Edward Sheeran", fast=True) == (
+        "b8a7c51f-362c-4dcb-a259-bc6e0095f0a6"
+    )
+    # "Beyonce" (no accent) only resolves via the diacritic-folding tier —
+    # normal call finds it, fast=True must not.
+    beyonce_mbid = "99999999-8888-7777-6666-555555555555"
+    assert mb_local.resolve_artist("Beyonce") == beyonce_mbid
+    assert mb_local.resolve_artist("Beyonce", fast=True) is None
+
+
+def test_musicbrainz_resolve_artist_fast_never_calls_live(fixture_catalog, monkeypatch):
+    monkeypatch.setattr(musicbrainz, "_catalog_mode", lambda: "local_with_live_fallback")
+
+    def boom(*_a, **_k):
+        raise AssertionError("live MusicBrainz should not be called when fast=True")
+
+    monkeypatch.setattr(musicbrainz, "_get", boom)
+    # No local match at all (not even fuzzy) — a non-fast call would be
+    # allowed to fall through to the live API since fallback is enabled;
+    # fast=True must return None instead of calling out.
+    assert musicbrainz.resolve_artist("Totally Unknown Artist Name", fast=True) is None
+
+
 def test_search_release_group_distinguishes_editions(fixture_catalog):
     beyonce_mbid = "99999999-8888-7777-6666-555555555555"
     standard = mb_local.search_release_group_for_artist("Renaissance", beyonce_mbid)

@@ -3,10 +3,10 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import Album, Artist, Track
+from app.models import Album, Artist, DownloadJob, Track
 from app.services.history import add_history
 from app.services.providers import get_active_provider
 from app.services.providers.base import ProviderError
@@ -38,6 +38,28 @@ def album_type_allowed_for_artist(db: Session, artist: Artist, album_type: str) 
         "compilation": settings.include_compilations,
     }
     return mapping.get(album_type, False)
+
+
+def effective_download_mode(db: Session, artist: Artist) -> str:
+    """'auto' or 'manual'. An artist's own download_mode wins; None inherits
+    AppSettings.default_download_mode."""
+    mode = getattr(artist, "download_mode", None)
+    if mode in ("auto", "manual"):
+        return mode
+    settings = ensure_settings(db)
+    default = (getattr(settings, "default_download_mode", None) or "manual").lower()
+    return default if default in ("auto", "manual") else "manual"
+
+
+def effective_quality(db: Session, artist: Artist) -> str:
+    """'flac' | '320' | '128'. An artist's own quality_pref wins; None inherits
+    AppSettings.bitrate."""
+    pref = getattr(artist, "quality_pref", None)
+    if pref in ("flac", "320", "128"):
+        return pref
+    settings = ensure_settings(db)
+    default = (getattr(settings, "bitrate", None) or "flac").lower()
+    return default if default in ("flac", "320", "128") else "flac"
 
 
 def link_artists_by_mbid(db: Session, mbid: str) -> list[Artist]:
@@ -245,6 +267,25 @@ def _clean_collab_title(title: str, primary_name: str) -> str:
     return t or title
 
 
+def _id_taken_by_other_artist(
+    db: Session, *, provider_name: str, candidate: str, artist_id: int
+) -> bool:
+    """True if `candidate` is already in use — by session objects not yet
+    flushed, or in the DB — by a row that ISN'T this exact artist. A prior
+    merge/reassignment can leave a "collab:{artist_id}:..." string claimed by
+    a row whose artist_id no longer matches the id embedded in it, so the
+    embedded id alone can't be trusted as proof of freshness."""
+    for obj in list(db.new) + list(db.dirty) + list(db.identity_map.values()):
+        if not isinstance(obj, Album):
+            continue
+        if obj.provider == provider_name and str(obj.provider_id) == candidate:
+            return obj.artist_id != artist_id
+    existing = db.scalar(
+        select(Album).where(Album.provider == provider_name, Album.provider_id == candidate)
+    )
+    return existing is not None and existing.artist_id != artist_id
+
+
 def _unique_provider_album_id(
     db: Session,
     *,
@@ -254,20 +295,24 @@ def _unique_provider_album_id(
 ) -> str:
     """Avoid global (provider, provider_id) clashes when two artists share a collab release."""
     pid = str(provider_id)
-    # Unflushed session objects are invisible to SELECT — check identity map first.
-    for obj in list(db.new) + list(db.dirty) + list(db.identity_map.values()):
-        if not isinstance(obj, Album):
-            continue
-        if obj.provider == provider_name and str(obj.provider_id) == pid:
-            if obj.artist_id == artist_id:
-                return pid
-            return f"collab:{artist_id}:{pid}"
-    existing = db.scalar(
-        select(Album).where(Album.provider == provider_name, Album.provider_id == pid)
-    )
-    if existing is None or existing.artist_id == artist_id:
+    if not _id_taken_by_other_artist(
+        db, provider_name=provider_name, candidate=pid, artist_id=artist_id
+    ):
         return pid
-    return f"collab:{artist_id}:{pid}"
+    # Someone else owns the raw id — disambiguate for this artist. The
+    # embedded artist_id makes the candidate collision-free in the common
+    # case, but a stale row from an earlier merge/reassignment can already
+    # be sitting on that exact string under a different artist_id today, so
+    # verify the candidate itself before trusting it — and keep extending it
+    # deterministically until it's actually free.
+    candidate = f"collab:{artist_id}:{pid}"
+    suffix = 2
+    while _id_taken_by_other_artist(
+        db, provider_name=provider_name, candidate=candidate, artist_id=artist_id
+    ):
+        candidate = f"collab:{artist_id}:{pid}:{suffix}"
+        suffix += 1
+    return candidate
 
 
 def _dedupe_pid_for_write(
@@ -383,6 +428,33 @@ def _upsert_mb_album(
         return album
 
     if album is None:
+        # Live re-check before inserting: _unique_provider_album_id computed
+        # `pid` from a snapshot dict that may already be stale — a row from an
+        # earlier sync run (or one another branch just wrote moments ago in
+        # this same session) can already be sitting on this exact
+        # (provider, provider_id), which would otherwise crash the insert on
+        # the unique constraint. Reuse that row instead of duplicating it.
+        stale = existing_by_pid.get(pid) or db.scalar(
+            select(Album).where(Album.provider == provider_name, Album.provider_id == pid)
+        )
+        if stale is not None and stale.artist_id == artist.id:
+            album = stale
+            album.title = title
+            album.album_type = album_type
+            album.release_date = release_date or album.release_date
+            album.cover_url = cover or album.cover_url
+            album.track_count = track_count or album.track_count
+            if (album.status or "") != "downloaded":
+                album.monitored = monitored
+                album.status = status
+                album.status_reason = reason
+            album.musicbrainz_id = rg.mbid
+            if credit:
+                album.artist_credit = credit
+            if collaborator_names is not None:
+                _set_album_collaborators(album, collaborator_names, primary_name=artist.name)
+            existing_by_pid[pid] = album
+            return album
         album = Album(
             provider=provider_name,
             provider_id=pid,
@@ -400,6 +472,7 @@ def _upsert_mb_album(
             artist_credit=credit,
         )
         db.add(album)
+        existing_by_pid[pid] = album
         if collaborator_names is not None:
             _set_album_collaborators(album, collaborator_names, primary_name=artist.name)
         return album
@@ -480,6 +553,7 @@ def _artist_still_exists(db: Session, artist_id: int | None) -> bool:
 
 def _safe_commit_artist_sync(db: Session, artist: Artist) -> bool:
     """Commit album sync; abort cleanly if the artist was deleted mid-sync."""
+    from sqlalchemy.exc import IntegrityError
     from sqlalchemy.orm.exc import ObjectDeletedError, StaleDataError
 
     if not _artist_still_exists(db, getattr(artist, "id", None)):
@@ -492,6 +566,71 @@ def _safe_commit_artist_sync(db: Session, artist: Artist) -> bool:
     except (StaleDataError, ObjectDeletedError):
         db.rollback()
         return False
+    except IntegrityError as exc:
+        # Last-resort safety net: some still-untraced duplicate provider_id
+        # slipped through the dedupe checks upstream. Don't crash the whole
+        # sync (and the request/monitor tick calling it) over one bad
+        # release-group — drop the pending changes and log it for follow-up.
+        db.rollback()
+        add_history(
+            db,
+            "sync_error",
+            f"Album sync hit a duplicate-id conflict for {artist.name}: {exc}",
+        )
+        return False
+
+
+def _persist_rg_as_skipped(
+    db: Session,
+    *,
+    artist: Artist,
+    rg,
+    provider_name: str,
+    existing_by_mbid: dict[str, Album],
+    reason: str,
+    code: str,
+) -> Album | None:
+    """Create or update the Album row for a release-group being filtered out,
+    so it shows up on the Skipped Releases page (with a reason) instead of
+    silently vanishing — the previous behavior for junk/live/type misses.
+    Respects a user's explicit dismissal and never touches a downloaded row.
+    """
+    from app.services import musicbrainz
+
+    existing_rg = existing_by_mbid.get(rg.mbid)
+    if existing_rg is not None:
+        if (existing_rg.status or "") == "downloaded" or getattr(existing_rg, "dismissed", False):
+            return None
+        existing_rg.status = "skipped"
+        existing_rg.monitored = False
+        existing_rg.status_reason = reason
+        existing_rg.skip_reason_code = code
+        return existing_rg
+    pid = _unique_provider_album_id(
+        db,
+        provider_name=provider_name,
+        provider_id=_mb_provider_id(rg.mbid),
+        artist_id=artist.id,
+    )
+    album = Album(
+        provider=provider_name,
+        provider_id=pid,
+        deezer_id=_legacy_id(provider_name, pid),
+        artist_id=artist.id,
+        title=rg.title,
+        album_type=rg.primary_type,
+        release_date=f"{rg.year}-01-01" if rg.year else None,
+        cover_url=musicbrainz.cover_url_for_release_group(rg.mbid),
+        track_count=0,
+        monitored=False,
+        status="skipped",
+        status_reason=reason,
+        skip_reason_code=code,
+        musicbrainz_id=rg.mbid,
+    )
+    db.add(album)
+    existing_by_mbid[rg.mbid] = album
+    return album
 
 
 def _sync_from_musicbrainz(
@@ -502,6 +641,7 @@ def _sync_from_musicbrainz(
     settings,
     provider_albums: list,
     discover_featured: bool = True,
+    require_approval: bool = False,
 ) -> list[Album]:
     import json
 
@@ -567,15 +707,20 @@ def _sync_from_musicbrainz(
             or " ft " in provider_title.lower()
         )
         type_ok = album_type_allowed_for_artist(db, artist, rg.primary_type)
+        type_reason = (
+            "Singles disabled for this artist"
+            if rg.primary_type == "single"
+            else f"{(rg.primary_type or 'release').title()}s are disabled"
+        )
+        type_code = "singles_disabled" if rg.primary_type == "single" else "type_disabled"
 
         if not type_ok and not looks_collab:
-            existing_rg = existing_by_mbid.get(rg.mbid)
-            if existing_rg and (existing_rg.status or "") not in {"downloaded", "missing"}:
-                if (existing_rg.album_type or rg.primary_type) == "single":
-                    existing_rg.status = "skipped"
-                    existing_rg.monitored = False
-                    existing_rg.status_reason = "Singles disabled for this artist"
-                    touched.append(existing_rg)
+            skipped = _persist_rg_as_skipped(
+                db, artist=artist, rg=rg, provider_name=provider_name,
+                existing_by_mbid=existing_by_mbid, reason=type_reason, code=type_code,
+            )
+            if skipped is not None:
+                touched.append(skipped)
             continue
 
         # Enrich only when the title/provider already looks like a collab.
@@ -587,11 +732,29 @@ def _sync_from_musicbrainz(
         our_on_credit = any(c.mbid == mbid for c in rg.credits)
         if not type_ok:
             if not (is_multi_credit and our_on_credit):
+                skipped = _persist_rg_as_skipped(
+                    db, artist=artist, rg=rg, provider_name=provider_name,
+                    existing_by_mbid=existing_by_mbid, reason=type_reason, code=type_code,
+                )
+                if skipped is not None:
+                    touched.append(skipped)
                 continue
 
         if getattr(settings, "ignore_junk_titles", True) and is_junk_title(rg.title or ""):
+            skipped = _persist_rg_as_skipped(
+                db, artist=artist, rg=rg, provider_name=provider_name,
+                existing_by_mbid=existing_by_mbid, reason="Matched junk-title filter", code="junk",
+            )
+            if skipped is not None:
+                touched.append(skipped)
             continue
         if getattr(settings, "ignore_live_releases", False) and is_live_title(rg.title or ""):
+            skipped = _persist_rg_as_skipped(
+                db, artist=artist, rg=rg, provider_name=provider_name,
+                existing_by_mbid=existing_by_mbid, reason="Live release filter", code="live",
+            )
+            if skipped is not None:
+                touched.append(skipped)
             continue
         if monitor_mode == "new" and rg.year and cutoff:
             try:
@@ -728,7 +891,6 @@ def _sync_from_musicbrainz(
 
     if discover_featured:
         featured_names: list[str] = []
-        collab_titles: list[str] = []
         for a in touched:
             if a.status not in {"wanted", "missing", "downloaded"}:
                 continue
@@ -738,25 +900,16 @@ def _sync_from_musicbrainz(
             credit = (getattr(a, "artist_credit", None) or "")
             if names:
                 featured_names.extend(names)
-                collab_titles.append(a.title or "")
             elif credit:
                 for chunk in credit.replace(" feat. ", ",").replace(" & ", ",").split(","):
                     name = chunk.strip()
                     if name and _norm_artist_name(name) != _norm_artist_name(artist.name):
                         featured_names.append(name)
-                        collab_titles.append(a.title or "")
         featured_names = list(dict.fromkeys(featured_names))
-        # Commit primary catalog first so featured sync can't UNIQUE-clash on unflushed rows.
         if not _safe_commit_artist_sync(db, artist):
             return touched
         try:
-            related = _ensure_featured_artists(
-                db,
-                primary=artist,
-                featured_names=featured_names,
-                provider_name=provider_name,
-                collab_titles=collab_titles,
-            )
+            related = _related_artists_display(db, primary=artist, featured_names=featured_names)
             if not _artist_still_exists(db, artist.id):
                 db.rollback()
                 return touched
@@ -789,97 +942,38 @@ def _sync_from_musicbrainz(
     return touched
 
 
-def _ensure_featured_artists(
+def _related_artists_display(
     db: Session,
     *,
     primary: Artist,
     featured_names: list[str],
-    provider_name: str,
-    collab_titles: list[str] | None = None,
 ) -> list[dict]:
-    """Add collab artists with full MB catalog; auto-queue only shared releases."""
-    from app.services.providers import get_provider
-    from app.services.download_queue import download_queue
+    """Build the "Featured / related" display list shown on the artist page.
 
-    provider = get_provider(db, provider_name)
+    Read-only: looks up names against artists already in the library and
+    otherwise just reports the name. Does NOT create Artist rows, search
+    providers, or touch albums/downloads — a collaborator is only ever added
+    to the library once one of their actual shared tracks is downloaded (see
+    mirror_downloaded_album_to_collaborators, called on download completion).
+    This keeps adding/refreshing/monitoring an artist a purely local, cheap
+    operation instead of a recursive provider-search-and-create cascade.
+    """
     related: list[dict] = []
     primary_key = _norm_artist_name(primary.name)
-    title_keys = {_norm_album_title(t) for t in (collab_titles or []) if t}
-    # Also match cleaned titles
-    title_keys |= {_norm_album_title(_clean_collab_title(t, primary.name)) for t in (collab_titles or []) if t}
-
-    from sqlalchemy.exc import IntegrityError
-
     for name in featured_names[:12]:
         if _norm_artist_name(name) == primary_key:
             continue
         existing = db.scalar(
-            select(Artist).where(Artist.name == name, Artist.provider == provider_name)
+            select(Artist).where(Artist.name == name, Artist.provider == primary.provider)
         )
         if existing is None:
-            existing = find_artist_by_normalized_name(db, name, provider_name)
-        if existing is None:
-            try:
-                hits = provider.search_artists(name, limit=5)
-            except Exception:  # noqa: BLE001
-                hits = []
-            hit = next(
-                (h for h in hits if _norm_artist_name(h.name) == _norm_artist_name(name)),
-                hits[0] if hits else None,
-            )
-            if not hit:
-                related.append({"id": None, "name": name, "musicbrainz_id": None, "provider": None})
-                continue
-            try:
-                # Featured artists: albums + EPs only (not full singles catalog).
-                # Shared collabs are still kept via multi-credit / title matching.
-                existing = add_artist(
-                    db,
-                    hit.provider_id,
-                    monitored=True,
-                    download_missing=False,
-                    provider_name=provider_name,
-                    skip_featured=True,
-                    include_singles=False,
-                )
-            except IntegrityError as exc:
-                db.rollback()
-                add_history(
-                    db,
-                    "featured_artist_error",
-                    f"Could not add featured artist {name}: {exc}",
-                )
-                continue
-
-        albums = list(db.scalars(select(Album).where(Album.artist_id == existing.id)).all())
-        for album in albums:
-            if (album.status or "") == "downloaded":
-                continue
-            title_key = _norm_album_title(album.title or "")
-            collab_hit = bool(title_key and title_key in title_keys)
-            mentions_primary = bool(primary_key and primary_key in (album.title or "").lower())
-            collabs = _album_collaborators(album)
-            credit = (getattr(album, "artist_credit", None) or "").lower()
-            mentions_via_credit = any(
-                _norm_artist_name(c) == primary_key for c in collabs
-            ) or (primary_key and primary_key in credit)
-            # Keep full MusicBrainz catalog visible (wanted/missing). Only auto-queue shared collabs.
-            if collab_hit or mentions_primary or mentions_via_credit:
-                if album.status == "missing":
-                    album.monitored = True
-                elif album.status != "wanted":
-                    album.status = "wanted"
-                    album.monitored = True
-                    album.status_reason = ""
-                download_queue.enqueue_album(db, album.id)
-        db.commit()
-
+            existing = find_artist_by_normalized_name(db, name, primary.provider)
         related.append(
             {
-                "id": existing.id,
-                "name": existing.name,
-                "musicbrainz_id": getattr(existing, "musicbrainz_id", None),
-                "provider": existing.provider,
+                "id": existing.id if existing else None,
+                "name": existing.name if existing else name,
+                "musicbrainz_id": getattr(existing, "musicbrainz_id", None) if existing else None,
+                "provider": existing.provider if existing else None,
             }
         )
     return related
@@ -921,6 +1015,24 @@ def _sync_provider_albums(
 ) -> list[Album]:
     from app.services.filters import is_junk_title, is_live_title
 
+    def _quality_skip(*, title: str, album_type: str, track_count: int) -> tuple[str, str] | None:
+        """Junk/live/min-track check, mirroring classify_album_for_import minus
+        the type mapping (album_type_allowed_for_artist already covers that,
+        with its per-artist singles override). Returns (reason, code) or None."""
+        if getattr(settings, "ignore_junk_titles", True) and is_junk_title(title or ""):
+            return "Matched junk-title filter", "junk"
+        if getattr(settings, "ignore_live_releases", False) and is_live_title(title or ""):
+            return "Live release filter", "live"
+        min_tracks = int(getattr(settings, "min_track_count", 0) or 0)
+        if (
+            min_tracks > 0
+            and (track_count or 0) > 0
+            and track_count < min_tracks
+            and album_type in {"album", "ep", "compilation"}
+        ):
+            return f"Below minimum track count ({min_tracks})", "min_tracks"
+        return None
+
     existing = {
         a.provider_id: a
         for a in db.scalars(select(Album).where(Album.artist_id == artist.id)).all()
@@ -942,7 +1054,7 @@ def _sync_provider_albums(
             album.release_date = raw.release_date or album.release_date
             album.track_count = raw.track_count or album.track_count
             album.album_type = raw.album_type
-            if (album.status or "") != "downloaded":
+            if (album.status or "") != "downloaded" and not getattr(album, "dismissed", False):
                 status, monitored, reason = gate_fn(
                     title=album.title or raw.title or "",
                     year=album.release_date or raw.release_date,
@@ -952,22 +1064,29 @@ def _sync_provider_albums(
                     album.status = "wanted"
                     album.monitored = True
                     album.status_reason = ""
+                    album.skip_reason_code = ""
                 elif album.status != "skipped" or status == "skipped":
                     album.status = status
                     album.monitored = monitored
                     album.status_reason = reason or ""
             touched.append(album)
             continue
+        skip_reason = ""
+        skip_code = ""
         if not album_type_allowed_for_artist(db, artist, raw.album_type):
-            continue
-        if getattr(settings, "ignore_junk_titles", True) and is_junk_title(raw.title or ""):
-            continue
-        if getattr(settings, "ignore_live_releases", False) and is_live_title(raw.title or ""):
-            continue
-        min_tracks = int(getattr(settings, "min_track_count", 0) or 0)
-        if min_tracks > 0 and (raw.track_count or 0) > 0 and raw.track_count < min_tracks:
-            if raw.album_type in {"album", "ep", "compilation"}:
-                continue
+            skip_reason = (
+                "Singles disabled for this artist"
+                if raw.album_type == "single"
+                else f"{(raw.album_type or 'release').title()}s are disabled"
+            )
+            skip_code = "singles_disabled" if raw.album_type == "single" else "type_disabled"
+        else:
+            quality_skip = _quality_skip(
+                title=raw.title or "", album_type=raw.album_type or "album",
+                track_count=raw.track_count or 0,
+            )
+            if quality_skip:
+                skip_reason, skip_code = quality_skip
         if monitor_mode == "new" and raw.release_date and cutoff:
             try:
                 from datetime import date as date_cls
@@ -979,11 +1098,15 @@ def _sync_provider_albums(
             except ValueError:
                 pass
 
-        status, monitored, reason = gate_fn(
-            title=raw.title or "",
-            year=raw.release_date,
-            album_type=raw.album_type or "album",
-        )
+        if skip_reason:
+            status, monitored, reason, code = "skipped", False, skip_reason, skip_code
+        else:
+            status, monitored, reason = gate_fn(
+                title=raw.title or "",
+                year=raw.release_date,
+                album_type=raw.album_type or "album",
+            )
+            code = ""
         unique_pid = _unique_provider_album_id(
             db,
             provider_name=artist.provider,
@@ -1003,6 +1126,7 @@ def _sync_provider_albums(
             monitored=monitored,
             status=status,
             status_reason=reason or "",
+            skip_reason_code=code,
         )
         db.add(album)
         existing[unique_pid] = album
@@ -1022,6 +1146,7 @@ def sync_artist_albums(
     artist: Artist,
     *,
     discover_featured: bool = True,
+    require_approval: bool = False,
 ) -> list[Album]:
     if not artist.monitored or (getattr(artist, "monitor_mode", "all") or "all") == "none":
         return list(db.scalars(select(Album).where(Album.artist_id == artist.id)).all())
@@ -1047,6 +1172,7 @@ def sync_artist_albums(
             settings=settings,
             provider_albums=raw_albums,
             discover_featured=discover_featured,
+            require_approval=require_approval,
         )
 
     return _sync_provider_albums(
@@ -1106,6 +1232,10 @@ def add_artist(
     provider_name: str | None = None,
     skip_featured: bool = False,
     include_singles: bool | None = None,
+    require_approval: bool = False,
+    pending_reason: str = "",
+    download_mode: str | None = None,
+    monitor_mode: str | None = None,
 ) -> Artist:
     settings = ensure_settings(db)
     pname = (provider_name or settings.active_provider or "deezer").lower()
@@ -1121,8 +1251,16 @@ def add_artist(
             existing.include_singles = include_singles
             db.commit()
             db.refresh(existing)
-        sync_artist_albums(db, existing, discover_featured=not skip_featured)
-        if download_missing and monitored and not skip_featured:
+        sync_artist_albums(
+            db, existing, discover_featured=not skip_featured, require_approval=require_approval
+        )
+        if (
+            download_missing
+            and monitored
+            and not skip_featured
+            and existing.status == "active"
+            and effective_download_mode(db, existing) == "auto"
+        ):
             from app.services.download_queue import download_queue
 
             download_queue.enqueue_artist_missing(db, existing.id)
@@ -1141,18 +1279,93 @@ def add_artist(
         image_url=meta.image_url,
         monitored=monitored,
         include_singles=include_singles,
+        status="pending" if require_approval else "active",
+        pending_reason=pending_reason if require_approval else "",
+        download_mode=download_mode if download_mode in ("auto", "manual") else None,
     )
+    if monitor_mode in ("all", "new", "none"):
+        artist.monitor_mode = monitor_mode
     db.add(artist)
     db.commit()
     db.refresh(artist)
     add_history(db, "artist_added", f"Added artist {artist.name} ({pname})")
-    sync_artist_albums(db, artist, discover_featured=not skip_featured)
+    # Metadata sync is safe even while pending — it only creates/updates Album
+    # rows, it never downloads anything. This lets a pending artist's review
+    # card show accurate album counts before it's approved.
+    sync_artist_albums(
+        db, artist, discover_featured=not skip_featured, require_approval=require_approval
+    )
     db.refresh(artist)
-    if download_missing and monitored and not skip_featured:
+    if (
+        download_missing
+        and monitored
+        and not skip_featured
+        and artist.status == "active"
+        and effective_download_mode(db, artist) == "auto"
+    ):
         from app.services.download_queue import download_queue
 
         download_queue.enqueue_artist_missing(db, artist.id)
     return artist
+
+
+def list_pending_artists(db: Session) -> list[Artist]:
+    return list(
+        db.scalars(select(Artist).where(Artist.status == "pending").order_by(Artist.added_at))
+        .unique()
+        .all()
+    )
+
+
+def approve_pending_artist(db: Session, artist_id: int) -> Artist:
+    artist = db.get(Artist, artist_id)
+    if not artist or artist.status != "pending":
+        raise ValueError("Artist not found or not pending review")
+    artist.status = "active"
+    artist.pending_reason = ""
+    db.commit()
+    db.refresh(artist)
+    if artist.monitored and effective_download_mode(db, artist) == "auto":
+        from app.services.download_queue import download_queue
+
+        download_queue.enqueue_artist_missing(db, artist.id)
+    return artist
+
+
+def reject_pending_artist(db: Session, artist_id: int) -> None:
+    artist = db.get(Artist, artist_id)
+    if not artist or artist.status != "pending":
+        raise ValueError("Artist not found or not pending review")
+    album_ids = list(db.scalars(select(Album.id).where(Album.artist_id == artist.id)).all())
+    if album_ids:
+        # DownloadJob.album_id is ondelete="SET NULL" — without this cleanup a
+        # job could survive the artist delete as an orphan the worker keeps
+        # trying to process for an album/artist that no longer exists.
+        db.execute(delete(DownloadJob).where(DownloadJob.album_id.in_(album_ids)))
+    db.delete(artist)  # cascades to Album -> Track (FK + ORM cascade)
+    db.commit()
+
+
+def bulk_approve_pending_artists(db: Session, artist_ids: list[int]) -> dict:
+    approved = 0
+    for artist_id in artist_ids:
+        try:
+            approve_pending_artist(db, artist_id)
+            approved += 1
+        except ValueError:
+            continue
+    return {"approved": approved}
+
+
+def bulk_reject_pending_artists(db: Session, artist_ids: list[int]) -> dict:
+    rejected = 0
+    for artist_id in artist_ids:
+        try:
+            reject_pending_artist(db, artist_id)
+            rejected += 1
+        except ValueError:
+            continue
+    return {"rejected": rejected}
 
 
 def get_artist_detail(db: Session, artist_id: int) -> Artist | None:

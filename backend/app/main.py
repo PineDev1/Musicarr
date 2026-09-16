@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,18 +14,23 @@ from app.api import (
     artists,
     auth,
     backup,
+    calendar,
     events,
     import_lists,
+    maintenance,
     musicbrainz_catalog,
     ops,
     player,
+    search,
     settings,
+    stats,
 )
 from app.core.database import SessionLocal, ensure_dirs, init_db
-from app.services import app_auth, player_auth
+from app.services import app_auth, player_auth, player_presence
 from app.services.cors_origins import LOCAL_CORS_ORIGINS, origin_is_allowed
 from app.services.download_queue import download_queue
 from app.services.import_lists import import_list_runner
+from app.services.maintenance_scheduler import maintenance_scheduler
 from app.services.monitor import release_monitor
 from app.services.settings_service import ensure_settings
 from sqlalchemy import select
@@ -44,6 +50,7 @@ PUBLIC_API_PATHS = {
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    player_presence.set_main_loop(asyncio.get_running_loop())
     ensure_dirs()
     init_db()
     db = SessionLocal()
@@ -54,10 +61,12 @@ async def lifespan(_: FastAPI):
     download_queue.start()
     release_monitor.start()
     import_list_runner.start()
+    maintenance_scheduler.start()
     yield
     download_queue.stop()
     release_monitor.stop()
     import_list_runner.stop()
+    maintenance_scheduler.stop()
 
 
 app = FastAPI(title="Musicarr", version="0.1.0", lifespan=lifespan)
@@ -176,6 +185,10 @@ app.include_router(player.router, prefix="/api")
 app.include_router(musicbrainz_catalog.router, prefix="/api")
 app.include_router(backup.router, prefix="/api")
 app.include_router(import_lists.router, prefix="/api")
+app.include_router(search.router, prefix="/api")
+app.include_router(stats.router, prefix="/api")
+app.include_router(calendar.router, prefix="/api")
+app.include_router(maintenance.router, prefix="/api")
 
 
 @app.get("/api")

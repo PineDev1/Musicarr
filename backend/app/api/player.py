@@ -9,8 +9,18 @@ from pathlib import Path
 from typing import Union
 
 from mutagen import File as MutagenFile
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -19,6 +29,7 @@ from app.core.database import get_db
 from app.models import (
     Album,
     Artist,
+    PlayerCastToken,
     PlayerFavorite,
     PlayerPlayEvent,
     PlayerPlaylist,
@@ -32,15 +43,18 @@ from app.models.schemas import (
     PlayerArtistDetailOut,
     PlayerArtistOut,
     PlayerAuthStatus,
+    PlayerCastTokenOut,
     PlayerCommandsOut,
     PlayerContinueOut,
     PlayerLibrarySongsPage,
     PlayerLoginRequest,
+    PlayerLyricsOut,
     PlayerNowPlayingOut,
     PlayerPasswordChange,
     PlayerPlayingUpdate,
     PlayerPlaylistAddTracks,
     PlayerPlaylistCreate,
+    PlayerPlaylistImportResult,
     PlayerPlaylistOut,
     PlayerPlaylistUpdate,
     PlayerPrefsOut,
@@ -49,6 +63,7 @@ from app.models.schemas import (
     PlayerShareCreate,
     PlayerShareOut,
     PlayerSharePublicOut,
+    PlayerSmartCriteria,
     PlayerTrackOut,
     PlayerUserCreate,
     PlayerUserOut,
@@ -57,7 +72,10 @@ from app.models.schemas import (
 from app.services import app_auth, player_auth, player_presence
 from app.services.app_auth import hash_password, verify_password
 from app.services.history import add_history
+from app.services.lyrics import ensure_genre, get_lyrics
+from app.services.m3u import export_m3u, parse_and_match_m3u
 from app.services.settings_service import ensure_settings
+from app.services.smart_playlists import evaluate_smart_playlist, parse_criteria
 
 router = APIRouter(prefix="/player", tags=["player"])
 
@@ -147,6 +165,7 @@ def _track_out(track: Track) -> PlayerTrackOut:
         cover_url=album.cover_url if album else None,
         quality=_quality_for_track(track),
         format=fmt,
+        genre=track.genre or "",
     )
 
 
@@ -717,7 +736,29 @@ def stream_track(track_id: int, request: Request, db: Session = Depends(get_db))
 # ----- Playlists -----
 
 
-def _playlist_out(pl: PlayerPlaylist, *, include_tracks: bool = False) -> PlayerPlaylistOut:
+def _playlist_out(
+    pl: PlayerPlaylist, *, include_tracks: bool = False, db: Session | None = None
+) -> PlayerPlaylistOut:
+    criteria_dict = parse_criteria(pl)
+    criteria_out = PlayerSmartCriteria(**criteria_dict) if criteria_dict else None
+
+    if criteria_dict and db is not None:
+        # Fully dynamic smart playlist: never trust stored PlayerPlaylistTrack rows.
+        live_tracks = evaluate_smart_playlist(db, pl) if include_tracks else []
+        count_tracks = live_tracks if include_tracks else evaluate_smart_playlist(db, pl)
+        return PlayerPlaylistOut(
+            id=pl.id,
+            name=pl.name,
+            track_count=len(count_tracks),
+            created_at=pl.created_at,
+            updated_at=pl.updated_at,
+            tracks=[_track_out(t) for t in live_tracks],
+            is_smart=True,
+            criteria=criteria_out,
+            builtin=False,
+            kind=None,
+        )
+
     items = list(pl.tracks or [])
     tracks_out = []
     if include_tracks:
@@ -732,6 +773,7 @@ def _playlist_out(pl: PlayerPlaylist, *, include_tracks: bool = False) -> Player
         updated_at=pl.updated_at,
         tracks=tracks_out,
         is_smart=bool(getattr(pl, "is_smart", False)),
+        criteria=criteria_out,
         builtin=False,
         kind=None,
     )
@@ -887,7 +929,12 @@ def report_playing(payload: PlayerPlayingUpdate, request: Request, db: Session =
                     .limit(1)
                 )
                 now = datetime.now(timezone.utc)
-                if not last or (now - last.played_at).total_seconds() > 30:
+                last_played_at = (
+                    last.played_at.replace(tzinfo=timezone.utc)
+                    if last and last.played_at.tzinfo is None
+                    else (last.played_at if last else None)
+                )
+                if not last or (now - last_played_at).total_seconds() > 30:
                     db.add(
                         PlayerPlayEvent(
                             user_id=user.id,
@@ -896,6 +943,7 @@ def report_playing(payload: PlayerPlayingUpdate, request: Request, db: Session =
                         )
                     )
             db.commit()
+    prev = player_presence.get_entry(user.id)
     player_presence.heartbeat(
         user_id=user.id,
         username=user.username,
@@ -907,6 +955,76 @@ def report_playing(payload: PlayerPlayingUpdate, request: Request, db: Session =
         playing=payload.playing,
         position=payload.position,
     )
+    if payload.track_id and payload.playing and getattr(user, "lastfm_session_key", None):
+        from app.services import lastfm
+
+        if not prev or prev.track_id != payload.track_id:
+            lastfm.update_now_playing(db, user, artist_name or "", title or "")
+        duration = track.duration if payload.track_id and track else 0
+        threshold = min(duration / 2, 240) if duration else None
+        current = player_presence.get_entry(user.id)
+        already = bool(current and current.scrobbled_track_id == payload.track_id)
+        if (
+            duration > 30
+            and threshold is not None
+            and (payload.position or 0) >= threshold
+            and not already
+        ):
+            lastfm.scrobble(db, user, artist_name or "", title or "")
+            player_presence.mark_scrobbled(user.id, payload.track_id)
+    player_presence.broadcast_presence_sync(
+        user.id,
+        {
+            "track_id": payload.track_id,
+            "title": title,
+            "artist_name": artist_name,
+            "cover_url": cover_url,
+            "playing": payload.playing,
+            "position": payload.position,
+        },
+    )
+    return {"ok": True}
+
+
+@router.get("/lastfm/status")
+def lastfm_status(request: Request, db: Session = Depends(get_db)):
+    user = _current_player_user(request, db)
+    return {
+        "connected": bool(getattr(user, "lastfm_session_key", None)),
+        "username": getattr(user, "lastfm_username", None),
+    }
+
+
+@router.get("/lastfm/start")
+def lastfm_start(request: Request, db: Session = Depends(get_db)):
+    from app.services import lastfm
+
+    _current_player_user(request, db)
+    try:
+        return {"auth_url": lastfm.auth_url(db)}
+    except lastfm.LastfmError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/lastfm/callback")
+def lastfm_callback(token: str, request: Request, db: Session = Depends(get_db)):
+    from app.services import lastfm
+
+    user = _current_player_user(request, db)
+    try:
+        lastfm.complete_auth(db, user, token)
+    except lastfm.LastfmError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    return {"ok": True, "username": user.lastfm_username}
+
+
+@router.delete("/lastfm")
+def lastfm_disconnect(request: Request, db: Session = Depends(get_db)):
+    user = _current_player_user(request, db)
+    user.lastfm_session_key = None
+    user.lastfm_username = None
+    db.commit()
     return {"ok": True}
 
 
@@ -942,7 +1060,40 @@ def admin_now_playing(request: Request, db: Session = Depends(get_db)):
 def admin_stop_playing(user_id: int, request: Request, db: Session = Depends(get_db)):
     _require_admin(request, db)
     player_presence.request_stop(user_id)
+    player_presence.broadcast_stop_sync(user_id)
     return {"ok": True}
+
+
+@router.websocket("/ws")
+async def player_ws(websocket: WebSocket):
+    """Live push channel for presence updates and remote-stop commands.
+
+    Falls back gracefully: clients that can't/don't connect still work via
+    the existing me/commands poll and me/playing heartbeat.
+    """
+    from app.core.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        token = websocket.cookies.get(player_auth.COOKIE_NAME)
+        user = player_auth.parse_session_token(db, token)
+    finally:
+        db.close()
+    if not user:
+        await websocket.close(code=4401)
+        return
+
+    await websocket.accept()
+    player_presence.register_socket(user.id, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        player_presence.unregister_socket(user.id, websocket)
 
 
 def _tracks_liked(db: Session, user_id: int) -> list[PlayerTrackOut]:
@@ -1514,7 +1665,7 @@ def list_playlists(request: Request, db: Session = Depends(get_db)):
         .where(PlayerPlaylist.user_id == user.id)
         .order_by(PlayerPlaylist.name)
     ).unique().all()
-    return [_playlist_out(p) for p in rows]
+    return [_playlist_out(p, db=db) for p in rows]
 
 
 @router.post("/playlists", response_model=PlayerPlaylistOut)
@@ -1533,7 +1684,7 @@ def create_playlist(
     db.add(pl)
     db.commit()
     db.refresh(pl)
-    return _playlist_out(pl)
+    return _playlist_out(pl, db=db)
 
 
 @router.get("/playlists/{playlist_id}", response_model=PlayerPlaylistOut)
@@ -1551,7 +1702,7 @@ def get_playlist(playlist_id: int, request: Request, db: Session = Depends(get_d
     )
     if not pl:
         raise HTTPException(status_code=404, detail="Playlist not found")
-    return _playlist_out(pl, include_tracks=True)
+    return _playlist_out(pl, include_tracks=True, db=db)
 
 
 @router.patch("/playlists/{playlist_id}", response_model=PlayerPlaylistOut)
@@ -1576,7 +1727,7 @@ def update_playlist(
     pl.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(pl)
-    return _playlist_out(pl)
+    return _playlist_out(pl, db=db)
 
 
 @router.delete("/playlists/{playlist_id}")
@@ -1609,6 +1760,10 @@ def add_tracks(
     )
     if not pl:
         raise HTTPException(status_code=404, detail="Playlist not found")
+    if parse_criteria(pl):
+        raise HTTPException(
+            status_code=400, detail="Smart playlist tracks are computed from criteria"
+        )
     existing = {i.track_id for i in (pl.tracks or [])}
     pos = max((i.position for i in (pl.tracks or [])), default=-1) + 1
     for tid in payload.track_ids:
@@ -1648,6 +1803,150 @@ def remove_track(
         pl.updated_at = datetime.now(timezone.utc)
         db.commit()
     return {"ok": True}
+
+
+@router.patch("/playlists/{playlist_id}/criteria", response_model=PlayerPlaylistOut)
+def update_playlist_criteria(
+    playlist_id: int,
+    payload: PlayerSmartCriteria,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = _current_player_user(request, db)
+    pl = db.scalar(
+        select(PlayerPlaylist).where(
+            PlayerPlaylist.id == playlist_id, PlayerPlaylist.user_id == user.id
+        )
+    )
+    if not pl:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    pl.is_smart = True
+    pl.criteria_json = payload.model_dump_json()
+    pl.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(pl)
+    return _playlist_out(pl, include_tracks=True, db=db)
+
+
+@router.delete("/playlists/{playlist_id}/criteria", response_model=PlayerPlaylistOut)
+def clear_playlist_criteria(playlist_id: int, request: Request, db: Session = Depends(get_db)):
+    user = _current_player_user(request, db)
+    pl = db.scalar(
+        select(PlayerPlaylist).where(
+            PlayerPlaylist.id == playlist_id, PlayerPlaylist.user_id == user.id
+        )
+    )
+    if not pl:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    pl.criteria_json = None
+    pl.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(pl)
+    return _playlist_out(pl, include_tracks=True, db=db)
+
+
+@router.get("/playlists/{playlist_id}/export")
+def export_playlist(playlist_id: int, request: Request, db: Session = Depends(get_db)):
+    user = _current_player_user(request, db)
+    pl = db.scalar(
+        select(PlayerPlaylist)
+        .options(
+            joinedload(PlayerPlaylist.tracks)
+            .joinedload(PlayerPlaylistTrack.track)
+            .joinedload(Track.album)
+            .joinedload(Album.artist)
+        )
+        .where(PlayerPlaylist.id == playlist_id, PlayerPlaylist.user_id == user.id)
+    )
+    if not pl:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    if parse_criteria(pl):
+        tracks = evaluate_smart_playlist(db, pl)
+    else:
+        items = sorted(pl.tracks or [], key=lambda x: x.position)
+        tracks = [i.track for i in items if i.track and i.track.path]
+    content = export_m3u(tracks)
+    safe_name = re.sub(r"[^\w\- ]", "_", pl.name).strip() or "playlist"
+    return PlainTextResponse(
+        content,
+        media_type="audio/x-mpegurl",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.m3u"'},
+    )
+
+
+@router.post("/playlists/import", response_model=PlayerPlaylistImportResult)
+async def import_playlist(
+    request: Request,
+    name: str = "",
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    user = _current_player_user(request, db)
+    raw = (await file.read()).decode("utf-8", errors="ignore")
+    matched = parse_and_match_m3u(db, raw)
+    total = len([ln for ln in raw.splitlines() if ln.strip() and not ln.startswith("#")])
+    now = datetime.now(timezone.utc)
+    playlist_name = (name or Path(file.filename or "Imported playlist").stem).strip()
+    pl = PlayerPlaylist(
+        user_id=user.id,
+        name=playlist_name or "Imported playlist",
+        is_smart=False,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(pl)
+    db.flush()
+    for pos, track in enumerate(matched):
+        db.add(PlayerPlaylistTrack(playlist_id=pl.id, track_id=track.id, position=pos))
+    db.commit()
+    return PlayerPlaylistImportResult(playlist_id=pl.id, matched=len(matched), total=total)
+
+
+@router.get("/tracks/{track_id}/lyrics", response_model=PlayerLyricsOut)
+def track_lyrics(track_id: int, request: Request, db: Session = Depends(get_db)):
+    _current_player_user(request, db)
+    track = db.scalar(
+        select(Track)
+        .options(joinedload(Track.album).joinedload(Album.artist))
+        .where(Track.id == track_id)
+    )
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+    ensure_genre(db, track)
+    result = get_lyrics(db, track)
+    return PlayerLyricsOut(**result)
+
+
+@router.post("/cast/token", response_model=PlayerCastTokenOut)
+def mint_cast_token(request: Request, db: Session = Depends(get_db)):
+    user = _current_player_user(request, db)
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=4)
+    db.add(PlayerCastToken(token=token, user_id=user.id, expires_at=expires_at))
+    db.commit()
+    return PlayerCastTokenOut(token=token, expires_at=expires_at)
+
+
+def _valid_cast_token(db: Session, token: str) -> PlayerCastToken:
+    row = db.scalar(select(PlayerCastToken).where(PlayerCastToken.token == token))
+    if not row:
+        raise HTTPException(status_code=404, detail="Invalid cast token")
+    expires_at = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=404, detail="Cast token expired")
+    return row
+
+
+@router.get("/cast/{token}/stream/{track_id}")
+def cast_stream(token: str, track_id: int, request: Request, db: Session = Depends(get_db)):
+    """Cookie-free stream for a Chromecast/etc. receiver fetching audio directly."""
+    _valid_cast_token(db, token)
+    track = db.scalar(
+        select(Track).options(joinedload(Track.album)).where(Track.id == track_id)
+    )
+    if not track or not track.path:
+        raise HTTPException(status_code=404, detail="Track not found")
+    return _stream_file_response(track, request)
 
 
 @router.get("/playlists/{playlist_id}/suggestions", response_model=list[PlayerTrackOut])

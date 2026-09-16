@@ -22,6 +22,7 @@ def _out(row: ImportList) -> ImportListOut:
         id=row.id,
         name=row.name,
         names_raw=row.names_raw,
+        spotify_playlist_url=getattr(row, "spotify_playlist_url", None),
         interval_minutes=row.interval_minutes,
         enabled=row.enabled,
         last_run_at=row.last_run_at,
@@ -48,6 +49,7 @@ def create_import_list(payload: ImportListCreate, db: Session = Depends(get_db))
     row = ImportList(
         name=payload.name.strip() or "Untitled list",
         names_raw=payload.names_raw,
+        spotify_playlist_url=(payload.spotify_playlist_url or "").strip() or None,
         interval_minutes=payload.interval_minutes,
         enabled=payload.enabled,
     )

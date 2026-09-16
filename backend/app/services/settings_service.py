@@ -118,6 +118,7 @@ def settings_to_out(row: AppSettings, validate: bool = False) -> SettingsOut:
         notify_token_set=bool((getattr(row, "notify_token", None) or "").strip()),
         notify_on_complete=bool(getattr(row, "notify_on_complete", True)),
         notify_on_failure=bool(getattr(row, "notify_on_failure", True)),
+        notify_on_library_events=bool(getattr(row, "notify_on_library_events", False)),
         upgrade_enabled=bool(getattr(row, "upgrade_enabled", True)),
         fallback_providers_enabled=bool(getattr(row, "fallback_providers_enabled", True)),
         media_refresh_url=getattr(row, "media_refresh_url", "") or "",
@@ -132,6 +133,17 @@ def settings_to_out(row: AppSettings, validate: bool = False) -> SettingsOut:
         player_sharing_enabled=bool(getattr(row, "player_sharing_enabled", True)),
         download_concurrency=row.download_concurrency,
         max_retries=row.max_retries,
+        default_download_mode=(getattr(row, "default_download_mode", None) or "manual"),
+        lastfm_api_key=getattr(row, "lastfm_api_key", "") or "",
+        lastfm_api_secret_set=bool((getattr(row, "lastfm_api_secret", "") or "").strip()),
+        spotify_client_id=getattr(row, "spotify_client_id", "") or "",
+        spotify_client_secret_set=bool((getattr(row, "spotify_client_secret", "") or "").strip()),
+        backup_schedule_enabled=bool(getattr(row, "backup_schedule_enabled", True)),
+        backup_retention_count=int(getattr(row, "backup_retention_count", 7) or 7),
+        dedupe_scan_schedule_enabled=bool(getattr(row, "dedupe_scan_schedule_enabled", True)),
+        low_disk_threshold_gb=int(getattr(row, "low_disk_threshold_gb", 10) or 10),
+        notify_on_maintenance=bool(getattr(row, "notify_on_maintenance", True)),
+        notify_on_health_alerts=bool(getattr(row, "notify_on_health_alerts", True)),
     )
 
 

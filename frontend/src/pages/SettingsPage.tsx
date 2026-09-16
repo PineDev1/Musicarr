@@ -111,6 +111,7 @@ export function SettingsPage() {
   const [notifyToken, setNotifyToken] = useState('')
   const [notifyComplete, setNotifyComplete] = useState(true)
   const [notifyFailure, setNotifyFailure] = useState(true)
+  const [notifyLibraryEvents, setNotifyLibraryEvents] = useState(false)
   const [upgradeEnabled, setUpgradeEnabled] = useState(true)
   const [fallbackProvidersEnabled, setFallbackProvidersEnabled] = useState(true)
   const [mediaRefreshUrl, setMediaRefreshUrl] = useState('')
@@ -129,6 +130,11 @@ export function SettingsPage() {
   const [newPlayerDisplay, setNewPlayerDisplay] = useState('')
   const [resetPassId, setResetPassId] = useState<number | null>(null)
   const [resetPassValue, setResetPassValue] = useState('')
+  const [newAdminUser, setNewAdminUser] = useState('')
+  const [newAdminPass, setNewAdminPass] = useState('')
+  const [newAdminDisplay, setNewAdminDisplay] = useState('')
+  const [resetAdminPassId, setResetAdminPassId] = useState<number | null>(null)
+  const [resetAdminPassValue, setResetAdminPassValue] = useState('')
   const [qobuzEmail, setQobuzEmail] = useState('')
   const [qobuzPassword, setQobuzPassword] = useState('')
   const [qobuzToken, setQobuzToken] = useState('')
@@ -137,6 +143,17 @@ export function SettingsPage() {
   const [qobuzAppSecret, setQobuzAppSecret] = useState('')
   const [tidalCode, setTidalCode] = useState<string | null>(null)
   const [tidalUri, setTidalUri] = useState<string | null>(null)
+  const [defaultDownloadMode, setDefaultDownloadMode] = useState<'auto' | 'manual'>('manual')
+  const [lastfmApiKey, setLastfmApiKey] = useState('')
+  const [lastfmApiSecret, setLastfmApiSecret] = useState('')
+  const [spotifyClientId, setSpotifyClientId] = useState('')
+  const [spotifyClientSecret, setSpotifyClientSecret] = useState('')
+  const [backupScheduleEnabled, setBackupScheduleEnabled] = useState(true)
+  const [backupRetentionCount, setBackupRetentionCount] = useState(7)
+  const [dedupeScanScheduleEnabled, setDedupeScanScheduleEnabled] = useState(true)
+  const [lowDiskThresholdGb, setLowDiskThresholdGb] = useState(10)
+  const [notifyOnMaintenance, setNotifyOnMaintenance] = useState(true)
+  const [notifyOnHealthAlerts, setNotifyOnHealthAlerts] = useState(true)
 
   useEffect(() => {
     if (!data) return
@@ -159,6 +176,7 @@ export function SettingsPage() {
     setNotifyChannel(data.notify_channel || 'discord')
     setNotifyToken('')
     setNotifyComplete(data.notify_on_complete ?? true)
+    setNotifyLibraryEvents(data.notify_on_library_events ?? false)
     setNotifyFailure(data.notify_on_failure ?? true)
     setUpgradeEnabled(data.upgrade_enabled ?? true)
     setFallbackProvidersEnabled(data.fallback_providers_enabled ?? true)
@@ -173,6 +191,17 @@ export function SettingsPage() {
     setQobuzEmail(data.qobuz_email || '')
     setQobuzUserId(data.qobuz_user_id || '')
     setQobuzAppId(data.qobuz_app_id || '')
+    setDefaultDownloadMode(data.default_download_mode || 'manual')
+    setLastfmApiKey(data.lastfm_api_key || '')
+    setLastfmApiSecret('')
+    setSpotifyClientId(data.spotify_client_id || '')
+    setSpotifyClientSecret('')
+    setBackupScheduleEnabled(data.backup_schedule_enabled ?? true)
+    setBackupRetentionCount(data.backup_retention_count ?? 7)
+    setDedupeScanScheduleEnabled(data.dedupe_scan_schedule_enabled ?? true)
+    setLowDiskThresholdGb(data.low_disk_threshold_gb ?? 10)
+    setNotifyOnMaintenance(data.notify_on_maintenance ?? true)
+    setNotifyOnHealthAlerts(data.notify_on_health_alerts ?? true)
   }, [data])
 
   const save = useMutation({
@@ -191,6 +220,7 @@ export function SettingsPage() {
         track_template: trackTemplate,
         monitor_interval_minutes: interval,
         max_retries: maxRetries,
+        default_download_mode: defaultDownloadMode,
         include_albums: includeAlbums,
         include_eps: includeEps,
         include_singles: includeSingles,
@@ -204,6 +234,7 @@ export function SettingsPage() {
         ...(notifyToken.trim() ? { notify_token: notifyToken.trim() } : {}),
         notify_on_complete: notifyComplete,
         notify_on_failure: notifyFailure,
+        notify_on_library_events: notifyLibraryEvents,
         upgrade_enabled: upgradeEnabled,
         fallback_providers_enabled: fallbackProvidersEnabled,
         media_refresh_url: mediaRefreshUrl.trim(),
@@ -215,11 +246,21 @@ export function SettingsPage() {
         player_enabled: playerEnabled,
         player_sharing_enabled: playerSharingEnabled,
         qobuz_app_id: qobuzAppId,
+        lastfm_api_key: lastfmApiKey.trim(),
+        spotify_client_id: spotifyClientId.trim(),
+        backup_schedule_enabled: backupScheduleEnabled,
+        backup_retention_count: backupRetentionCount,
+        dedupe_scan_schedule_enabled: dedupeScanScheduleEnabled,
+        low_disk_threshold_gb: lowDiskThresholdGb,
+        notify_on_maintenance: notifyOnMaintenance,
+        notify_on_health_alerts: notifyOnHealthAlerts,
       }
       if (arl.trim()) body.arl = arl.trim()
       if (qobuzAppSecret.trim()) body.qobuz_app_secret = qobuzAppSecret.trim()
       if (mediaRefreshToken.trim()) body.media_refresh_token = mediaRefreshToken.trim()
       if (authPassword.trim()) body.auth_password = authPassword.trim()
+      if (lastfmApiSecret.trim()) body.lastfm_api_secret = lastfmApiSecret.trim()
+      if (spotifyClientSecret.trim()) body.spotify_client_secret = spotifyClientSecret.trim()
       return api.updateSettings(body)
     },
     onSuccess: () => {
@@ -228,6 +269,8 @@ export function SettingsPage() {
       setMediaRefreshToken('')
       setAuthPassword('')
       setAuthPasswordConfirm('')
+      setLastfmApiSecret('')
+      setSpotifyClientSecret('')
       toast.push('Settings saved', 'ok')
       qc.invalidateQueries({ queryKey: ['settings'] })
       qc.invalidateQueries({ queryKey: ['health'] })
@@ -483,6 +526,48 @@ export function SettingsPage() {
     onSuccess: () => {
       toast.push('Player user deleted', 'ok')
       qc.invalidateQueries({ queryKey: ['player-users'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+
+  const adminUsers = useQuery({
+    queryKey: ['admin-users'],
+    queryFn: api.adminUsers,
+    enabled: tab === 'security',
+    retry: false,
+  })
+  const createAdminUser = useMutation({
+    mutationFn: () =>
+      api.createAdminUser({
+        username: newAdminUser.trim(),
+        password: newAdminPass,
+        display_name: newAdminDisplay.trim() || undefined,
+      }),
+    onSuccess: () => {
+      setNewAdminUser('')
+      setNewAdminPass('')
+      setNewAdminDisplay('')
+      toast.push('Admin user created', 'ok')
+      qc.invalidateQueries({ queryKey: ['admin-users'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  const updateAdminUser = useMutation({
+    mutationFn: ({ id, body }: { id: number; body: Record<string, unknown> }) =>
+      api.updateAdminUser(id, body),
+    onSuccess: () => {
+      setResetAdminPassId(null)
+      setResetAdminPassValue('')
+      toast.push('Admin user updated', 'ok')
+      qc.invalidateQueries({ queryKey: ['admin-users'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  const deleteAdminUser = useMutation({
+    mutationFn: (id: number) => api.deleteAdminUser(id),
+    onSuccess: () => {
+      toast.push('Admin user deleted', 'ok')
+      qc.invalidateQueries({ queryKey: ['admin-users'] })
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
@@ -939,6 +1024,19 @@ export function SettingsPage() {
               </select>
             </div>
             <div className="field">
+              <label>Default download mode for new artists</label>
+              <select
+                value={defaultDownloadMode}
+                onChange={(e) => setDefaultDownloadMode(e.target.value as 'auto' | 'manual')}
+              >
+                <option value="manual">Manual — wait for my approval in Wanted</option>
+                <option value="auto">Auto — download new releases as soon as they're found</option>
+              </select>
+              <span className="muted tiny">
+                Applies to any artist that doesn't have its own override set on the artist page.
+              </span>
+            </div>
+            <div className="field">
               <label>Quality upgrades</label>
               <div className="checks">
                 <label>
@@ -1073,6 +1171,14 @@ export function SettingsPage() {
                   />
                   Download / auth failure
                 </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={notifyLibraryEvents}
+                    onChange={(e) => setNotifyLibraryEvents(e.target.checked)}
+                  />
+                  Artist adds, import lists, library scans, MusicBrainz catalog updates
+                </label>
               </div>
             </div>
             <div className="toolbar">
@@ -1203,6 +1309,136 @@ export function SettingsPage() {
 
             <hr className="settings-divider" />
 
+            <h3 style={{ margin: '0 0 0.25rem', fontSize: '1.05rem' }}>Admin users</h3>
+            <p className="muted" style={{ marginTop: 0, maxWidth: 560 }}>
+              Extra logins for the app above — every admin account has full access, same as the
+              login above. Useful so people don't have to share one password.
+            </p>
+            <div className="toolbar" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div className="field" style={{ margin: 0 }}>
+                <label>Username</label>
+                <input
+                  value={newAdminUser}
+                  onChange={(e) => setNewAdminUser(e.target.value)}
+                  autoComplete="off"
+                />
+              </div>
+              <div className="field" style={{ margin: 0 }}>
+                <label>Display name</label>
+                <input
+                  value={newAdminDisplay}
+                  onChange={(e) => setNewAdminDisplay(e.target.value)}
+                  autoComplete="off"
+                />
+              </div>
+              <div className="field" style={{ margin: 0 }}>
+                <label>Password</label>
+                <input
+                  type="password"
+                  value={newAdminPass}
+                  onChange={(e) => setNewAdminPass(e.target.value)}
+                  autoComplete="new-password"
+                />
+              </div>
+              <button
+                type="button"
+                className="btn"
+                disabled={!newAdminUser.trim() || newAdminPass.length < 4 || createAdminUser.isPending}
+                onClick={() => createAdminUser.mutate()}
+              >
+                Create user
+              </button>
+            </div>
+            {adminUsers.isError && <p className="error">{(adminUsers.error as Error).message}</p>}
+            <table className="table" style={{ marginTop: '1rem' }}>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Display</th>
+                  <th>Active</th>
+                  <th>Created</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {adminUsers.data?.map((u) => (
+                  <tr key={u.id}>
+                    <td>
+                      <strong>{u.username}</strong>
+                    </td>
+                    <td>{u.display_name || '—'}</td>
+                    <td>{u.is_active ? 'Yes' : 'No'}</td>
+                    <td className="muted">{u.created_at?.slice(0, 10) || '—'}</td>
+                    <td className="row-actions">
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        onClick={() =>
+                          updateAdminUser.mutate({ id: u.id, body: { is_active: !u.is_active } })
+                        }
+                      >
+                        {u.is_active ? 'Disable' : 'Enable'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        onClick={() => {
+                          setResetAdminPassId(u.id)
+                          setResetAdminPassValue('')
+                        }}
+                      >
+                        Reset password
+                      </button>
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        onClick={() => {
+                          if (window.confirm(`Delete admin user ${u.username}?`)) {
+                            deleteAdminUser.mutate(u.id)
+                          }
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {resetAdminPassId != null && (
+              <div className="toolbar" style={{ marginTop: '0.75rem' }}>
+                <input
+                  type="password"
+                  placeholder="New password"
+                  value={resetAdminPassValue}
+                  onChange={(e) => setResetAdminPassValue(e.target.value)}
+                  autoComplete="new-password"
+                />
+                <button
+                  type="button"
+                  className="btn secondary"
+                  disabled={resetAdminPassValue.length < 4}
+                  onClick={() =>
+                    updateAdminUser.mutate({
+                      id: resetAdminPassId,
+                      body: { password: resetAdminPassValue },
+                    })
+                  }
+                >
+                  Save password
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => setResetAdminPassId(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+
+            <hr className="settings-divider" />
+
             <h3 style={{ margin: '0 0 0.25rem', fontSize: '1.05rem' }}>SSL / reverse proxy</h3>
             <p className="muted" style={{ marginTop: 0, maxWidth: 560 }}>
               For Traefik (or another reverse proxy). Traefik terminates HTTPS; Musicarr stays on
@@ -1307,6 +1543,70 @@ export function SettingsPage() {
                   />
                   Allow listeners to create public share links (/s/…)
                 </label>
+              </div>
+            </div>
+
+            <hr className="settings-divider" />
+
+            <h3 style={{ margin: '0 0 0.25rem', fontSize: '1.05rem' }}>Last.fm scrobbling</h3>
+            <p className="muted" style={{ marginTop: 0, maxWidth: 560 }}>
+              Register an app at{' '}
+              <a href="https://www.last.fm/api/account/create" target="_blank" rel="noreferrer">
+                last.fm/api
+              </a>{' '}
+              to get a key/secret. Each player user then connects their own account from their
+              player settings.
+            </p>
+            <div className="toolbar" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div className="field" style={{ margin: 0 }}>
+                <label>API key</label>
+                <input
+                  value={lastfmApiKey}
+                  onChange={(e) => setLastfmApiKey(e.target.value)}
+                  autoComplete="off"
+                />
+              </div>
+              <div className="field" style={{ margin: 0 }}>
+                <label>API secret</label>
+                <input
+                  type="password"
+                  value={lastfmApiSecret}
+                  onChange={(e) => setLastfmApiSecret(e.target.value)}
+                  placeholder={data?.lastfm_api_secret_set ? '••••••••' : ''}
+                  autoComplete="off"
+                />
+              </div>
+            </div>
+
+            <hr className="settings-divider" />
+
+            <h3 style={{ margin: '0 0 0.25rem', fontSize: '1.05rem' }}>Spotify (playlist import)</h3>
+            <p className="muted" style={{ marginTop: 0, maxWidth: 560 }}>
+              Register a free app at{' '}
+              <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noreferrer">
+                developer.spotify.com
+              </a>{' '}
+              to get a client ID/secret — lets Import Lists pull artist names straight from a
+              pasted playlist URL.
+            </p>
+            <div className="toolbar" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div className="field" style={{ margin: 0 }}>
+                <label>Client ID</label>
+                <input
+                  value={spotifyClientId}
+                  onChange={(e) => setSpotifyClientId(e.target.value)}
+                  autoComplete="off"
+                />
+              </div>
+              <div className="field" style={{ margin: 0 }}>
+                <label>Client secret</label>
+                <input
+                  type="password"
+                  value={spotifyClientSecret}
+                  onChange={(e) => setSpotifyClientSecret(e.target.value)}
+                  placeholder={data?.spotify_client_secret_set ? '••••••••' : ''}
+                  autoComplete="off"
+                />
               </div>
             </div>
 
@@ -1632,6 +1932,51 @@ export function SettingsPage() {
                 )}
               </div>
             )}
+
+            <hr className="settings-divider" />
+
+            <h3 style={{ margin: '0 0 0.25rem', fontSize: '1.05rem' }}>Scheduled maintenance</h3>
+            <p className="muted" style={{ marginTop: 0, maxWidth: 560 }}>
+              Runs automatically in the background — nothing destructive happens without you
+              visiting Duplicate Cleanup yourself.
+            </p>
+            <div className="field">
+              <label>Nightly backup</label>
+              <div className="checks">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={backupScheduleEnabled}
+                    onChange={(e) => setBackupScheduleEnabled(e.target.checked)}
+                  />
+                  Save a backup to disk every night at 3am
+                </label>
+              </div>
+            </div>
+            <div className="field">
+              <label>Keep last</label>
+              <input
+                type="number"
+                min={1}
+                max={60}
+                value={backupRetentionCount}
+                onChange={(e) => setBackupRetentionCount(Number(e.target.value) || 1)}
+                style={{ maxWidth: 100 }}
+              />
+            </div>
+            <div className="field">
+              <label>Weekly duplicate scan</label>
+              <div className="checks">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={dedupeScanScheduleEnabled}
+                    onChange={(e) => setDedupeScanScheduleEnabled(e.target.checked)}
+                  />
+                  Check for orphan/duplicate files every Sunday and notify if anything's found
+                </label>
+              </div>
+            </div>
           </>
         )}
 

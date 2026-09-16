@@ -1,9 +1,165 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { playerApi } from './playerApi'
+import { playerApi, type PlayerSmartCriteria, type PlayerSmartRule } from './playerApi'
 import { usePlayerQueue } from './PlayerQueueContext'
 import { SongRow } from './PlayerShelves'
 import { IconPlay, IconPlus } from './icons'
+
+const RULE_FIELDS: PlayerSmartRule['field'][] = [
+  'favorited',
+  'genre',
+  'format',
+  'artist_id',
+  'play_count',
+  'last_played_days',
+]
+
+const EMPTY_CRITERIA: PlayerSmartCriteria = {
+  match: 'all',
+  rules: [],
+  sort: 'random',
+  limit: 50,
+}
+
+function SmartCriteriaEditor({
+  playlistId,
+  initial,
+  onSaved,
+}: {
+  playlistId: number
+  initial: PlayerSmartCriteria | null | undefined
+  onSaved: () => void
+}) {
+  const [criteria, setCriteria] = useState<PlayerSmartCriteria>(initial || EMPTY_CRITERIA)
+  const save = useMutation({
+    mutationFn: () => playerApi.updatePlaylistCriteria(playlistId, criteria),
+    onSuccess: onSaved,
+  })
+  const clear = useMutation({
+    mutationFn: () => playerApi.clearPlaylistCriteria(playlistId),
+    onSuccess: onSaved,
+  })
+
+  const updateRule = (i: number, patch: Partial<PlayerSmartRule>) => {
+    setCriteria((c) => ({
+      ...c,
+      rules: c.rules.map((r, idx) => (idx === i ? { ...r, ...patch } : r)),
+    }))
+  }
+
+  return (
+    <div className="smart-criteria-editor">
+      <div className="toolbar">
+        <label>
+          Match
+          <select
+            value={criteria.match}
+            onChange={(e) => setCriteria((c) => ({ ...c, match: e.target.value as 'all' | 'any' }))}
+          >
+            <option value="all">All rules</option>
+            <option value="any">Any rule</option>
+          </select>
+        </label>
+        <label>
+          Sort
+          <select
+            value={criteria.sort}
+            onChange={(e) => setCriteria((c) => ({ ...c, sort: e.target.value as PlayerSmartCriteria['sort'] }))}
+          >
+            <option value="random">Random</option>
+            <option value="recently_added">Recently added</option>
+            <option value="most_played">Most played</option>
+            <option value="title">Title</option>
+            <option value="artist">Artist</option>
+          </select>
+        </label>
+        <label>
+          Limit
+          <input
+            type="number"
+            min={1}
+            max={500}
+            value={criteria.limit}
+            onChange={(e) => setCriteria((c) => ({ ...c, limit: Number(e.target.value) || 50 }))}
+          />
+        </label>
+      </div>
+
+      {criteria.rules.map((rule, i) => (
+        <div className="toolbar" key={i}>
+          <select value={rule.field} onChange={(e) => updateRule(i, { field: e.target.value as PlayerSmartRule['field'] })}>
+            {RULE_FIELDS.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
+          <select value={rule.op} onChange={(e) => updateRule(i, { op: e.target.value as PlayerSmartRule['op'] })}>
+            <option value="eq">is</option>
+            <option value="ne">is not</option>
+            <option value="gte">≥</option>
+            <option value="lte">≤</option>
+            <option value="gt">&gt;</option>
+            <option value="lt">&lt;</option>
+          </select>
+          {rule.field === 'favorited' ? (
+            <select
+              value={String(rule.value)}
+              onChange={(e) => updateRule(i, { value: e.target.value === 'true' })}
+            >
+              <option value="true">Yes</option>
+              <option value="false">No</option>
+            </select>
+          ) : (
+            <input
+              value={rule.value == null ? '' : String(rule.value)}
+              onChange={(e) => {
+                const raw = e.target.value
+                const num = Number(raw)
+                updateRule(i, { value: raw !== '' && !Number.isNaN(num) ? num : raw })
+              }}
+              placeholder="value"
+            />
+          )}
+          <button
+            type="button"
+            className="pill-icon-btn danger"
+            onClick={() =>
+              setCriteria((c) => ({ ...c, rules: c.rules.filter((_, idx) => idx !== i) }))
+            }
+          >
+            ×
+          </button>
+        </div>
+      ))}
+
+      <button
+        type="button"
+        className="btn secondary"
+        onClick={() =>
+          setCriteria((c) => ({
+            ...c,
+            rules: [...c.rules, { field: 'favorited', op: 'eq', value: true }],
+          }))
+        }
+      >
+        Add rule
+      </button>
+
+      <div className="toolbar" style={{ marginTop: '0.5rem' }}>
+        <button type="button" className="btn" onClick={() => save.mutate()} disabled={save.isPending}>
+          Save rules
+        </button>
+        {initial && (
+          <button type="button" className="btn secondary" onClick={() => clear.mutate()} disabled={clear.isPending}>
+            Remove smart rules
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
 
 export function PlayerPlaylistDetailPage() {
   const { id } = useParams()
@@ -21,7 +177,7 @@ export function PlayerPlaylistDetailPage() {
   const suggestions = useQuery({
     queryKey: ['player-suggestions', playlistId],
     queryFn: () => playerApi.suggestions(playlistId),
-    enabled: !isBuiltin && !!data?.is_smart && (data?.track_count || 0) >= 10,
+    enabled: !isBuiltin && !!data?.is_smart && !data?.criteria && (data?.track_count || 0) >= 10,
     retry: false,
   })
 
@@ -48,11 +204,13 @@ export function PlayerPlaylistDetailPage() {
       qc.invalidateQueries({ queryKey: ['player-playlists'] })
     },
   })
+  const [editingRules, setEditingRules] = useState(false)
   if (isLoading) return <p className="muted">Loading…</p>
   if (error) return <p className="error">{(error as Error).message}</p>
   if (!data) return null
 
-  const needMore = !!data.is_smart && data.track_count < 10
+  const hasCriteria = !!data.criteria
+  const needMore = !!data.is_smart && !hasCriteria && data.track_count < 10
 
   return (
     <div>
@@ -69,10 +227,20 @@ export function PlayerPlaylistDetailPage() {
           </p>
         </div>
         <div className="toolbar">
-          {!data.builtin && (
+          {!data.builtin && !hasCriteria && (
             <button type="button" className="btn secondary" onClick={() => toggleSmart.mutate()}>
               {data.is_smart ? 'Disable Smart' : 'Enable Smart'}
             </button>
+          )}
+          {!data.builtin && (
+            <button type="button" className="btn secondary" onClick={() => setEditingRules((v) => !v)}>
+              {hasCriteria ? 'Edit smart rules' : 'Make smart (rules)'}
+            </button>
+          )}
+          {!data.builtin && (
+            <a className="btn secondary" href={playerApi.exportPlaylistUrl(playlistId)}>
+              Export M3U
+            </a>
           )}
           <button
             className="btn"
@@ -85,6 +253,18 @@ export function PlayerPlaylistDetailPage() {
         </div>
       </div>
 
+      {editingRules && (
+        <SmartCriteriaEditor
+          playlistId={playlistId}
+          initial={data.criteria}
+          onSaved={() => {
+            setEditingRules(false)
+            qc.invalidateQueries({ queryKey: ['player-playlist', id] })
+            qc.invalidateQueries({ queryKey: ['player-playlists'] })
+          }}
+        />
+      )}
+
       {needMore && (
         <div className="banner warn">
           Add at least {10 - data.track_count} more song{10 - data.track_count === 1 ? '' : 's'} to unlock
@@ -92,7 +272,7 @@ export function PlayerPlaylistDetailPage() {
         </div>
       )}
 
-      {!isBuiltin && data.is_smart && !needMore && (
+      {!isBuiltin && data.is_smart && !hasCriteria && !needMore && (
         <section className="suggest-block">
           <div className="page-header" style={{ marginBottom: '0.5rem' }}>
             <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Suggested for you</h2>
@@ -144,7 +324,7 @@ export function PlayerPlaylistDetailPage() {
             queue={data.tracks}
             sourceLabel={data.name}
             number={i + 1}
-            onRemove={data.builtin ? undefined : () => remove.mutate(t.id)}
+            onRemove={data.builtin || hasCriteria ? undefined : () => remove.mutate(t.id)}
             removeLabel="Remove from playlist"
           />
         ))}

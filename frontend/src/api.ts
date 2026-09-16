@@ -14,6 +14,10 @@ export type Health = {
   monitored_artists: number
   wanted_albums: number
   queue_size: number
+  pending_artists: number
+  skipped_albums: number
+  disk_free_bytes: number | null
+  low_disk_warning: boolean
 }
 
 export type Settings = {
@@ -46,6 +50,7 @@ export type Settings = {
   notify_token_set: boolean
   notify_on_complete: boolean
   notify_on_failure: boolean
+  notify_on_library_events: boolean
   upgrade_enabled: boolean
   fallback_providers_enabled: boolean
   media_refresh_url: string
@@ -60,6 +65,17 @@ export type Settings = {
   player_sharing_enabled: boolean
   download_concurrency: number
   max_retries: number
+  default_download_mode: 'auto' | 'manual'
+  lastfm_api_key: string
+  lastfm_api_secret_set: boolean
+  spotify_client_id: string
+  spotify_client_secret_set: boolean
+  backup_schedule_enabled: boolean
+  backup_retention_count: number
+  dedupe_scan_schedule_enabled: boolean
+  low_disk_threshold_gb: number
+  notify_on_maintenance: boolean
+  notify_on_health_alerts: boolean
   provider_ok: boolean | null
   provider_error: string | null
   deezer_ok: boolean | null
@@ -75,6 +91,14 @@ export type AppAuthStatus = {
   authenticated: boolean
   username: string | null
   password_set: boolean
+}
+
+export type AdminUser = {
+  id: number
+  username: string
+  display_name: string
+  is_active: boolean
+  created_at: string
 }
 
 export type ArtistSearchResult = {
@@ -119,6 +143,8 @@ export type Album = {
   monitored: boolean
   status: string
   status_reason?: string
+  skip_reason_code?: string
+  dismissed?: boolean
   musicbrainz_id?: string | null
   artist_credit?: string
   path: string | null
@@ -136,6 +162,12 @@ export type RelatedArtist = {
   provider?: string | null
 }
 
+export type SimilarArtist = {
+  name: string
+  match: number
+  already_in_library: number | null
+}
+
 export type Artist = {
   id: number
   provider: string
@@ -146,6 +178,10 @@ export type Artist = {
   monitored: boolean
   monitor_mode?: string
   include_singles?: boolean | null
+  status?: 'active' | 'pending'
+  pending_reason?: string
+  download_mode?: 'auto' | 'manual' | null
+  quality_pref?: 'flac' | '320' | '128' | null
   musicbrainz_id?: string | null
   added_at: string
   last_synced_at: string | null
@@ -222,6 +258,7 @@ export type ImportList = {
   id: number
   name: string
   names_raw: string
+  spotify_playlist_url: string | null
   interval_minutes: number
   enabled: boolean
   last_run_at: string | null
@@ -241,6 +278,74 @@ export type HistoryEvent = {
   event_type: string
   message: string
   created_at: string
+}
+
+export type SearchResults = {
+  artists: { id: number; name: string; image_url: string | null }[]
+  albums: {
+    id: number
+    title: string
+    artist_id: number
+    artist_name: string
+    cover_url: string | null
+  }[]
+}
+
+export type Stats = {
+  artists: number
+  albums_by_status: Record<string, number>
+  tracks: number
+  disk_usage_bytes: number
+  success_rate_30d: number | null
+  recent_events: { event_type: string; message: string; created_at: string }[]
+}
+
+export type CalendarEntry = {
+  album_id: number
+  title: string
+  artist_id: number
+  artist_name: string
+  release_date: string | null
+  status: string
+  cover_url: string | null
+}
+
+export type OrphanDbTrack = {
+  track_id: number
+  path: string
+  title: string
+  album_title: string
+  artist_name: string
+}
+
+export type OrphanFile = {
+  path: string
+  size_bytes: number
+}
+
+export type DuplicateGroup = {
+  reason: string
+  key: string
+  tracks: {
+    track_id: number
+    title: string
+    path: string | null
+    album_title: string
+    artist_name: string
+  }[]
+}
+
+export type MaintenanceScan = {
+  orphan_db_tracks: OrphanDbTrack[]
+  orphan_files: OrphanFile[]
+  duplicate_groups: DuplicateGroup[]
+}
+
+export type PlayerStats = {
+  total_plays: number
+  top_tracks: { track_id: number; title: string; artist_name: string; plays: number }[]
+  top_artists: { artist_id: number; artist_name: string; plays: number }[]
+  daily_plays: { date: string; plays: number }[]
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -272,6 +377,12 @@ export const api = {
     }),
   appLogout: () =>
     request<AppAuthStatus>('/auth/logout-session', { method: 'POST' }),
+  adminUsers: () => request<AdminUser[]>('/auth/users'),
+  createAdminUser: (body: { username: string; password: string; display_name?: string }) =>
+    request<AdminUser>('/auth/users', { method: 'POST', body: JSON.stringify(body) }),
+  updateAdminUser: (id: number, body: Record<string, unknown>) =>
+    request<AdminUser>(`/auth/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteAdminUser: (id: number) => request<{ ok: boolean }>(`/auth/users/${id}`, { method: 'DELETE' }),
   health: () => request<Health>('/health'),
   settings: (validate = false) => request<Settings>(`/settings?validate=${validate}`),
   updateSettings: (body: Record<string, unknown>) =>
@@ -328,12 +439,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ artist_ids: artistIds, preferred_id: preferredId }),
     }),
-  artists: () => request<Artist[]>('/artists'),
+  artists: (genre?: string) =>
+    request<Artist[]>(`/artists${genre ? `?genre=${encodeURIComponent(genre)}` : ''}`),
+  libraryGenres: () => request<{ genre: string; count: number }[]>('/library/genres'),
   artist: (id: number) => request<Artist>(`/artists/${id}`),
+  similarArtists: (id: number) => request<SimilarArtist[]>(`/artists/${id}/similar`),
   addArtist: (
     provider_id: string,
     provider?: string,
-    opts?: { include_singles?: boolean | null; download_missing?: boolean },
+    opts?: {
+      include_singles?: boolean | null
+      download_missing?: boolean
+      monitor_mode?: 'all' | 'new' | 'none'
+      download_mode?: 'auto' | 'manual' | null
+    },
   ) =>
     request<Artist>('/artists', {
       method: 'POST',
@@ -343,6 +462,8 @@ export const api = {
         monitored: true,
         download_missing: opts?.download_missing ?? true,
         include_singles: opts?.include_singles ?? null,
+        monitor_mode: opts?.monitor_mode ?? null,
+        download_mode: opts?.download_mode ?? null,
       }),
     }),
   deleteArtist: (id: number) =>
@@ -353,6 +474,21 @@ export const api = {
     request<Artist>(`/artists/${id}/refresh`, { method: 'POST' }),
   downloadMissing: (id: number) =>
     request<{ queued: number }>(`/artists/${id}/download-missing`, { method: 'POST' }),
+  pendingArtists: () => request<Artist[]>('/artists/pending'),
+  approveArtist: (id: number) =>
+    request<Artist>(`/artists/${id}/approve`, { method: 'POST' }),
+  rejectArtist: (id: number) =>
+    request<{ ok: boolean }>(`/artists/${id}/reject`, { method: 'POST' }),
+  bulkApproveArtists: (artistIds: number[]) =>
+    request<{ approved: number }>('/artists/pending/bulk-approve', {
+      method: 'POST',
+      body: JSON.stringify({ artist_ids: artistIds }),
+    }),
+  bulkRejectArtists: (artistIds: number[]) =>
+    request<{ rejected: number }>('/artists/pending/bulk-reject', {
+      method: 'POST',
+      body: JSON.stringify({ artist_ids: artistIds }),
+    }),
   wanted: (albumType?: string) =>
     request<Album[]>(
       albumType ? `/albums/wanted?album_type=${encodeURIComponent(albumType)}` : '/albums/wanted',
@@ -375,6 +511,30 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ album_ids: albumIds }),
     }),
+  skippedAlbums: (params?: {
+    artist_id?: number
+    reason_code?: string
+    album_type?: string
+    sort?: 'artist' | 'date'
+  }) => {
+    const q = new URLSearchParams()
+    if (params?.artist_id) q.set('artist_id', String(params.artist_id))
+    if (params?.reason_code) q.set('reason_code', params.reason_code)
+    if (params?.album_type) q.set('album_type', params.album_type)
+    if (params?.sort) q.set('sort', params.sort)
+    const qs = q.toString()
+    return request<Album[]>(`/albums/skipped${qs ? `?${qs}` : ''}`)
+  },
+  restoreSkippedAlbums: (albumIds: number[]) =>
+    request<{ restored: number }>('/albums/skipped/restore', {
+      method: 'POST',
+      body: JSON.stringify({ album_ids: albumIds }),
+    }),
+  dismissSkippedAlbums: (albumIds: number[]) =>
+    request<{ dismissed: number }>('/albums/skipped/dismiss', {
+      method: 'POST',
+      body: JSON.stringify({ album_ids: albumIds }),
+    }),
   upgradable: () => request<Album[]>('/albums/upgradable'),
   upgradeAll: () =>
     request<{ queued: number; target?: string; message?: string }>('/albums/upgrade-all', {
@@ -393,6 +553,11 @@ export const api = {
       `/albums/${id}?delete_files=${deleteFiles}`,
       { method: 'DELETE' },
     ),
+  bulkSetTrackGenre: (albumId: number, trackIds: number[], genre: string) =>
+    request<{ ok: boolean; updated: number }>(`/albums/${albumId}/tracks/bulk-genre`, {
+      method: 'POST',
+      body: JSON.stringify({ track_ids: trackIds, genre }),
+    }),
   queue: (all = false) => request<DownloadJob[]>(`/queue?all_jobs=${all}`),
   cancelJob: (id: number) =>
     request<DownloadJob>(`/queue/${id}/cancel`, { method: 'POST' }),
@@ -407,9 +572,28 @@ export const api = {
       method: 'POST',
     })
   },
+  bulkCancelJobs: (jobIds: number[]) =>
+    request<{ cancelled: number }>('/queue/bulk-cancel', {
+      method: 'POST',
+      body: JSON.stringify({ job_ids: jobIds }),
+    }),
+  bulkRetryJobs: (jobIds: number[]) =>
+    request<{ retried: number }>('/queue/bulk-retry', {
+      method: 'POST',
+      body: JSON.stringify({ job_ids: jobIds }),
+    }),
   clearFinishedQueue: () =>
     request<{ cleared: number }>('/queue/clear-finished', { method: 'POST' }),
   history: () => request<HistoryEvent[]>('/history'),
+  search: (q: string) => request<SearchResults>(`/search?q=${encodeURIComponent(q)}`),
+  stats: () => request<Stats>('/stats'),
+  calendar: () => request<CalendarEntry[]>('/calendar'),
+  maintenanceScan: () => request<MaintenanceScan>('/maintenance/duplicates'),
+  maintenanceResolve: (body: Record<string, unknown>) =>
+    request<{ ok: boolean }>('/maintenance/resolve', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   scan: () =>
     request<LibraryJob>('/library/scan', { method: 'POST' }),
   importLibrary: (linkProviders = true) =>
@@ -445,10 +629,19 @@ export const api = {
   },
   restoreJob: () => request<RestoreJob>('/backup/restore/job'),
   importLists: () => request<ImportList[]>('/import-lists'),
-  createImportList: (body: { name: string; names_raw: string; interval_minutes: number; enabled: boolean }) =>
-    request<ImportList>('/import-lists', { method: 'POST', body: JSON.stringify(body) }),
-  updateImportList: (id: number, body: Partial<Pick<ImportList, 'name' | 'names_raw' | 'interval_minutes' | 'enabled'>>) =>
-    request<ImportList>(`/import-lists/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  createImportList: (body: {
+    name: string
+    names_raw: string
+    spotify_playlist_url?: string
+    interval_minutes: number
+    enabled: boolean
+  }) => request<ImportList>('/import-lists', { method: 'POST', body: JSON.stringify(body) }),
+  updateImportList: (
+    id: number,
+    body: Partial<
+      Pick<ImportList, 'name' | 'names_raw' | 'spotify_playlist_url' | 'interval_minutes' | 'enabled'>
+    >,
+  ) => request<ImportList>(`/import-lists/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteImportList: (id: number) =>
     request<void>(`/import-lists/${id}`, { method: 'DELETE' }),
   runImportList: (id: number) =>

@@ -9,20 +9,30 @@ from app.models.schemas import (
     ArtistOut,
     ArtistPatch,
     ArtistSearchResult,
+    BulkArtistIdsRequest,
     BulkArtistSearchRequest,
     BulkArtistSearchResult,
+    SimilarArtistOut,
 )
 from app.services.artists import (
     add_artist,
+    approve_pending_artist,
+    bulk_approve_pending_artists,
+    bulk_reject_pending_artists,
     collision_groups,
     delete_artist,
+    effective_download_mode,
+    effective_quality,
+    find_artist_by_normalized_name,
     find_linked_artists,
     get_artist_detail,
     grouped_artist_stats,
     list_artists_grouped,
+    list_pending_artists,
     merge_album_rows,
     merge_artists,
     name_collision_ids,
+    reject_pending_artist,
     sync_artist_albums,
 )
 from app.services.download_queue import download_queue
@@ -31,6 +41,14 @@ from app.services.providers.base import ProviderError
 from app.services.settings_service import ensure_settings
 
 router = APIRouter(prefix="/artists", tags=["artists"])
+
+
+def _group_target_bitrate(db: Session, linked: list[Artist], settings) -> str:
+    """Per-artist quality_pref override wins; falls back to the global default."""
+    primary = linked[0] if linked else None
+    if primary is not None:
+        return effective_quality(db, primary)
+    return (settings.bitrate or "flac").lower()
 
 
 def _album_out(album, sources: list[str] | None = None, include_tracks: bool = True, *, target_bitrate: str = "flac", upgrade_enabled: bool = True):
@@ -76,6 +94,8 @@ def _album_out(album, sources: list[str] | None = None, include_tracks: bool = T
         monitored=album.monitored,
         status=album.status,
         status_reason=getattr(album, "status_reason", "") or "",
+        skip_reason_code=getattr(album, "skip_reason_code", "") or "",
+        dismissed=bool(getattr(album, "dismissed", False)),
         musicbrainz_id=getattr(album, "musicbrainz_id", None),
         artist_credit=getattr(album, "artist_credit", "") or "",
         path=album.path,
@@ -161,6 +181,9 @@ def _artist_group_out(
         monitored=any(a.monitored for a in artists),
         monitor_mode=getattr(primary, "monitor_mode", None) or "all",
         include_singles=getattr(primary, "include_singles", None),
+        status=getattr(primary, "status", None) or "active",
+        pending_reason=getattr(primary, "pending_reason", None) or "",
+        download_mode=getattr(primary, "download_mode", None),
         musicbrainz_id=next(
             (
                 (getattr(a, "musicbrainz_id", None) or "").strip()
@@ -201,7 +224,7 @@ def search_artists(q: str = Query(..., min_length=1), limit: int = 25, db: Sessi
         mb_count: int | None = None
         if name_key:
             if name_key not in mb_counts:
-                mbid = musicbrainz.resolve_artist(r.name)
+                mbid = musicbrainz.resolve_artist(r.name, fast=True)
                 mb_counts[name_key] = (
                     musicbrainz.count_release_groups(mbid) if mbid else None
                 )
@@ -248,7 +271,7 @@ def bulk_search_artists(payload: BulkArtistSearchRequest, db: Session = Depends(
             continue
         results = []
         for r in hits:
-            mbid = musicbrainz.resolve_artist(r.name)
+            mbid = musicbrainz.resolve_artist(r.name, fast=True)
             mb_count = musicbrainz.count_release_groups(mbid) if mbid else None
             results.append(
                 ArtistSearchResult(
@@ -314,7 +337,7 @@ def merge_artist_rows(payload: ArtistMergeRequest, db: Session = Depends(get_db)
                 linked,
                 include_albums=False,
                 active=active,
-                target_bitrate=(settings.bitrate or "flac").lower(),
+                target_bitrate=_group_target_bitrate(db, linked, settings),
                 upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
                 collision_ids=collisions,
             )
@@ -323,22 +346,41 @@ def merge_artist_rows(payload: ArtistMergeRequest, db: Session = Depends(get_db)
 
 
 @router.get("", response_model=list[ArtistOut])
-def get_artists(db: Session = Depends(get_db)):
+def get_artists(db: Session = Depends(get_db), genre: str | None = Query(None)):
     settings = ensure_settings(db)
     active = (settings.active_provider or "deezer").lower()
-    target = (settings.bitrate or "flac").lower()
     up_on = bool(getattr(settings, "upgrade_enabled", True))
     collisions = name_collision_ids(db)
+
+    genre_artist_ids: set[int] | None = None
+    if genre:
+        from sqlalchemy import select as _select
+
+        from app.models import Album, Track
+
+        genre_artist_ids = set(
+            db.scalars(
+                _select(Album.artist_id)
+                .join(Track, Track.album_id == Album.id)
+                .where(Track.genre == genre)
+                .distinct()
+            ).all()
+        )
+
+    groups = list_artists_grouped(db)
+    if genre_artist_ids is not None:
+        groups = [g for g in groups if any(a.id in genre_artist_ids for a in g)]
+
     return [
         _artist_group_out(
             group,
             include_albums=False,
             active=active,
-            target_bitrate=target,
+            target_bitrate=_group_target_bitrate(db, group, settings),
             upgrade_enabled=up_on,
             collision_ids=collisions,
         )
-        for group in list_artists_grouped(db)
+        for group in groups
     ]
 
 
@@ -359,6 +401,8 @@ def create_artist(payload: ArtistCreate, db: Session = Depends(get_db)):
             download_missing=payload.download_missing,
             provider_name=payload.provider or settings.active_provider,
             include_singles=payload.include_singles,
+            download_mode=payload.download_mode,
+            monitor_mode=payload.monitor_mode,
         )
     except ProviderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -373,10 +417,63 @@ def create_artist(payload: ArtistCreate, db: Session = Depends(get_db)):
         linked,
         include_albums=True,
         active=active,
-        target_bitrate=(settings.bitrate or "flac").lower(),
+        target_bitrate=_group_target_bitrate(db, linked, settings),
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
         collision_ids=name_collision_ids(db),
     )
+
+
+@router.get("/pending", response_model=list[ArtistOut])
+def get_pending_artists(db: Session = Depends(get_db)):
+    settings = ensure_settings(db)
+    active = (settings.active_provider or "deezer").lower()
+    return [
+        _artist_group_out(
+            [artist],
+            include_albums=False,
+            active=active,
+            target_bitrate=_group_target_bitrate(db, [artist], settings),
+            upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
+        )
+        for artist in list_pending_artists(db)
+    ]
+
+
+@router.post("/pending/bulk-approve")
+def bulk_approve_pending(payload: BulkArtistIdsRequest, db: Session = Depends(get_db)):
+    return bulk_approve_pending_artists(db, payload.artist_ids)
+
+
+@router.post("/pending/bulk-reject")
+def bulk_reject_pending(payload: BulkArtistIdsRequest, db: Session = Depends(get_db)):
+    return bulk_reject_pending_artists(db, payload.artist_ids)
+
+
+@router.post("/{artist_id}/approve", response_model=ArtistOut)
+def approve_artist(artist_id: int, db: Session = Depends(get_db)):
+    try:
+        artist = approve_pending_artist(db, artist_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    detail = get_artist_detail(db, artist.id)
+    settings = ensure_settings(db)
+    group = [detail] if detail else [artist]
+    return _artist_group_out(
+        group,
+        include_albums=False,
+        active=(settings.active_provider or "deezer").lower(),
+        target_bitrate=_group_target_bitrate(db, group, settings),
+        upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
+    )
+
+
+@router.post("/{artist_id}/reject")
+def reject_artist(artist_id: int, db: Session = Depends(get_db)):
+    try:
+        reject_pending_artist(db, artist_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True}
 
 
 @router.get("/{artist_id}", response_model=ArtistOut)
@@ -391,10 +488,34 @@ def get_artist(artist_id: int, db: Session = Depends(get_db)):
         linked,
         include_albums=True,
         active=active,
-        target_bitrate=(settings.bitrate or "flac").lower(),
+        target_bitrate=_group_target_bitrate(db, linked, settings),
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
         collision_ids=name_collision_ids(db),
     )
+
+
+@router.get("/{artist_id}/similar", response_model=list[SimilarArtistOut])
+def get_similar_artists(artist_id: int, db: Session = Depends(get_db)):
+    from app.services import lastfm
+
+    artist = db.get(Artist, artist_id)
+    if not artist:
+        raise HTTPException(status_code=404, detail="Artist not found")
+    try:
+        hits = lastfm.similar_artists(db, artist.name)
+    except lastfm.LastfmError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    out = []
+    for hit in hits:
+        existing = find_artist_by_normalized_name(db, hit["name"], artist.provider)
+        out.append(
+            SimilarArtistOut(
+                name=hit["name"],
+                match=hit["match"],
+                already_in_library=existing.id if existing else None,
+            )
+        )
+    return out
 
 
 @router.patch("/{artist_id}", response_model=ArtistOut)
@@ -424,7 +545,12 @@ def patch_artist(artist_id: int, payload: ArtistPatch, db: Session = Depends(get
                 if row.provider == "local":
                     continue
                 sync_artist_albums(db, row)
-                if row.monitored and (getattr(row, "monitor_mode", "all") or "all") != "none":
+                if (
+                    row.monitored
+                    and (getattr(row, "monitor_mode", "all") or "all") != "none"
+                    and row.status == "active"
+                    and effective_download_mode(db, row) == "auto"
+                ):
                     download_queue.enqueue_artist_missing(db, row.id)
             except ProviderError:
                 db.rollback()
@@ -439,7 +565,7 @@ def patch_artist(artist_id: int, payload: ArtistPatch, db: Session = Depends(get
         linked,
         include_albums=True,
         active=active,
-        target_bitrate=(settings.bitrate or "flac").lower(),
+        target_bitrate=_group_target_bitrate(db, linked, settings),
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
         collision_ids=name_collision_ids(db),
     )
@@ -492,7 +618,7 @@ def refresh_artist(artist_id: int, db: Session = Depends(get_db)):
         linked,
         include_albums=True,
         active=active,
-        target_bitrate=(settings.bitrate or "flac").lower(),
+        target_bitrate=_group_target_bitrate(db, linked, settings),
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
         collision_ids=name_collision_ids(db),
     )

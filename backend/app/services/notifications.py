@@ -64,6 +64,12 @@ def send_notification(
         return
     if kind in {"failure", "auth"} and not getattr(settings, "notify_on_failure", True):
         return
+    if kind == "library" and not getattr(settings, "notify_on_library_events", False):
+        return
+    if kind == "maintenance" and not getattr(settings, "notify_on_maintenance", True):
+        return
+    if kind == "health" and not getattr(settings, "notify_on_health_alerts", True):
+        return
     channel = (channel if channel is not None else getattr(settings, "notify_channel", None) or "custom").strip().lower() or "custom"
     token = (token if token is not None else getattr(settings, "notify_token", None) or "").strip()
     content = f"{title}\n{message}"

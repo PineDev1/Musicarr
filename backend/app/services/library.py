@@ -65,6 +65,7 @@ def _read_tags(path: Path) -> dict:
         "disc": None,
         "isrc": None,
         "date": None,
+        "genre": None,
     }
     try:
         audio = MutagenFile(path, easy=True)
@@ -86,6 +87,7 @@ def _read_tags(path: Path) -> dict:
         meta["album"] = first("album")
         meta["isrc"] = first("isrc")
         meta["date"] = first("date") or first("year")
+        meta["genre"] = first("genre")
         track = first("tracknumber")
         if track:
             meta["track"] = track.split("/")[0]
@@ -144,6 +146,7 @@ def _collect_files(root: Path, *, on_progress: ProgressCb | None = None) -> list
                 "disc_no": disc_no or 1,
                 "isrc": tags.get("isrc"),
                 "year": year,
+                "genre": tags.get("genre"),
             }
         )
         if len(out) % 50 == 0:
@@ -383,6 +386,7 @@ def _upsert_track(
     disc_no: int,
     isrc: str | None,
     path: str,
+    genre: str | None = None,
 ) -> Track:
     # Same file imported twice (or rematch): attach to existing row by path first.
     path_key = str(path)
@@ -395,6 +399,8 @@ def _upsert_track(
             existing.track_no = track_no or existing.track_no
             existing.disc_no = disc_no or existing.disc_no
             existing.isrc = isrc or existing.isrc
+        if genre and not existing.genre:
+            existing.genre = genre
         return existing
 
     tracks = _tracks_for_album(db, album)
@@ -416,6 +422,8 @@ def _upsert_track(
             track.isrc = isrc
         if title and not track.title:
             track.title = title
+        if genre and not track.genre:
+            track.genre = genre
         if not track.duration:
             try:
                 audio = MutagenFile(path)
@@ -451,6 +459,7 @@ def _upsert_track(
         duration=duration,
         isrc=isrc,
         path=path,
+        genre=genre or "",
     )
     db.add(track)
     index.add(track)
@@ -586,6 +595,7 @@ def import_existing_library(
                         disc_no=f["disc_no"],
                         isrc=f.get("isrc"),
                         path=str(f["path"]),
+                        genre=f.get("genre"),
                     )
                     tracks_linked += 1
                     folder = str(f["path"].parent)
@@ -622,6 +632,9 @@ def import_existing_library(
             + f". Scan also matched {scan['matched']} existing DB tracks."
         )
         add_history(db, "library_import", msg)
+        from app.services.notifications import send_notification
+
+        send_notification(db, "Library import complete", msg, kind="library")
         return {
             "files_seen": len(files),
             "artists_created": artists_created,
@@ -710,6 +723,8 @@ def scan_library(db: Session, *, on_progress: ProgressCb | None = None) -> dict:
 
         if track:
             track.path = sp
+            if f.get("genre") and not track.genre:
+                track.genre = f["genre"]
             if track.album:
                 linked = sum(1 for t in track.album.tracks if t.path)
                 if linked >= max(1, (track.album.track_count or len(track.album.tracks)) // 2):
@@ -741,6 +756,9 @@ def scan_library(db: Session, *, on_progress: ProgressCb | None = None) -> dict:
     db.commit()
     msg = f"Scan complete: {len(files)} files, {matched} matched, {unmatched} unmatched"
     add_history(db, "library_scan", msg)
+    from app.services.notifications import send_notification
+
+    send_notification(db, "Library scan complete", msg, kind="library")
     return {
         "files_seen": len(files),
         "matched": matched,
@@ -1006,4 +1024,7 @@ def reorganize_library(db: Session, *, on_progress: ProgressCb | None = None) ->
     db.commit()
     msg = f"Reorganized library: moved {moved}, skipped {skipped}"
     add_history(db, "reorganize", msg)
+    from app.services.notifications import send_notification
+
+    send_notification(db, "Library reorganized", msg, kind="library")
     return {"moved": moved, "skipped": skipped, "message": msg}

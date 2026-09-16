@@ -3,6 +3,9 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.schemas import (
+    AdminUserCreate,
+    AdminUserOut,
+    AdminUserUpdate,
     AppAuthStatus,
     AppLoginRequest,
     QobuzLoginRequest,
@@ -10,7 +13,7 @@ from app.models.schemas import (
     SettingsOut,
     TidalDeviceOut,
 )
-from app.services import app_auth
+from app.services import admin_auth, app_auth
 from app.services.history import add_history
 from app.services.providers import get_provider
 from app.services.providers.base import ProviderError
@@ -36,13 +39,22 @@ def app_login(payload: AppLoginRequest, response: Response, db: Session = Depend
     settings = ensure_settings(db)
     expected_user = (getattr(settings, "auth_username", None) or "admin").strip() or "admin"
     username = (payload.username or "").strip()
-    if not username or not hmac_compare(username, expected_user):
+    token: str | None = None
+    if (
+        username
+        and hmac_compare(username, expected_user)
+        and app_auth.verify_password(payload.password, getattr(settings, "auth_password_hash", "") or "")
+    ):
+        token = app_auth.create_session_token(db, expected_user)
+        add_history(db, "app_login", f"Signed in as {expected_user}")
+    else:
+        admin_user = admin_auth.authenticate(db, username, payload.password)
+        if admin_user:
+            token = app_auth.create_session_token(db, admin_user.username, user_id=admin_user.id)
+            add_history(db, "app_login", f"Signed in as {admin_user.username}")
+    if not token:
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    if not app_auth.verify_password(payload.password, getattr(settings, "auth_password_hash", "") or ""):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    token = app_auth.create_session_token(db, expected_user)
     app_auth.set_session_cookie(response, token, db)
-    add_history(db, "app_login", f"Signed in as {expected_user}")
     return AppAuthStatus(**app_auth.auth_status(db, token))
 
 
@@ -56,6 +68,47 @@ def hmac_compare(a: str, b: str) -> bool:
 def app_logout_session(response: Response, db: Session = Depends(get_db)):
     app_auth.clear_session_cookie(response, db)
     return AppAuthStatus(**app_auth.auth_status(db, None))
+
+
+@router.get("/users", response_model=list[AdminUserOut])
+def list_admin_users(db: Session = Depends(get_db)):
+    return [admin_auth.admin_user_out(u) for u in admin_auth.list_users(db)]
+
+
+@router.post("/users", response_model=AdminUserOut)
+def create_admin_user(payload: AdminUserCreate, db: Session = Depends(get_db)):
+    try:
+        user = admin_auth.create_user(
+            db, username=payload.username, password=payload.password, display_name=payload.display_name
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    add_history(db, "admin_user_added", f"Added admin user {user.username}")
+    return admin_auth.admin_user_out(user)
+
+
+@router.patch("/users/{user_id}", response_model=AdminUserOut)
+def update_admin_user(user_id: int, payload: AdminUserUpdate, db: Session = Depends(get_db)):
+    try:
+        user = admin_auth.update_user(
+            db,
+            user_id,
+            password=payload.password,
+            display_name=payload.display_name,
+            is_active=payload.is_active,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return admin_auth.admin_user_out(user)
+
+
+@router.delete("/users/{user_id}")
+def delete_admin_user(user_id: int, db: Session = Depends(get_db)):
+    try:
+        admin_auth.delete_user(db, user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True}
 
 
 @router.post("/{provider}/logout", response_model=SettingsOut)

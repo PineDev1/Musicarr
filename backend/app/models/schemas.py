@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -39,6 +39,7 @@ class SettingsOut(BaseModel):
     notify_token_set: bool = False
     notify_on_complete: bool = True
     notify_on_failure: bool = True
+    notify_on_library_events: bool = False
     upgrade_enabled: bool = True
     fallback_providers_enabled: bool = True
     media_refresh_url: str = ""
@@ -53,6 +54,17 @@ class SettingsOut(BaseModel):
     player_sharing_enabled: bool = True
     download_concurrency: int
     max_retries: int
+    default_download_mode: str = "manual"
+    lastfm_api_key: str = ""
+    lastfm_api_secret_set: bool = False
+    spotify_client_id: str = ""
+    spotify_client_secret_set: bool = False
+    backup_schedule_enabled: bool = True
+    backup_retention_count: int = 7
+    dedupe_scan_schedule_enabled: bool = True
+    low_disk_threshold_gb: int = 10
+    notify_on_maintenance: bool = True
+    notify_on_health_alerts: bool = True
     provider_ok: bool | None = None
     provider_error: str | None = None
     deezer_ok: bool | None = None
@@ -87,6 +99,7 @@ class SettingsUpdate(BaseModel):
     notify_token: str | None = None
     notify_on_complete: bool | None = None
     notify_on_failure: bool | None = None
+    notify_on_library_events: bool | None = None
     upgrade_enabled: bool | None = None
     fallback_providers_enabled: bool | None = None
     media_refresh_url: str | None = None
@@ -101,6 +114,17 @@ class SettingsUpdate(BaseModel):
     player_sharing_enabled: bool | None = None
     download_concurrency: int | None = Field(default=None, ge=1, le=4)
     max_retries: int | None = Field(default=None, ge=0, le=10)
+    default_download_mode: Literal["auto", "manual"] | None = None
+    lastfm_api_key: str | None = None
+    lastfm_api_secret: str | None = None
+    spotify_client_id: str | None = None
+    spotify_client_secret: str | None = None
+    backup_schedule_enabled: bool | None = None
+    backup_retention_count: int | None = Field(default=None, ge=1, le=60)
+    dedupe_scan_schedule_enabled: bool | None = None
+    low_disk_threshold_gb: int | None = Field(default=None, ge=1, le=1000)
+    notify_on_maintenance: bool | None = None
+    notify_on_health_alerts: bool | None = None
 
 
 class NotifyTestRequest(BaseModel):
@@ -125,6 +149,94 @@ class HealthOut(BaseModel):
     monitored_artists: int
     wanted_albums: int
     queue_size: int
+    pending_artists: int = 0
+    skipped_albums: int = 0
+    disk_free_bytes: int | None = None
+    low_disk_warning: bool = False
+
+
+class SearchArtistHit(BaseModel):
+    id: int
+    name: str
+    image_url: str | None = None
+
+
+class SearchAlbumHit(BaseModel):
+    id: int
+    title: str
+    artist_id: int
+    artist_name: str = ""
+    cover_url: str | None = None
+
+
+class SearchResultsOut(BaseModel):
+    artists: list[SearchArtistHit] = []
+    albums: list[SearchAlbumHit] = []
+
+
+class StatsRecentEvent(BaseModel):
+    event_type: str
+    message: str
+    created_at: datetime
+
+
+class StatsOut(BaseModel):
+    artists: int
+    albums_by_status: dict[str, int] = {}
+    tracks: int
+    disk_usage_bytes: int
+    success_rate_30d: float | None = None
+    recent_events: list[StatsRecentEvent] = []
+
+
+class CalendarEntryOut(BaseModel):
+    album_id: int
+    title: str
+    artist_id: int
+    artist_name: str = ""
+    release_date: str | None = None
+    status: str
+    cover_url: str | None = None
+
+
+class OrphanDbTrackOut(BaseModel):
+    track_id: int
+    path: str
+    title: str
+    album_title: str = ""
+    artist_name: str = ""
+
+
+class OrphanFileOut(BaseModel):
+    path: str
+    size_bytes: int = 0
+
+
+class DuplicateTrackOut(BaseModel):
+    track_id: int
+    title: str
+    path: str | None = None
+    album_title: str = ""
+    artist_name: str = ""
+
+
+class DuplicateGroupOut(BaseModel):
+    reason: str
+    key: str
+    tracks: list[DuplicateTrackOut] = []
+
+
+class MaintenanceScanOut(BaseModel):
+    orphan_db_tracks: list[OrphanDbTrackOut] = []
+    orphan_files: list[OrphanFileOut] = []
+    duplicate_groups: list[DuplicateGroupOut] = []
+
+
+class MaintenanceResolveRequest(BaseModel):
+    unlink_track_id: int | None = None
+    delete_file_path: str | None = None
+    keep_track_id: int | None = None
+    delete_track_ids: list[int] = []
 
 
 class ArtistSearchResult(BaseModel):
@@ -181,6 +293,8 @@ class AlbumOut(BaseModel):
     monitored: bool
     status: str
     status_reason: str = ""
+    skip_reason_code: str = ""
+    dismissed: bool = False
     musicbrainz_id: str | None = None
     artist_credit: str = ""
     path: str | None
@@ -201,6 +315,12 @@ class RelatedArtistOut(BaseModel):
     provider: str | None = None
 
 
+class SimilarArtistOut(BaseModel):
+    name: str
+    match: float = 0.0
+    already_in_library: int | None = None
+
+
 class ArtistOut(BaseModel):
     id: int
     provider: str = "deezer"
@@ -211,6 +331,10 @@ class ArtistOut(BaseModel):
     monitored: bool
     monitor_mode: str = "all"
     include_singles: bool | None = None
+    status: str = "active"
+    pending_reason: str = ""
+    download_mode: str | None = None
+    quality_pref: str | None = None
     musicbrainz_id: str | None = None
     added_at: datetime
     last_synced_at: datetime | None
@@ -236,17 +360,26 @@ class ArtistCreate(BaseModel):
     monitored: bool = True
     download_missing: bool = True
     include_singles: bool | None = None
+    monitor_mode: Literal["all", "new", "none"] | None = None
+    download_mode: Literal["auto", "manual"] | None = None
 
 
 class ArtistPatch(BaseModel):
     monitored: bool | None = None
     monitor_mode: Literal["all", "new", "none"] | None = None
     include_singles: bool | None = None
+    download_mode: Literal["auto", "manual"] | None = None
+    quality_pref: Bitrate | None = None
+
+
+class BulkArtistIdsRequest(BaseModel):
+    artist_ids: list[int]
 
 
 class ImportListCreate(BaseModel):
     name: str
-    names_raw: str
+    names_raw: str = ""
+    spotify_playlist_url: str | None = None
     interval_minutes: int = Field(default=720, ge=15, le=10080)
     enabled: bool = True
 
@@ -254,6 +387,7 @@ class ImportListCreate(BaseModel):
 class ImportListUpdate(BaseModel):
     name: str | None = None
     names_raw: str | None = None
+    spotify_playlist_url: str | None = None
     interval_minutes: int | None = Field(default=None, ge=15, le=10080)
     enabled: bool | None = None
 
@@ -262,6 +396,7 @@ class ImportListOut(BaseModel):
     id: int
     name: str
     names_raw: str
+    spotify_playlist_url: str | None = None
     interval_minutes: int
     enabled: bool
     last_run_at: datetime | None
@@ -418,6 +553,29 @@ class AppAuthStatus(BaseModel):
     password_set: bool = False
 
 
+class AdminUserOut(BaseModel):
+    id: int
+    username: str
+    display_name: str = ""
+    is_active: bool = True
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AdminUserCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=4, max_length=256)
+    display_name: str = ""
+
+
+class AdminUserUpdate(BaseModel):
+    password: str | None = Field(default=None, min_length=4, max_length=256)
+    display_name: str | None = None
+    is_active: bool | None = None
+
+
 class PlayerUserOut(BaseModel):
     id: int
     username: str
@@ -469,6 +627,12 @@ class PlayerTrackOut(BaseModel):
     cover_url: str | None = None
     quality: str = ""
     format: str = ""
+    genre: str = ""
+
+
+class PlayerLyricsOut(BaseModel):
+    plain: str | None = None
+    synced: str | None = None
 
 
 class PlayerAlbumOut(BaseModel):
@@ -490,6 +654,19 @@ class PlayerArtistOut(BaseModel):
     album_count: int = 0
 
 
+class PlayerSmartRule(BaseModel):
+    field: str
+    op: str
+    value: Any = None
+
+
+class PlayerSmartCriteria(BaseModel):
+    match: str = "all"
+    rules: list[PlayerSmartRule] = []
+    sort: str = "random"
+    limit: int = Field(default=50, ge=1, le=500)
+
+
 class PlayerPlaylistOut(BaseModel):
     id: int | str
     name: str
@@ -498,6 +675,7 @@ class PlayerPlaylistOut(BaseModel):
     updated_at: datetime | None = None
     tracks: list[PlayerTrackOut] = []
     is_smart: bool = False
+    criteria: PlayerSmartCriteria | None = None
     builtin: bool = False
     kind: str | None = None
 
@@ -514,6 +692,17 @@ class PlayerPlaylistUpdate(BaseModel):
 
 class PlayerPlaylistAddTracks(BaseModel):
     track_ids: list[int]
+
+
+class PlayerPlaylistImportResult(BaseModel):
+    playlist_id: int
+    matched: int
+    total: int
+
+
+class PlayerCastTokenOut(BaseModel):
+    token: str
+    expires_at: datetime
 
 
 class PlayerPasswordChange(BaseModel):

@@ -1,10 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { useRef } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
+import { useToast } from '../Toast'
 import { playerApi } from './playerApi'
 import { IconHeart } from './icons'
 
 export function PlayerPlaylistsPage() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
+  const toast = useToast()
+  const fileRef = useRef<HTMLInputElement | null>(null)
   const builtins = useQuery({ queryKey: ['player-builtins'], queryFn: playerApi.builtins })
   const { data, isLoading, error } = useQuery({
     queryKey: ['player-playlists'],
@@ -13,6 +18,15 @@ export function PlayerPlaylistsPage() {
   const remove = useMutation({
     mutationFn: (id: number) => playerApi.deletePlaylist(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['player-playlists'] }),
+  })
+  const importM3u = useMutation({
+    mutationFn: (file: File) => playerApi.importPlaylist(file),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['player-playlists'] })
+      toast.push(`Imported ${res.matched}/${res.total} tracks`, 'ok')
+      navigate(`/player/playlists/${res.playlist_id}`)
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
   if (isLoading) return <p className="muted">Loading…</p>
@@ -25,6 +39,20 @@ export function PlayerPlaylistsPage() {
           <h1>Playlists</h1>
           <p>Built-in mixes and your collections. Use + to create one.</p>
         </div>
+        <button type="button" className="btn secondary" onClick={() => fileRef.current?.click()}>
+          Import M3U
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".m3u,.m3u8,audio/x-mpegurl"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            if (file) importM3u.mutate(file)
+            e.target.value = ''
+          }}
+        />
       </div>
 
       <h2 className="section-label">Library mixes</h2>

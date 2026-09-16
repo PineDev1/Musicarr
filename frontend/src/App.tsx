@@ -8,13 +8,18 @@ import { ActivityPage } from './pages/ActivityPage'
 import { AddArtistPage } from './pages/AddArtistPage'
 import { AlbumPage } from './pages/AlbumPage'
 import { ArtistPage } from './pages/ArtistPage'
+import { CalendarPage } from './pages/CalendarPage'
+import { DashboardPage } from './pages/DashboardPage'
 import { ImportListsPage } from './pages/ImportListsPage'
 import { ImportReviewPage } from './pages/ImportReviewPage'
 import { LibraryPage } from './pages/LibraryPage'
 import { LoginPage } from './pages/LoginPage'
+import { MaintenancePage } from './pages/MaintenancePage'
+import { PendingArtistsPage } from './pages/PendingArtistsPage'
 import { QueuePage } from './pages/QueuePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { SetupWizardPage, isSetupComplete, markSetupDone } from './pages/SetupWizardPage'
+import { SkippedReleasesPage } from './pages/SkippedReleasesPage'
 import { UpgradesPage } from './pages/UpgradesPage'
 import { WantedPage } from './pages/WantedPage'
 import { NowPlayingPage } from './pages/NowPlayingPage'
@@ -84,10 +89,13 @@ function AdminApp() {
       ) : (
         <Route element={<Layout />}>
           <Route index element={<LibraryPage />} />
+          <Route path="dashboard" element={<DashboardPage />} />
           <Route path="add" element={<AddArtistPage />} />
           <Route path="artists/:id" element={<ArtistPage />} />
           <Route path="albums/:id" element={<AlbumPage />} />
           <Route path="wanted" element={<WantedPage />} />
+          <Route path="skipped" element={<SkippedReleasesPage />} />
+          <Route path="pending-artists" element={<PendingArtistsPage />} />
           <Route path="upgrades" element={<UpgradesPage />} />
           <Route path="queue" element={<QueuePage />} />
           <Route path="now-playing" element={<NowPlayingPage />} />
@@ -95,6 +103,8 @@ function AdminApp() {
           <Route path="settings" element={<SettingsPage />} />
           <Route path="import-review" element={<ImportReviewPage />} />
           <Route path="import-lists" element={<ImportListsPage />} />
+          <Route path="calendar" element={<CalendarPage />} />
+          <Route path="maintenance" element={<MaintenancePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       )}

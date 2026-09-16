@@ -103,9 +103,108 @@ textarea {
   color: var(--text);
 }
 
+.nav-group {
+  border: none;
+}
+
+.nav-group summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0.5rem 0.85rem;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.nav-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.nav-group summary:hover {
+  background: var(--bg-soft);
+}
+
+.nav-group .nav {
+  padding-left: 0.25rem;
+  margin-top: 0.15rem;
+}
+
 .main {
   padding: 1.75rem 2rem 3rem;
   max-width: 1200px;
+}
+
+.main-topbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 1rem;
+}
+
+.global-search {
+  position: relative;
+  width: 320px;
+  max-width: 100%;
+}
+
+.global-search input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.global-search-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  width: 100%;
+  min-width: 320px;
+  max-height: 360px;
+  overflow-y: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  z-index: 50;
+  padding: 0.35rem;
+}
+
+.global-search-results .muted.tiny {
+  padding: 0.5rem 0.65rem;
+  display: block;
+}
+
+.global-search-results button {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: none;
+  background: none;
+  color: inherit;
+  text-align: left;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.global-search-results button:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.global-search-results img,
+.global-search-results .ph {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--border);
+  flex-shrink: 0;
 }
 
 .page-header {
@@ -353,6 +452,24 @@ textarea:focus {
   height: 64px;
   border-radius: 6px;
   object-fit: cover;
+}
+
+.junk-releases {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.junk-releases summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.junk-releases .album-list {
+  margin-top: 0.75rem;
 }
 
 .badge {
@@ -1522,6 +1639,47 @@ textarea.code-block {
   text-overflow: ellipsis;
 }
 
+.lyrics-panel {
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.lyrics-synced {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+
+.lyric-line {
+  margin: 0;
+  padding: 0.15rem 0;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.lyric-line:hover {
+  color: var(--fg);
+}
+
+.lyric-line.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.lyrics-plain {
+  margin: 0.4rem 0 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .pill-art-btn {
   appearance: none;
   border: none;
@@ -2339,6 +2497,27 @@ textarea.code-block {
   margin: 1.25rem 0 0.75rem;
 }
 
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.85rem;
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1rem;
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+}
+
+.stat-value {
+  font-family: var(--display);
+  font-size: 1.8rem;
+}
+
 .playlist-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -2391,6 +2570,29 @@ textarea.code-block {
   border-radius: 14px;
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+}
+
+.smart-criteria-editor {
+  margin-bottom: 1.25rem;
+  padding: 0.85rem;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  display: grid;
+  gap: 0.6rem;
+}
+
+.smart-criteria-editor .toolbar {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.smart-criteria-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.75rem;
+  color: var(--muted);
 }
 
 .suggest-list {

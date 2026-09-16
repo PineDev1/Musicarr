@@ -10,14 +10,22 @@
  * when actually offline. Hashed asset files are still safe to serve
  * cache-first, since their URL itself changes when their content does.
  */
-const CACHE = 'musicarr-player-shell-v2'
+const CACHE = 'musicarr-player-shell-v3'
 const SHELL_URL = '/player'
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches
       .open(CACHE)
-      .then((c) => c.addAll([SHELL_URL, '/manifest.webmanifest', '/favicon.svg']))
+      .then((c) =>
+        c.addAll([
+          SHELL_URL,
+          '/manifest.webmanifest',
+          '/favicon.svg',
+          '/icon-192.png',
+          '/icon-512.png',
+        ]),
+      )
       .then(() => self.skipWaiting()),
   )
 })

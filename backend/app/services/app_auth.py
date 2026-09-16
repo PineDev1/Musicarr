@@ -54,32 +54,41 @@ def _sign(secret: str, payload: str) -> str:
     return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def create_session_token(db: Session, username: str) -> str:
+def create_session_token(db: Session, username: str, *, user_id: int = 0) -> str:
+    """user_id=0 is the legacy single-account login (AppSettings.auth_username);
+    a positive id identifies one of the additional AdminUser accounts."""
     secret = ensure_auth_secret(db)
     exp = int(time.time()) + SESSION_DAYS * 24 * 3600
     nonce = secrets.token_hex(8)
-    payload = f"{username}|{exp}|{nonce}"
+    payload = f"{user_id}|{username}|{exp}|{nonce}"
     return f"{payload}|{_sign(secret, payload)}"
 
 
 def parse_session_token(db: Session, token: str | None) -> str | None:
-    if not token or "|" not in token:
+    if not token or token.count("|") != 4:
         return None
-    parts = token.split("|")
-    if len(parts) != 4:
-        return None
-    username, exp_s, nonce, sig = parts
+    user_id_s, username, exp_s, nonce, sig = token.split("|")
     try:
         exp = int(exp_s)
+        user_id = int(user_id_s)
     except ValueError:
         return None
     if exp < int(time.time()):
         return None
     secret = ensure_auth_secret(db)
-    payload = f"{username}|{exp_s}|{nonce}"
+    payload = f"{user_id_s}|{username}|{exp_s}|{nonce}"
     expected = _sign(secret, payload)
     if not hmac.compare_digest(sig, expected):
         return None
+    if user_id:
+        from app.models import AdminUser
+
+        user = db.get(AdminUser, user_id)
+        if not user or not user.is_active:
+            return None
+        if not hmac.compare_digest(user.username, username):
+            return None
+        return user.username
     expected_user = (get_setting_cached(db, "auth_username", None) or "admin").strip() or "admin"
     if not hmac.compare_digest(username, expected_user):
         return None

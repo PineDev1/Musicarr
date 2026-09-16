@@ -1,18 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { api, type ArtistSearchResult, type BulkArtistSearchResult } from '../api'
 import { useToast } from '../Toast'
 
 export function AddArtistPage() {
-  const [q, setQ] = useState('')
-  const [submitted, setSubmitted] = useState('')
+  const [searchParams] = useSearchParams()
+  const qFromUrl = searchParams.get('q') || ''
+  const [q, setQ] = useState(qFromUrl)
+  const [submitted, setSubmitted] = useState(qFromUrl)
   const [bulkText, setBulkText] = useState('')
   const [bulkMode, setBulkMode] = useState(false)
   const [bulkResults, setBulkResults] = useState<BulkArtistSearchResult[] | null>(null)
   const [picks, setPicks] = useState<Record<string, ArtistSearchResult>>({})
   const [includeSingles, setIncludeSingles] = useState(false)
+  const [monitorMode, setMonitorMode] = useState<'all' | 'new' | 'none'>('all')
+  const [downloadMode, setDownloadMode] = useState<'' | 'auto' | 'manual'>('')
+  const [confirming, setConfirming] = useState<ArtistSearchResult | null>(null)
   const navigate = useNavigate()
   const qc = useQueryClient()
   const toast = useToast()
@@ -28,12 +33,15 @@ export function AddArtistPage() {
       api.addArtist(payload.provider_id, payload.provider, {
         include_singles: includeSingles,
         download_missing: true,
+        monitor_mode: monitorMode,
+        download_mode: downloadMode || null,
       }),
     onSuccess: (artist) => {
       qc.invalidateQueries({ queryKey: ['artists'] })
       qc.invalidateQueries({ queryKey: ['queue'] })
       qc.invalidateQueries({ queryKey: ['health'] })
       toast.push(`Added ${artist.name}`, 'ok')
+      setConfirming(null)
       navigate(`/artists/${artist.id}`)
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
@@ -60,6 +68,8 @@ export function AddArtistPage() {
         await api.addArtist(hit.provider_id, hit.provider, {
           include_singles: includeSingles,
           download_missing: true,
+          monitor_mode: monitorMode,
+          download_mode: downloadMode || null,
         })
         added += 1
       }
@@ -131,7 +141,72 @@ export function AddArtistPage() {
           {search.isFetching && <p className="muted">Searching…</p>}
           {search.error && <p className="error">{(search.error as Error).message}</p>}
 
-          {search.data && (
+          {confirming && (
+            <div className="album-row" style={{ marginBottom: '1rem', alignItems: 'flex-start' }}>
+              {confirming.image_url ? (
+                <img src={confirming.image_url} alt="" />
+              ) : (
+                <div className="placeholder-art" style={{ width: 64, height: 64 }} />
+              )}
+              <div className="grow">
+                <div>
+                  <strong>{confirming.name}</strong>{' '}
+                  <span className="badge queued">{confirming.provider}</span>
+                </div>
+                <div className="muted" style={{ marginBottom: 8 }}>
+                  {confirming.nb_album != null ? `${confirming.nb_album} releases on ${confirming.provider}` : ''}
+                </div>
+                <div className="toolbar" style={{ flexWrap: 'wrap', marginBottom: 0 }}>
+                  <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    Monitor
+                    <select
+                      value={monitorMode}
+                      onChange={(e) => setMonitorMode(e.target.value as 'all' | 'new' | 'none')}
+                    >
+                      <option value="all">All albums</option>
+                      <option value="new">New releases only</option>
+                      <option value="none">Don't monitor</option>
+                    </select>
+                  </label>
+                  <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    Downloads
+                    <select
+                      value={downloadMode}
+                      onChange={(e) => setDownloadMode(e.target.value as '' | 'auto' | 'manual')}
+                    >
+                      <option value="">Use default</option>
+                      <option value="auto">Auto-download</option>
+                      <option value="manual">Manual approval</option>
+                    </select>
+                  </label>
+                  <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input
+                      type="checkbox"
+                      checked={includeSingles}
+                      onChange={(e) => setIncludeSingles(e.target.checked)}
+                    />
+                    Include singles
+                  </label>
+                </div>
+              </div>
+              <div className="row-actions">
+                <button
+                  className="btn"
+                  disabled={add.isPending}
+                  onClick={() =>
+                    add.mutate({ provider_id: confirming.provider_id, provider: confirming.provider })
+                  }
+                >
+                  {add.isPending ? 'Adding…' : 'Confirm & Add'}
+                </button>
+                <button className="btn ghost" onClick={() => setConfirming(null)}>
+                  Back
+                </button>
+              </div>
+            </div>
+          )}
+
+          {search.data && !confirming && (
             <div className="search-results">
               {search.data.map((a, i) => (
                 <motion.div
@@ -153,12 +228,8 @@ export function AddArtistPage() {
                       {a.nb_album != null ? `${a.nb_album} releases` : ''}
                     </div>
                   </div>
-                  <button
-                    className="btn"
-                    disabled={add.isPending}
-                    onClick={() => add.mutate({ provider_id: a.provider_id, provider: a.provider })}
-                  >
-                    {add.isPending ? 'Adding…' : 'Add'}
+                  <button className="btn" onClick={() => setConfirming(a)}>
+                    Add
                   </button>
                 </motion.div>
               ))}
@@ -192,6 +263,28 @@ export function AddArtistPage() {
                 onChange={(e) => setIncludeSingles(e.target.checked)}
               />
               Include singles
+            </label>
+            <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              Monitor
+              <select
+                value={monitorMode}
+                onChange={(e) => setMonitorMode(e.target.value as 'all' | 'new' | 'none')}
+              >
+                <option value="all">All albums</option>
+                <option value="new">New releases only</option>
+                <option value="none">Don't monitor</option>
+              </select>
+            </label>
+            <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              Downloads
+              <select
+                value={downloadMode}
+                onChange={(e) => setDownloadMode(e.target.value as '' | 'auto' | 'manual')}
+              >
+                <option value="">Use default</option>
+                <option value="auto">Auto-download</option>
+                <option value="manual">Manual approval</option>
+              </select>
             </label>
             {bulkResults && Object.keys(picks).length > 0 && (
               <button

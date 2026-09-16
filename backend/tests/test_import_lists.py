@@ -57,8 +57,56 @@ def test_run_import_list_adds_new_skips_existing_and_reports_no_match(db):
     assert import_list.last_run_at is not None
     assert "1 added" in import_list.last_result
     mock_add_artist.assert_called_once_with(
-        db, "new1", monitored=True, download_missing=True, provider_name="qobuz"
+        db,
+        "new1",
+        monitored=True,
+        download_missing=True,
+        provider_name="qobuz",
+        require_approval=True,
+        pending_reason="import_list",
     )
+
+
+def test_run_import_list_pulls_names_from_spotify_playlist(db):
+    provider = _fake_provider(
+        {"Brand New Artist": [SimpleNamespace(name="Brand New Artist", provider_id="new1", nb_album=3)]}
+    )
+    import_list = ImportList(
+        name="Spotify list",
+        names_raw="ignored while a playlist url is set",
+        spotify_playlist_url="https://open.spotify.com/playlist/abc123",
+        interval_minutes=720,
+        enabled=True,
+    )
+    db.add(import_list)
+    db.commit()
+    db.refresh(import_list)
+
+    with (
+        patch.object(import_lists, "get_active_provider", return_value=provider),
+        patch.object(import_lists, "add_artist") as mock_add_artist,
+        patch("app.services.spotify.playlist_artist_names", return_value=["Brand New Artist"]),
+    ):
+        result = import_lists.run_import_list(db, import_list)
+
+    assert result["added"] == ["Brand New Artist"]
+    mock_add_artist.assert_called_once()
+
+
+def test_run_import_list_reports_bad_spotify_url(db):
+    import_list = ImportList(
+        name="Spotify list",
+        spotify_playlist_url="not a url",
+        interval_minutes=720,
+        enabled=True,
+    )
+    db.add(import_list)
+    db.commit()
+    db.refresh(import_list)
+
+    result = import_lists.run_import_list(db, import_list)
+
+    assert "Could not parse" in result["summary"]
 
 
 def test_due_import_lists_respects_interval(db):
