@@ -27,6 +27,12 @@ def _album_out(
 ) -> AlbumOut:
     from app.services.quality import needs_upgrade
 
+    # Per-artist quality_pref overrides the passed-in global default; album.artist
+    # is joinedload'd by every caller so this doesn't add a query per row.
+    artist_pref = getattr(getattr(album, "artist", None), "quality_pref", None)
+    if artist_pref:
+        target_bitrate = artist_pref
+
     tracks = []
     if include_tracks:
         tracks = [

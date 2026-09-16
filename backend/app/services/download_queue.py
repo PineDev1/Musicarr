@@ -433,12 +433,15 @@ class DownloadQueue:
                     s.close()
 
             try:
-                from app.services.artists import effective_provider_album_id
+                from app.services.artists import effective_provider_album_id, effective_quality
 
+                target_quality = (
+                    effective_quality(db, artist) if artist else (settings.bitrate or "flac")
+                )
                 result = provider.download_album(
                     effective_provider_album_id(album.provider_id),
                     staging,
-                    settings.bitrate or "flac",
+                    target_quality,
                     on_progress=on_progress,
                     is_cancelled=lambda: self._is_cancelled(job_id),
                 )
@@ -547,7 +550,7 @@ class DownloadQueue:
             album.path = str(dest_folder)
             if matched > 0 or downloaded_files:
                 album.status = "downloaded"
-                album.quality = (settings.bitrate or "flac").lower()
+                album.quality = target_quality.lower()
             job.state = "completed"
             job.progress = 100.0
             job.finished_at = datetime.now(timezone.utc)

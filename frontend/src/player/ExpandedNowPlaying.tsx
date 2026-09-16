@@ -19,6 +19,24 @@ import { formatTime, usePlayerQueue } from './PlayerQueueContext'
 import { copyToClipboard } from './TrackMenu'
 import { WavySeekBar } from './WavySeekBar'
 
+type LyricLine = { time: number; text: string }
+
+const LRC_LINE_RE = /^\[(\d+):(\d+(?:\.\d+)?)\](.*)$/
+
+function parseLrc(raw: string): LyricLine[] {
+  const lines: LyricLine[] = []
+  for (const line of raw.split('\n')) {
+    const match = LRC_LINE_RE.exec(line.trim())
+    if (!match) continue
+    const minutes = Number(match[1])
+    const seconds = Number(match[2])
+    const text = match[3].trim()
+    if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) continue
+    lines.push({ time: minutes * 60 + seconds, text })
+  }
+  return lines.sort((a, b) => a.time - b.time)
+}
+
 const SLEEP_OPTIONS: { label: string; value: number | 'end' }[] = [
   { label: '15 min', value: 15 },
   { label: '30 min', value: 30 },
@@ -59,6 +77,20 @@ export function ExpandedNowPlaying({ onClose }: { onClose: () => void }) {
     staleTime: 15_000,
   })
   const liked = track ? (favIds.data?.ids || []).includes(track.id) : false
+
+  const lyricsQ = useQuery({
+    queryKey: ['player-lyrics', track?.id],
+    queryFn: () => playerApi.lyrics(track!.id),
+    enabled: !!track,
+    staleTime: 5 * 60_000,
+  })
+  const syncedLines = lyricsQ.data?.synced ? parseLrc(lyricsQ.data.synced) : []
+  const activeLyricIndex = syncedLines.length
+    ? syncedLines.reduce(
+        (acc, line, i) => (line.time <= q.currentTime ? i : acc),
+        -1,
+      )
+    : -1
 
   const toggleFav = useMutation({
     mutationFn: async () => {
@@ -274,6 +306,30 @@ export function ExpandedNowPlaying({ onClose }: { onClose: () => void }) {
               <span className="muted tiny">Pausing in {formatTime(sleepRemaining)}</span>
             )}
             {q.sleepMode === 'end' && <span className="muted tiny">Pausing after this song</span>}
+          </div>
+
+          <div className="lyrics-panel">
+            <div className="section-label">Lyrics</div>
+            {lyricsQ.isLoading && <span className="muted tiny">Loading lyrics…</span>}
+            {!lyricsQ.isLoading && syncedLines.length > 0 && (
+              <div className="lyrics-synced">
+                {syncedLines.map((line, i) => (
+                  <p
+                    key={`${line.time}-${i}`}
+                    className={i === activeLyricIndex ? 'lyric-line active' : 'lyric-line'}
+                    onClick={() => q.seek(line.time)}
+                  >
+                    {line.text || ' '}
+                  </p>
+                ))}
+              </div>
+            )}
+            {!lyricsQ.isLoading && syncedLines.length === 0 && lyricsQ.data?.plain && (
+              <pre className="lyrics-plain">{lyricsQ.data.plain}</pre>
+            )}
+            {!lyricsQ.isLoading && !lyricsQ.data?.plain && !syncedLines.length && (
+              <span className="muted tiny">No lyrics found</span>
+            )}
           </div>
         </div>
       </div>

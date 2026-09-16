@@ -67,7 +67,16 @@ def _connect() -> sqlite3.Connection:
         return _conn
 
 
-def resolve_artist(name: str) -> str | None:
+def resolve_artist(name: str, *, fast: bool = False) -> str | None:
+    """Resolve a name to an MBID.
+
+    `fast=True` skips the substring/diacritic fallback scans below (each a
+    full table scan over the local catalog — fine for a single lookup, too
+    slow to run per-result across a 25-result search list) and only returns
+    exact name/alias matches. Used by the artist-search endpoint, where a
+    miss just means no album-count badge; real resolution still happens
+    later (with the full fallback chain) when the artist is actually added.
+    """
     q = (name or "").strip()
     if not q:
         return None
@@ -86,6 +95,8 @@ def resolve_artist(name: str) -> str | None:
     ).fetchone()
     if row:
         return str(row["gid"])
+    if fast:
+        return None
     # Native substring scan (no per-row Python call — fast even unindexed).
     # Catches typos/partial matches whenever the query and the DB name still
     # share a literal run of characters, which most do.
@@ -250,21 +261,41 @@ def count_release_groups(mbid: str) -> int | None:
 
     rows = con.execute(
         """
-        SELECT rg.id, rg.gid, rg.name, rg.artist_credit, rg.primary_type_id,
-               pt.name AS primary_type_name, meta.first_release_year
+        SELECT rg.id, pt.name AS primary_type_name
         FROM artist_rg ar
         JOIN release_group rg ON rg.id = ar.release_group_id
         LEFT JOIN release_group_primary_type pt ON pt.id = rg.primary_type_id
-        LEFT JOIN release_group_meta meta ON meta.id = rg.id
         WHERE ar.artist_id = ?
         """,
         (int(artist["id"]),),
     ).fetchall()
+    if not rows:
+        return 0
+
+    # Batch-fetch secondary types for every release group at once instead of
+    # one query per row (this loop used to be an N+1 that dominated search
+    # latency: up to ~25 artists per search, each with dozens of release
+    # groups, each needing its own secondary-type lookup).
+    rg_ids = [int(r["id"]) for r in rows]
+    placeholders = ",".join("?" * len(rg_ids))
+    secondary_by_rg: dict[int, list[str]] = {rid: [] for rid in rg_ids}
+    for j_row in con.execute(
+        f"""
+        SELECT j.release_group AS rg_id, st.name
+        FROM release_group_secondary_type_join j
+        JOIN release_group_secondary_type st ON st.id = j.secondary_type
+        WHERE j.release_group IN ({placeholders})
+        """,
+        rg_ids,
+    ).fetchall():
+        secondary_by_rg[int(j_row["rg_id"])].append(str(j_row["name"]))
 
     total = 0
     for row in rows:
-        rg = _row_to_rg(con, row, with_credits=False)
-        if rg and rg.primary_type != "other":
+        secondary = secondary_by_rg[int(row["id"])]
+        if not _should_keep_rg(secondary):
+            continue
+        if _map_primary_type(row["primary_type_name"], secondary) != "other":
             total += 1
     return total
 

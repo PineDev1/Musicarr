@@ -247,3 +247,23 @@ export function IconMoon(p: IconProps) {
     </svg>
   )
 }
+
+export function IconAirplay(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M5 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-1" />
+      <polygon points="12 15 19 21 5 21 12 15" />
+    </svg>
+  )
+}
+
+export function IconCast(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M2 8V4a1 1 0 0 1 1-1h18a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1h-4" />
+      <path d="M2 15a6 6 0 0 1 6 6" />
+      <path d="M2 11a10 10 0 0 1 10 10" />
+      <circle cx="3.5" cy="20.5" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}

@@ -21,6 +21,7 @@ from app.services.artists import (
     collision_groups,
     delete_artist,
     effective_download_mode,
+    effective_quality,
     find_linked_artists,
     get_artist_detail,
     grouped_artist_stats,
@@ -38,6 +39,14 @@ from app.services.providers.base import ProviderError
 from app.services.settings_service import ensure_settings
 
 router = APIRouter(prefix="/artists", tags=["artists"])
+
+
+def _group_target_bitrate(db: Session, linked: list[Artist], settings) -> str:
+    """Per-artist quality_pref override wins; falls back to the global default."""
+    primary = linked[0] if linked else None
+    if primary is not None:
+        return effective_quality(db, primary)
+    return (settings.bitrate or "flac").lower()
 
 
 def _album_out(album, sources: list[str] | None = None, include_tracks: bool = True, *, target_bitrate: str = "flac", upgrade_enabled: bool = True):
@@ -213,7 +222,7 @@ def search_artists(q: str = Query(..., min_length=1), limit: int = 25, db: Sessi
         mb_count: int | None = None
         if name_key:
             if name_key not in mb_counts:
-                mbid = musicbrainz.resolve_artist(r.name)
+                mbid = musicbrainz.resolve_artist(r.name, fast=True)
                 mb_counts[name_key] = (
                     musicbrainz.count_release_groups(mbid) if mbid else None
                 )
@@ -260,7 +269,7 @@ def bulk_search_artists(payload: BulkArtistSearchRequest, db: Session = Depends(
             continue
         results = []
         for r in hits:
-            mbid = musicbrainz.resolve_artist(r.name)
+            mbid = musicbrainz.resolve_artist(r.name, fast=True)
             mb_count = musicbrainz.count_release_groups(mbid) if mbid else None
             results.append(
                 ArtistSearchResult(
@@ -326,7 +335,7 @@ def merge_artist_rows(payload: ArtistMergeRequest, db: Session = Depends(get_db)
                 linked,
                 include_albums=False,
                 active=active,
-                target_bitrate=(settings.bitrate or "flac").lower(),
+                target_bitrate=_group_target_bitrate(db, linked, settings),
                 upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
                 collision_ids=collisions,
             )
@@ -338,7 +347,6 @@ def merge_artist_rows(payload: ArtistMergeRequest, db: Session = Depends(get_db)
 def get_artists(db: Session = Depends(get_db)):
     settings = ensure_settings(db)
     active = (settings.active_provider or "deezer").lower()
-    target = (settings.bitrate or "flac").lower()
     up_on = bool(getattr(settings, "upgrade_enabled", True))
     collisions = name_collision_ids(db)
     return [
@@ -346,7 +354,7 @@ def get_artists(db: Session = Depends(get_db)):
             group,
             include_albums=False,
             active=active,
-            target_bitrate=target,
+            target_bitrate=_group_target_bitrate(db, group, settings),
             upgrade_enabled=up_on,
             collision_ids=collisions,
         )
@@ -387,7 +395,7 @@ def create_artist(payload: ArtistCreate, db: Session = Depends(get_db)):
         linked,
         include_albums=True,
         active=active,
-        target_bitrate=(settings.bitrate or "flac").lower(),
+        target_bitrate=_group_target_bitrate(db, linked, settings),
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
         collision_ids=name_collision_ids(db),
     )
@@ -402,7 +410,7 @@ def get_pending_artists(db: Session = Depends(get_db)):
             [artist],
             include_albums=False,
             active=active,
-            target_bitrate=(settings.bitrate or "flac").lower(),
+            target_bitrate=_group_target_bitrate(db, [artist], settings),
             upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
         )
         for artist in list_pending_artists(db)
@@ -427,11 +435,12 @@ def approve_artist(artist_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     detail = get_artist_detail(db, artist.id)
     settings = ensure_settings(db)
+    group = [detail] if detail else [artist]
     return _artist_group_out(
-        [detail] if detail else [artist],
+        group,
         include_albums=False,
         active=(settings.active_provider or "deezer").lower(),
-        target_bitrate=(settings.bitrate or "flac").lower(),
+        target_bitrate=_group_target_bitrate(db, group, settings),
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
     )
 
@@ -457,7 +466,7 @@ def get_artist(artist_id: int, db: Session = Depends(get_db)):
         linked,
         include_albums=True,
         active=active,
-        target_bitrate=(settings.bitrate or "flac").lower(),
+        target_bitrate=_group_target_bitrate(db, linked, settings),
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
         collision_ids=name_collision_ids(db),
     )
@@ -510,7 +519,7 @@ def patch_artist(artist_id: int, payload: ArtistPatch, db: Session = Depends(get
         linked,
         include_albums=True,
         active=active,
-        target_bitrate=(settings.bitrate or "flac").lower(),
+        target_bitrate=_group_target_bitrate(db, linked, settings),
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
         collision_ids=name_collision_ids(db),
     )
@@ -563,7 +572,7 @@ def refresh_artist(artist_id: int, db: Session = Depends(get_db)):
         linked,
         include_albums=True,
         active=active,
-        target_bitrate=(settings.bitrate or "flac").lower(),
+        target_bitrate=_group_target_bitrate(db, linked, settings),
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
         collision_ids=name_collision_ids(db),
     )

@@ -93,7 +93,11 @@ def run_import_list(db: Session, import_list: ImportList) -> dict:
     import_list.last_result = summary
     db.commit()
     if added or errors:
-        add_history(db, "import_list_run", f"Import list '{import_list.name}': {summary}")
+        msg = f"Import list '{import_list.name}': {summary}"
+        add_history(db, "import_list_run", msg)
+        from app.services.notifications import send_notification
+
+        send_notification(db, "Import list run", msg, kind="library")
     return {"added": added, "skipped": skipped, "errors": errors, "summary": summary}
 
 

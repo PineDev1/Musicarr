@@ -28,6 +28,25 @@ export type PlayerTrack = {
   cover_url: string | null
   quality: string
   format: string
+  genre?: string
+}
+
+export type PlayerLyrics = {
+  plain: string | null
+  synced: string | null
+}
+
+export type PlayerSmartRule = {
+  field: 'favorited' | 'genre' | 'format' | 'artist_id' | 'album_id' | 'play_count' | 'last_played_days'
+  op: 'eq' | 'ne' | 'in' | 'not_in' | 'gte' | 'lte' | 'gt' | 'lt'
+  value: unknown
+}
+
+export type PlayerSmartCriteria = {
+  match: 'all' | 'any'
+  rules: PlayerSmartRule[]
+  sort: 'random' | 'recently_added' | 'most_played' | 'title' | 'artist'
+  limit: number
 }
 
 export type PlayerAlbum = {
@@ -109,6 +128,7 @@ export type PlayerPlaylist = {
   updated_at: string | null
   tracks: PlayerTrack[]
   is_smart?: boolean
+  criteria?: PlayerSmartCriteria | null
   builtin?: boolean
   kind?: string | null
 }
@@ -205,6 +225,13 @@ export const playerApi = {
     cover_url?: string | null
   }) => request<{ ok: boolean }>('/me/playing', { method: 'POST', body: JSON.stringify(body) }),
   commands: () => request<{ stop: boolean }>('/me/commands'),
+  lastfmStatus: () => request<{ connected: boolean; username: string | null }>('/lastfm/status'),
+  lastfmStart: () => request<{ auth_url: string }>('/lastfm/start'),
+  lastfmCallback: (token: string) =>
+    request<{ ok: boolean; username: string | null }>(
+      `/lastfm/callback?token=${encodeURIComponent(token)}`
+    ),
+  lastfmDisconnect: () => request<{ ok: boolean }>('/lastfm', { method: 'DELETE' }),
   users: () => request<PlayerUser[]>('/users'),
   createUser: (body: { username: string; password: string; display_name?: string }) =>
     request<PlayerUser>('/users', { method: 'POST', body: JSON.stringify(body) }),
@@ -281,6 +308,39 @@ export const playerApi = {
   removeFromPlaylist: (id: number, trackId: number) =>
     request<{ ok: boolean }>(`/playlists/${id}/tracks/${trackId}`, { method: 'DELETE' }),
   suggestions: (id: number) => request<PlayerTrack[]>(`/playlists/${id}/suggestions`),
+  updatePlaylistCriteria: (id: number, criteria: PlayerSmartCriteria) =>
+    request<PlayerPlaylist>(`/playlists/${id}/criteria`, {
+      method: 'PATCH',
+      body: JSON.stringify(criteria),
+    }),
+  clearPlaylistCriteria: (id: number) =>
+    request<PlayerPlaylist>(`/playlists/${id}/criteria`, { method: 'DELETE' }),
+  exportPlaylistUrl: (id: number) => `/api/player/playlists/${id}/export`,
+  importPlaylist: async (file: File, name?: string) => {
+    const body = new FormData()
+    body.append('file', file)
+    const qs = name ? `?name=${encodeURIComponent(name)}` : ''
+    const res = await fetch(`/api/player/playlists/import${qs}`, {
+      method: 'POST',
+      credentials: 'include',
+      body,
+    })
+    if (!res.ok) {
+      let detail = res.statusText
+      try {
+        const payload = await res.json()
+        detail = payload.detail || JSON.stringify(payload)
+      } catch {
+        /* ignore */
+      }
+      throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+    }
+    return (await res.json()) as { playlist_id: number; matched: number; total: number }
+  },
+  lyrics: (trackId: number) => request<PlayerLyrics>(`/tracks/${trackId}/lyrics`),
+  mintCastToken: () => request<{ token: string; expires_at: string }>('/cast/token', { method: 'POST' }),
+  castStreamUrl: (token: string, trackId: number) =>
+    `${window.location.origin}/api/player/cast/${encodeURIComponent(token)}/stream/${trackId}`,
   uploadAvatar: async (file: File) => {
     const body = new FormData()
     body.append('file', file)

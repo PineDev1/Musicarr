@@ -59,6 +59,10 @@ class AppSettings(Base):
     notify_token: Mapped[str] = mapped_column(Text, default="")
     notify_on_complete: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_on_failure: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Artist adds, import-list runs, library scans/imports, MB catalog updates —
+    # opt-in since these can be frequent and shouldn't suddenly start
+    # notifying existing users on upgrade.
+    notify_on_library_events: Mapped[bool] = mapped_column(Boolean, default=False)
     upgrade_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     fallback_providers_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     media_refresh_url: Mapped[str] = mapped_column(Text, default="")
@@ -78,6 +82,10 @@ class AppSettings(Base):
     max_retries: Mapped[int] = mapped_column(Integer, default=3)
     # auto | manual — default for artists that don't set their own download_mode
     default_download_mode: Mapped[str] = mapped_column(String(16), default="manual")
+    # Shared Last.fm API application credentials (one instance-wide registration;
+    # each PlayerUser connects their own account via lastfm_session_key)
+    lastfm_api_key: Mapped[str] = mapped_column(String(64), default="")
+    lastfm_api_secret: Mapped[str] = mapped_column(String(64), default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -111,6 +119,8 @@ class Artist(Base):
     pending_reason: Mapped[str] = mapped_column(String(64), default="")
     # None = inherit AppSettings.default_download_mode; "auto" | "manual" overrides it
     download_mode: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
+    # None = inherit AppSettings.bitrate; "flac" | "320" | "128" overrides it
+    quality_pref: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -181,6 +191,12 @@ class Track(Base):
     duration: Mapped[int] = mapped_column(Integer, default=0)
     isrc: Mapped[str | None] = mapped_column(String(32), nullable=True)
     path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    genre: Mapped[str] = mapped_column(String(128), default="")
+    lyrics_plain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lyrics_synced: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lyrics_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     album: Mapped["Album"] = relationship(back_populates="tracks")
 
@@ -272,6 +288,8 @@ class PlayerUser(Base):
         ForeignKey("tracks.id", ondelete="SET NULL"), nullable=True
     )
     continue_position: Mapped[float] = mapped_column(Float, default=0.0)
+    lastfm_username: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lastfm_session_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     playlists: Mapped[list["PlayerPlaylist"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
@@ -290,6 +308,8 @@ class PlayerPlaylist(Base):
     )
     name: Mapped[str] = mapped_column(String(256))
     is_smart: Mapped[bool] = mapped_column(Boolean, default=False)
+    # JSON-encoded smart playlist rules; see services/smart_playlists.py
+    criteria_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -372,3 +392,24 @@ class PlayerShareLink(Base):
 
     track: Mapped["Track"] = relationship()
     created_by: Mapped["PlayerUser"] = relationship()
+
+
+class PlayerCastToken(Base):
+    """Short-lived, cookie-free stream token for casting to Chromecast/etc.
+
+    Unlike PlayerShareLink (public, revocable, play-counted) this exists only
+    so a device on the LAN can fetch audio bytes directly without carrying
+    the browser's session cookie. No public metadata endpoints reference it.
+    """
+
+    __tablename__ = "player_cast_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("player_users.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped["PlayerUser"] = relationship()

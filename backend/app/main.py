@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,15 +14,19 @@ from app.api import (
     artists,
     auth,
     backup,
+    calendar,
     events,
     import_lists,
+    maintenance,
     musicbrainz_catalog,
     ops,
     player,
+    search,
     settings,
+    stats,
 )
 from app.core.database import SessionLocal, ensure_dirs, init_db
-from app.services import app_auth, player_auth
+from app.services import app_auth, player_auth, player_presence
 from app.services.cors_origins import LOCAL_CORS_ORIGINS, origin_is_allowed
 from app.services.download_queue import download_queue
 from app.services.import_lists import import_list_runner
@@ -44,6 +49,7 @@ PUBLIC_API_PATHS = {
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    player_presence.set_main_loop(asyncio.get_running_loop())
     ensure_dirs()
     init_db()
     db = SessionLocal()
@@ -176,6 +182,10 @@ app.include_router(player.router, prefix="/api")
 app.include_router(musicbrainz_catalog.router, prefix="/api")
 app.include_router(backup.router, prefix="/api")
 app.include_router(import_lists.router, prefix="/api")
+app.include_router(search.router, prefix="/api")
+app.include_router(stats.router, prefix="/api")
+app.include_router(calendar.router, prefix="/api")
+app.include_router(maintenance.router, prefix="/api")
 
 
 @app.get("/api")

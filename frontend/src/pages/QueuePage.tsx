@@ -21,6 +21,7 @@ export function QueuePage() {
     refetchInterval: 2000,
   })
   const [live, setLive] = useState<DownloadJob[] | null>(null)
+  const [selected, setSelected] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     const es = new EventSource('/api/events/queue')
@@ -88,6 +89,24 @@ export function QueuePage() {
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
+  const bulkCancel = useMutation({
+    mutationFn: () => api.bulkCancelJobs([...selected]),
+    onSuccess: (res) => {
+      toast.push(`Cancelled ${res.cancelled} job(s)`, 'ok')
+      setSelected(new Set())
+      qc.invalidateQueries({ queryKey: ['queue'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  const bulkRetry = useMutation({
+    mutationFn: () => api.bulkRetryJobs([...selected]),
+    onSuccess: (res) => {
+      toast.push(`Retried ${res.retried} job(s)`, 'ok')
+      setSelected(new Set())
+      qc.invalidateQueries({ queryKey: ['queue'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
 
   const jobs = data || []
   const merged = jobs.map((j) => {
@@ -103,6 +122,33 @@ export function QueuePage() {
         }
       : j
   })
+
+  const selectableIds = merged
+    .filter((j) => j.state === 'queued' || j.state === 'running' || j.state === 'failed')
+    .map((j) => j.id)
+  const allSelectableSelected =
+    selectableIds.length > 0 && selectableIds.every((id) => selected.has(id))
+
+  function toggleOne(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleAllSelectable() {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (allSelectableSelected) {
+        for (const id of selectableIds) next.delete(id)
+      } else {
+        for (const id of selectableIds) next.add(id)
+      }
+      return next
+    })
+  }
 
   const failedGroups = useMemo(() => {
     const map = new Map<string, DownloadJob[]>()
@@ -160,6 +206,25 @@ export function QueuePage() {
         </div>
       )}
 
+      {selectableIds.length > 0 && (
+        <div className="toolbar" style={{ flexWrap: 'wrap' }}>
+          <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="checkbox" checked={allSelectableSelected} onChange={toggleAllSelectable} />
+            Select all
+          </label>
+          {selected.size > 0 && (
+            <>
+              <button className="btn ghost" onClick={() => bulkCancel.mutate()} disabled={bulkCancel.isPending}>
+                Cancel selected ({selected.size})
+              </button>
+              <button className="btn secondary" onClick={() => bulkRetry.mutate()} disabled={bulkRetry.isPending}>
+                Retry selected
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       {isLoading && <p className="muted">Loading…</p>}
       {error && <p className="error">{(error as Error).message}</p>}
       {merged.length === 0 && (
@@ -172,6 +237,7 @@ export function QueuePage() {
         <table className="table">
           <thead>
             <tr>
+              <th></th>
               <th>Album</th>
               <th>State</th>
               <th>Progress</th>
@@ -179,8 +245,20 @@ export function QueuePage() {
             </tr>
           </thead>
           <tbody>
-            {merged.map((job) => (
+            {merged.map((job) => {
+              const selectable =
+                job.state === 'queued' || job.state === 'running' || job.state === 'failed'
+              return (
               <tr key={job.id}>
+                <td>
+                  {selectable && (
+                    <input
+                      type="checkbox"
+                      checked={selected.has(job.id)}
+                      onChange={() => toggleOne(job.id)}
+                    />
+                  )}
+                </td>
                 <td>
                   <strong>
                     {job.artist_name} – {job.album_title}
@@ -215,7 +293,8 @@ export function QueuePage() {
                   )}
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       )}

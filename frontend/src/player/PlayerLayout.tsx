@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { useToast } from '../Toast'
 import {
   IconBack,
@@ -61,6 +61,58 @@ export function PlayerLayout({ displayName, avatarUrl, userId }: Props) {
     enabled: settingsOpen,
     retry: false,
   })
+  const lastfm = useQuery({
+    queryKey: ['player-lastfm-status'],
+    queryFn: playerApi.lastfmStatus,
+    enabled: settingsOpen,
+    retry: false,
+  })
+  const connectLastfm = useMutation({
+    mutationFn: playerApi.lastfmStart,
+    onSuccess: (data) => {
+      const cb = `${window.location.origin}/player?lastfm_token=1`
+      window.location.href = `${data.auth_url}&cb=${encodeURIComponent(cb)}`
+    },
+    onError: (err: Error) => toast.push(err.message, 'error'),
+  })
+  const disconnectLastfm = useMutation({
+    mutationFn: playerApi.lastfmDisconnect,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['player-lastfm-status'] }),
+  })
+  const completeLastfm = useMutation({
+    mutationFn: playerApi.lastfmCallback,
+    onSuccess: (data) => {
+      toast.push(
+        data.username ? `Connected to Last.fm as ${data.username}` : 'Connected to Last.fm',
+        'ok'
+      )
+      qc.invalidateQueries({ queryKey: ['player-lastfm-status'] })
+    },
+    onError: (err: Error) => toast.push(err.message, 'error'),
+  })
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const token = params.get('token')
+    if (params.get('lastfm_token') && token) {
+      completeLastfm.mutate(token)
+      navigate(location.pathname, { replace: true })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.search])
+  const [installPrompt, setInstallPrompt] = useState<any>(null)
+  useEffect(() => {
+    const onPrompt = (e: Event) => {
+      e.preventDefault()
+      setInstallPrompt(e)
+    }
+    const onInstalled = () => setInstallPrompt(null)
+    window.addEventListener('beforeinstallprompt', onPrompt)
+    window.addEventListener('appinstalled', onInstalled)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onPrompt)
+      window.removeEventListener('appinstalled', onInstalled)
+    }
+  }, [])
 
   const logout = useMutation({
     mutationFn: playerApi.logout,
@@ -438,6 +490,53 @@ export function PlayerLayout({ displayName, avatarUrl, userId }: Props) {
               </select>
             </div>
 
+            <h3>Last.fm</h3>
+            {lastfm.data?.connected ? (
+              <div className="toolbar" style={{ alignItems: 'center', gap: '0.75rem' }}>
+                <span className="muted">Connected as {lastfm.data.username}</span>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => disconnectLastfm.mutate()}
+                  disabled={disconnectLastfm.isPending}
+                >
+                  Disconnect
+                </button>
+              </div>
+            ) : (
+              <div className="toolbar" style={{ alignItems: 'center', gap: '0.75rem' }}>
+                <span className="muted tiny">Scrobble what you play to your Last.fm account.</span>
+                <button
+                  type="button"
+                  className="btn secondary"
+                  onClick={() => connectLastfm.mutate()}
+                  disabled={connectLastfm.isPending}
+                >
+                  Connect Last.fm
+                </button>
+              </div>
+            )}
+
+            {installPrompt && (
+              <>
+                <h3>Install app</h3>
+                <div className="toolbar" style={{ alignItems: 'center', gap: '0.75rem' }}>
+                  <span className="muted tiny">Install the player as an app on this device.</span>
+                  <button
+                    type="button"
+                    className="btn secondary"
+                    onClick={async () => {
+                      installPrompt.prompt()
+                      await installPrompt.userChoice
+                      setInstallPrompt(null)
+                    }}
+                  >
+                    Install app
+                  </button>
+                </div>
+              </>
+            )}
+
             <h3>Pinned playlists</h3>
             <p className="muted tiny" style={{ marginTop: 0 }}>
               Pinned playlists sort to the top of the sidebar.
@@ -596,7 +695,8 @@ export function PlayerLayout({ displayName, avatarUrl, userId }: Props) {
 
             <h3>Keyboard shortcuts</h3>
             <p className="muted tiny" style={{ marginTop: 0 }}>
-              Space play/pause · ← → seek 5s · ↑ ↓ volume · N/P next/previous · L love · Q queue
+              Space play/pause · ← → seek 5s · ↑ ↓ volume · N/P next/previous · S shuffle · R
+              repeat · M mute · F expand · L love · Q queue
             </p>
           </div>
         </div>

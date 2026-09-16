@@ -51,6 +51,17 @@ def effective_download_mode(db: Session, artist: Artist) -> str:
     return default if default in ("auto", "manual") else "manual"
 
 
+def effective_quality(db: Session, artist: Artist) -> str:
+    """'flac' | '320' | '128'. An artist's own quality_pref wins; None inherits
+    AppSettings.bitrate."""
+    pref = getattr(artist, "quality_pref", None)
+    if pref in ("flac", "320", "128"):
+        return pref
+    settings = ensure_settings(db)
+    default = (getattr(settings, "bitrate", None) or "flac").lower()
+    return default if default in ("flac", "320", "128") else "flac"
+
+
 def link_artists_by_mbid(db: Session, mbid: str) -> list[Artist]:
     """Join all artist rows that share this MusicBrainz ID under one link_group_id."""
     key = (mbid or "").strip()

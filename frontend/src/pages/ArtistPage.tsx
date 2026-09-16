@@ -223,9 +223,11 @@ export function ArtistPage() {
     data.missing_count ??
     (data.albums || []).filter((a) => a.status === 'missing').length
   const related = data.related_artists || []
+  const mainAlbums = data.albums.filter((a) => a.skip_reason_code !== 'junk')
+  const junkAlbums = data.albums.filter((a) => a.skip_reason_code === 'junk')
 
   const jobForRow = (album: (typeof data.albums)[number]) => jobForAlbum(album.id, album.title)
-  const selectableIds = data.albums
+  const selectableIds = mainAlbums
     .filter((a) => {
       const job = jobForRow(a)
       const downloading = job && (job.state === 'queued' || job.state === 'running')
@@ -365,6 +367,21 @@ export function ArtistPage() {
             <option value="manual">Manual approval</option>
           </select>
         </div>
+        <div className="field" style={{ margin: 0, minWidth: 180 }}>
+          <label>Quality</label>
+          <select
+            value={data.quality_pref || ''}
+            onChange={(e) =>
+              patchArtist.mutate({ quality_pref: e.target.value || null })
+            }
+            disabled={patchArtist.isPending}
+          >
+            <option value="">Inherit default</option>
+            <option value="flac">FLAC (lossless)</option>
+            <option value="320">MP3 320kbps</option>
+            <option value="128">MP3 128kbps</option>
+          </select>
+        </div>
         <div className="field" style={{ margin: 0, minWidth: 220 }}>
           <label>Include singles</label>
           <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -425,7 +442,7 @@ export function ArtistPage() {
       )}
 
       <div className="album-list">
-        {data.albums.map((album) => {
+        {mainAlbums.map((album) => {
           const isDownloaded = album.status === 'downloaded'
           const via = (album.provider || 'unknown').toLowerCase()
           const job = jobForAlbum(album.id, album.title)
@@ -570,6 +587,61 @@ export function ArtistPage() {
         })}
       </div>
 
+      {junkAlbums.length > 0 && (
+        <details className="junk-releases">
+          <summary>Junk releases ({junkAlbums.length})</summary>
+          <div className="album-list">
+            {junkAlbums.map((album) => {
+              const via = (album.provider || 'unknown').toLowerCase()
+              const isDownloaded = album.status === 'downloaded'
+              return (
+                <div key={album.id} className="album-row">
+                  {album.cover_url ? (
+                    <img src={album.cover_url} alt="" />
+                  ) : (
+                    <div className="placeholder-art" style={{ width: 64, height: 64 }} />
+                  )}
+                  <div style={{ minWidth: 0 }}>
+                    <div>
+                      <Link to={`/albums/${album.id}`}>
+                        <strong>{album.title}</strong>
+                      </Link>{' '}
+                      <span className={`badge ${album.status}`}>{album.status}</span>
+                    </div>
+                    <div className="muted">
+                      {album.release_date || 'Unknown date'} · {album.album_type} ·{' '}
+                      {album.track_count} tracks
+                    </div>
+                    {album.status_reason ? (
+                      <div className="muted" style={{ marginTop: 4, fontSize: '0.85rem' }}>
+                        {album.status_reason}
+                      </div>
+                    ) : null}
+                    {isDownloaded && (
+                      <span className="badge downloaded" style={{ textTransform: 'capitalize' }}>
+                        Via {via}
+                      </span>
+                    )}
+                  </div>
+                  <div className="row-actions">
+                    <button
+                      className="btn ghost"
+                      onClick={() =>
+                        patchAlbum.mutate({
+                          albumId: album.id,
+                          body: { status: 'wanted', monitored: true },
+                        })
+                      }
+                    >
+                      Want
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </details>
+      )}
     </div>
   )
 }

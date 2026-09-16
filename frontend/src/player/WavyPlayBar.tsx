@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import {
+  IconAirplay,
+  IconCast,
   IconHeart,
   IconMoon,
   IconNext,
@@ -12,8 +14,10 @@ import {
   IconShuffle,
 } from './icons'
 import { DEFAULT_PREFS, playerApi } from './playerApi'
+import { airplaySupported, castTrack, chromecastSupported, showAirplayPicker, stopCasting } from './cast'
 import { ExpandedNowPlaying } from './ExpandedNowPlaying'
 import {
+  TOGGLE_EXPANDED_EVENT,
   TOGGLE_LOVE_EVENT,
   TOGGLE_QUEUE_EVENT,
   formatTime,
@@ -27,6 +31,7 @@ export function WavyPlayBar() {
   const qc = useQueryClient()
   const [queueOpen, setQueueOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [casting, setCasting] = useState(false)
   const track = q.tracks[q.index]
   const prefs = useQuery({
     queryKey: ['player-prefs'],
@@ -59,13 +64,23 @@ export function WavyPlayBar() {
   useEffect(() => {
     const onToggleQueue = () => setQueueOpen((o) => !o)
     const onToggleLove = () => loveRef.current()
+    const onToggleExpanded = () => setExpanded((o) => !o)
     window.addEventListener(TOGGLE_QUEUE_EVENT, onToggleQueue)
     window.addEventListener(TOGGLE_LOVE_EVENT, onToggleLove)
+    window.addEventListener(TOGGLE_EXPANDED_EVENT, onToggleExpanded)
     return () => {
       window.removeEventListener(TOGGLE_QUEUE_EVENT, onToggleQueue)
       window.removeEventListener(TOGGLE_LOVE_EVENT, onToggleLove)
+      window.removeEventListener(TOGGLE_EXPANDED_EVENT, onToggleExpanded)
     }
   }, [])
+
+  // Follow the current track onto an active Chromecast session. The SDK is
+  // only fetched once the user actually starts casting (below) so players
+  // who never touch the button never load an external script.
+  useEffect(() => {
+    if (casting && track) void castTrack(track)
+  }, [casting, track])
 
   const wave = prefs.data || DEFAULT_PREFS
   const isFlac = track && (track.format === 'flac' || track.quality === 'flac')
@@ -251,6 +266,35 @@ export function WavyPlayBar() {
               >
                 <IconQueue size={18} />
               </button>
+              {airplaySupported() && (
+                <button
+                  type="button"
+                  className="pill-icon-btn"
+                  aria-label="AirPlay"
+                  title="AirPlay"
+                  onClick={() => showAirplayPicker(q.audioEl)}
+                >
+                  <IconAirplay size={18} />
+                </button>
+              )}
+              {chromecastSupported() && (
+                <button
+                  type="button"
+                  className={`pill-icon-btn${casting ? ' on' : ''}`}
+                  aria-label={casting ? 'Stop casting' : 'Cast'}
+                  title={casting ? 'Stop casting' : 'Cast to device'}
+                  onClick={() => {
+                    if (casting) {
+                      stopCasting()
+                      setCasting(false)
+                    } else if (track) {
+                      void castTrack(track).then((ok) => setCasting(ok))
+                    }
+                  }}
+                >
+                  <IconCast size={18} />
+                </button>
+              )}
             </div>
           </>
         ) : (

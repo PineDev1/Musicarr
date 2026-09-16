@@ -111,6 +111,9 @@ def migrate_schema(engine_: Engine | None = None) -> None:
         "import_mechanism": "VARCHAR(16) DEFAULT 'hardlink'",
         "remove_completed_downloads": "BOOLEAN DEFAULT 0",
         "default_download_mode": "VARCHAR(16) DEFAULT 'manual'",
+        "notify_on_library_events": "BOOLEAN DEFAULT 0",
+        "lastfm_api_key": "VARCHAR(64) DEFAULT ''",
+        "lastfm_api_secret": "VARCHAR(64) DEFAULT ''",
     }
     existing = existing_columns("app_settings")
     for name, definition in settings_cols.items():
@@ -135,6 +138,8 @@ def migrate_schema(engine_: Engine | None = None) -> None:
             add_column("artists", "pending_reason VARCHAR(64) DEFAULT ''")
         if "download_mode" not in artist_cols:
             add_column("artists", "download_mode VARCHAR(16)")
+        if "quality_pref" not in artist_cols:
+            add_column("artists", "quality_pref VARCHAR(16)")
         with eng.begin() as conn:
             conn.execute(
                 text("UPDATE artists SET status = 'active' WHERE status IS NULL OR status = ''")
@@ -218,6 +223,8 @@ def migrate_schema(engine_: Engine | None = None) -> None:
         "continue_album_id": "INTEGER",
         "continue_track_id": "INTEGER",
         "continue_position": "REAL DEFAULT 0",
+        "lastfm_username": "VARCHAR(128)",
+        "lastfm_session_key": "VARCHAR(64)",
     }
     existing_pu = existing_columns("player_users")
     for name, definition in player_user_cols.items():
@@ -225,8 +232,22 @@ def migrate_schema(engine_: Engine | None = None) -> None:
             add_column("player_users", f"{name} {definition}")
 
     pl_cols = existing_columns("player_playlists")
-    if pl_cols and "is_smart" not in pl_cols:
-        add_column("player_playlists", "is_smart BOOLEAN DEFAULT 0")
+    if pl_cols:
+        if "is_smart" not in pl_cols:
+            add_column("player_playlists", "is_smart BOOLEAN DEFAULT 0")
+        if "criteria_json" not in pl_cols:
+            add_column("player_playlists", "criteria_json TEXT")
+
+    track_cols = existing_columns("tracks")
+    if track_cols:
+        if "genre" not in track_cols:
+            add_column("tracks", "genre VARCHAR(128) DEFAULT ''")
+        if "lyrics_plain" not in track_cols:
+            add_column("tracks", "lyrics_plain TEXT")
+        if "lyrics_synced" not in track_cols:
+            add_column("tracks", "lyrics_synced TEXT")
+        if "lyrics_checked_at" not in track_cols:
+            add_column("tracks", "lyrics_checked_at DATETIME")
 
     # Drop retired indexer / download-client tables (streaming-only).
     with eng.begin() as conn:

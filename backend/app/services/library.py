@@ -622,6 +622,9 @@ def import_existing_library(
             + f". Scan also matched {scan['matched']} existing DB tracks."
         )
         add_history(db, "library_import", msg)
+        from app.services.notifications import send_notification
+
+        send_notification(db, "Library import complete", msg, kind="library")
         return {
             "files_seen": len(files),
             "artists_created": artists_created,
@@ -741,6 +744,9 @@ def scan_library(db: Session, *, on_progress: ProgressCb | None = None) -> dict:
     db.commit()
     msg = f"Scan complete: {len(files)} files, {matched} matched, {unmatched} unmatched"
     add_history(db, "library_scan", msg)
+    from app.services.notifications import send_notification
+
+    send_notification(db, "Library scan complete", msg, kind="library")
     return {
         "files_seen": len(files),
         "matched": matched,
@@ -1006,4 +1012,7 @@ def reorganize_library(db: Session, *, on_progress: ProgressCb | None = None) ->
     db.commit()
     msg = f"Reorganized library: moved {moved}, skipped {skipped}"
     add_history(db, "reorganize", msg)
+    from app.services.notifications import send_notification
+
+    send_notification(db, "Library reorganized", msg, kind="library")
     return {"moved": moved, "skipped": skipped, "message": msg}

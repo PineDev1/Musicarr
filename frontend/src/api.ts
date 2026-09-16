@@ -48,6 +48,7 @@ export type Settings = {
   notify_token_set: boolean
   notify_on_complete: boolean
   notify_on_failure: boolean
+  notify_on_library_events: boolean
   upgrade_enabled: boolean
   fallback_providers_enabled: boolean
   media_refresh_url: string
@@ -63,6 +64,8 @@ export type Settings = {
   download_concurrency: number
   max_retries: number
   default_download_mode: 'auto' | 'manual'
+  lastfm_api_key: string
+  lastfm_api_secret_set: boolean
   provider_ok: boolean | null
   provider_error: string | null
   deezer_ok: boolean | null
@@ -154,6 +157,7 @@ export type Artist = {
   status?: 'active' | 'pending'
   pending_reason?: string
   download_mode?: 'auto' | 'manual' | null
+  quality_pref?: 'flac' | '320' | '128' | null
   musicbrainz_id?: string | null
   added_at: string
   last_synced_at: string | null
@@ -249,6 +253,74 @@ export type HistoryEvent = {
   event_type: string
   message: string
   created_at: string
+}
+
+export type SearchResults = {
+  artists: { id: number; name: string; image_url: string | null }[]
+  albums: {
+    id: number
+    title: string
+    artist_id: number
+    artist_name: string
+    cover_url: string | null
+  }[]
+}
+
+export type Stats = {
+  artists: number
+  albums_by_status: Record<string, number>
+  tracks: number
+  disk_usage_bytes: number
+  success_rate_30d: number | null
+  recent_events: { event_type: string; message: string; created_at: string }[]
+}
+
+export type CalendarEntry = {
+  album_id: number
+  title: string
+  artist_id: number
+  artist_name: string
+  release_date: string | null
+  status: string
+  cover_url: string | null
+}
+
+export type OrphanDbTrack = {
+  track_id: number
+  path: string
+  title: string
+  album_title: string
+  artist_name: string
+}
+
+export type OrphanFile = {
+  path: string
+  size_bytes: number
+}
+
+export type DuplicateGroup = {
+  reason: string
+  key: string
+  tracks: {
+    track_id: number
+    title: string
+    path: string | null
+    album_title: string
+    artist_name: string
+  }[]
+}
+
+export type MaintenanceScan = {
+  orphan_db_tracks: OrphanDbTrack[]
+  orphan_files: OrphanFile[]
+  duplicate_groups: DuplicateGroup[]
+}
+
+export type PlayerStats = {
+  total_plays: number
+  top_tracks: { track_id: number; title: string; artist_name: string; plays: number }[]
+  top_artists: { artist_id: number; artist_name: string; plays: number }[]
+  daily_plays: { date: string; plays: number }[]
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -461,9 +533,28 @@ export const api = {
       method: 'POST',
     })
   },
+  bulkCancelJobs: (jobIds: number[]) =>
+    request<{ cancelled: number }>('/queue/bulk-cancel', {
+      method: 'POST',
+      body: JSON.stringify({ job_ids: jobIds }),
+    }),
+  bulkRetryJobs: (jobIds: number[]) =>
+    request<{ retried: number }>('/queue/bulk-retry', {
+      method: 'POST',
+      body: JSON.stringify({ job_ids: jobIds }),
+    }),
   clearFinishedQueue: () =>
     request<{ cleared: number }>('/queue/clear-finished', { method: 'POST' }),
   history: () => request<HistoryEvent[]>('/history'),
+  search: (q: string) => request<SearchResults>(`/search?q=${encodeURIComponent(q)}`),
+  stats: () => request<Stats>('/stats'),
+  calendar: () => request<CalendarEntry[]>('/calendar'),
+  maintenanceScan: () => request<MaintenanceScan>('/maintenance/duplicates'),
+  maintenanceResolve: (body: Record<string, unknown>) =>
+    request<{ ok: boolean }>('/maintenance/resolve', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   scan: () =>
     request<LibraryJob>('/library/scan', { method: 'POST' }),
   importLibrary: (linkProviders = true) =>

@@ -221,14 +221,25 @@ def _run_import_job() -> None:
         except OSError:
             pass
 
+        done_msg = f"Catalog ready ({final_db.stat().st_size / (1024**3):.2f} GiB)"
         _set_job(
             state="done",
             phase="done",
             progress_pct=100.0,
-            message=f"Catalog ready ({final_db.stat().st_size / (1024**3):.2f} GiB)",
+            message=done_msg,
             finished_at=datetime.now(timezone.utc).isoformat(),
             error="",
         )
+        from app.core.database import SessionLocal
+        from app.services.history import add_history
+        from app.services.notifications import send_notification
+
+        notify_db = SessionLocal()
+        try:
+            add_history(notify_db, "mb_catalog_update", done_msg)
+            send_notification(notify_db, "MusicBrainz catalog updated", done_msg, kind="library")
+        finally:
+            notify_db.close()
     except Exception as exc:  # noqa: BLE001
         logger.exception("MusicBrainz catalog import failed")
         _set_job(

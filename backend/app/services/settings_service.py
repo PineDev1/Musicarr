@@ -118,6 +118,7 @@ def settings_to_out(row: AppSettings, validate: bool = False) -> SettingsOut:
         notify_token_set=bool((getattr(row, "notify_token", None) or "").strip()),
         notify_on_complete=bool(getattr(row, "notify_on_complete", True)),
         notify_on_failure=bool(getattr(row, "notify_on_failure", True)),
+        notify_on_library_events=bool(getattr(row, "notify_on_library_events", False)),
         upgrade_enabled=bool(getattr(row, "upgrade_enabled", True)),
         fallback_providers_enabled=bool(getattr(row, "fallback_providers_enabled", True)),
         media_refresh_url=getattr(row, "media_refresh_url", "") or "",
@@ -133,6 +134,8 @@ def settings_to_out(row: AppSettings, validate: bool = False) -> SettingsOut:
         download_concurrency=row.download_concurrency,
         max_retries=row.max_retries,
         default_download_mode=(getattr(row, "default_download_mode", None) or "manual"),
+        lastfm_api_key=getattr(row, "lastfm_api_key", "") or "",
+        lastfm_api_secret_set=bool((getattr(row, "lastfm_api_secret", "") or "").strip()),
     )
 
 
