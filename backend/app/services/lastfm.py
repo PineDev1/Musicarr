@@ -98,3 +98,32 @@ def scrobble(db: Session, user: PlayerUser, artist: str, track: str, started_at:
         "track.scrobble",
         {"artist": artist, "track": track, "timestamp": str(started_at or int(time.time()))},
     )
+
+
+def similar_artists(db: Session, artist_name: str, *, limit: int = 10) -> list[dict]:
+    """artist.getSimilar is unauthenticated — only needs the shared api_key,
+    no per-user session, so this works for any admin whether or not they've
+    personally connected a Last.fm account for scrobbling."""
+    if not artist_name:
+        return []
+    key, _secret = _credentials(db)
+    resp = requests.get(
+        API_BASE,
+        params={
+            "method": "artist.getSimilar",
+            "artist": artist_name,
+            "api_key": key,
+            "format": "json",
+            "limit": limit,
+        },
+        timeout=15,
+    )
+    if resp.status_code >= 400:
+        raise LastfmError(f"Last.fm similar-artist lookup failed: {resp.text[:200]}")
+    data = resp.json()
+    artists = ((data.get("similarartists") or {}).get("artist")) or []
+    return [
+        {"name": a.get("name"), "match": float(a.get("match") or 0)}
+        for a in artists
+        if a.get("name")
+    ]

@@ -16,6 +16,8 @@ export type Health = {
   queue_size: number
   pending_artists: number
   skipped_albums: number
+  disk_free_bytes: number | null
+  low_disk_warning: boolean
 }
 
 export type Settings = {
@@ -66,6 +68,14 @@ export type Settings = {
   default_download_mode: 'auto' | 'manual'
   lastfm_api_key: string
   lastfm_api_secret_set: boolean
+  spotify_client_id: string
+  spotify_client_secret_set: boolean
+  backup_schedule_enabled: boolean
+  backup_retention_count: number
+  dedupe_scan_schedule_enabled: boolean
+  low_disk_threshold_gb: number
+  notify_on_maintenance: boolean
+  notify_on_health_alerts: boolean
   provider_ok: boolean | null
   provider_error: string | null
   deezer_ok: boolean | null
@@ -81,6 +91,14 @@ export type AppAuthStatus = {
   authenticated: boolean
   username: string | null
   password_set: boolean
+}
+
+export type AdminUser = {
+  id: number
+  username: string
+  display_name: string
+  is_active: boolean
+  created_at: string
 }
 
 export type ArtistSearchResult = {
@@ -142,6 +160,12 @@ export type RelatedArtist = {
   name: string
   musicbrainz_id?: string | null
   provider?: string | null
+}
+
+export type SimilarArtist = {
+  name: string
+  match: number
+  already_in_library: number | null
 }
 
 export type Artist = {
@@ -234,6 +258,7 @@ export type ImportList = {
   id: number
   name: string
   names_raw: string
+  spotify_playlist_url: string | null
   interval_minutes: number
   enabled: boolean
   last_run_at: string | null
@@ -352,6 +377,12 @@ export const api = {
     }),
   appLogout: () =>
     request<AppAuthStatus>('/auth/logout-session', { method: 'POST' }),
+  adminUsers: () => request<AdminUser[]>('/auth/users'),
+  createAdminUser: (body: { username: string; password: string; display_name?: string }) =>
+    request<AdminUser>('/auth/users', { method: 'POST', body: JSON.stringify(body) }),
+  updateAdminUser: (id: number, body: Record<string, unknown>) =>
+    request<AdminUser>(`/auth/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteAdminUser: (id: number) => request<{ ok: boolean }>(`/auth/users/${id}`, { method: 'DELETE' }),
   health: () => request<Health>('/health'),
   settings: (validate = false) => request<Settings>(`/settings?validate=${validate}`),
   updateSettings: (body: Record<string, unknown>) =>
@@ -408,8 +439,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ artist_ids: artistIds, preferred_id: preferredId }),
     }),
-  artists: () => request<Artist[]>('/artists'),
+  artists: (genre?: string) =>
+    request<Artist[]>(`/artists${genre ? `?genre=${encodeURIComponent(genre)}` : ''}`),
+  libraryGenres: () => request<{ genre: string; count: number }[]>('/library/genres'),
   artist: (id: number) => request<Artist>(`/artists/${id}`),
+  similarArtists: (id: number) => request<SimilarArtist[]>(`/artists/${id}/similar`),
   addArtist: (
     provider_id: string,
     provider?: string,
@@ -519,6 +553,11 @@ export const api = {
       `/albums/${id}?delete_files=${deleteFiles}`,
       { method: 'DELETE' },
     ),
+  bulkSetTrackGenre: (albumId: number, trackIds: number[], genre: string) =>
+    request<{ ok: boolean; updated: number }>(`/albums/${albumId}/tracks/bulk-genre`, {
+      method: 'POST',
+      body: JSON.stringify({ track_ids: trackIds, genre }),
+    }),
   queue: (all = false) => request<DownloadJob[]>(`/queue?all_jobs=${all}`),
   cancelJob: (id: number) =>
     request<DownloadJob>(`/queue/${id}/cancel`, { method: 'POST' }),
@@ -590,10 +629,19 @@ export const api = {
   },
   restoreJob: () => request<RestoreJob>('/backup/restore/job'),
   importLists: () => request<ImportList[]>('/import-lists'),
-  createImportList: (body: { name: string; names_raw: string; interval_minutes: number; enabled: boolean }) =>
-    request<ImportList>('/import-lists', { method: 'POST', body: JSON.stringify(body) }),
-  updateImportList: (id: number, body: Partial<Pick<ImportList, 'name' | 'names_raw' | 'interval_minutes' | 'enabled'>>) =>
-    request<ImportList>(`/import-lists/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  createImportList: (body: {
+    name: string
+    names_raw: string
+    spotify_playlist_url?: string
+    interval_minutes: number
+    enabled: boolean
+  }) => request<ImportList>('/import-lists', { method: 'POST', body: JSON.stringify(body) }),
+  updateImportList: (
+    id: number,
+    body: Partial<
+      Pick<ImportList, 'name' | 'names_raw' | 'spotify_playlist_url' | 'interval_minutes' | 'enabled'>
+    >,
+  ) => request<ImportList>(`/import-lists/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteImportList: (id: number) =>
     request<void>(`/import-lists/${id}`, { method: 'DELETE' }),
   runImportList: (id: number) =>

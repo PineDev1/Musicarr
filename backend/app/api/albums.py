@@ -440,3 +440,32 @@ def delete_album(
     db.commit()
     add_history(db, "album_removed", f"Removed album {title}" + (" (+files)" if delete_files else ""))
     return {"ok": True, "deleted_files": delete_files}
+
+
+class BulkGenreRequest(BaseModel):
+    track_ids: list[int]
+    genre: str
+
+
+@router.post("/{album_id}/tracks/bulk-genre")
+def bulk_set_track_genre(album_id: int, payload: BulkGenreRequest, db: Session = Depends(get_db)):
+    from pathlib import Path
+
+    from app.services.tagging import write_track_genre
+
+    genre = (payload.genre or "").strip()
+    if not genre:
+        raise HTTPException(status_code=400, detail="Genre is required")
+    tracks = list(
+        db.scalars(
+            select(Track).where(Track.album_id == album_id, Track.id.in_(payload.track_ids))
+        ).all()
+    )
+    updated = 0
+    for track in tracks:
+        track.genre = genre
+        if track.path:
+            write_track_genre(Path(track.path), genre)
+        updated += 1
+    db.commit()
+    return {"ok": True, "updated": updated}

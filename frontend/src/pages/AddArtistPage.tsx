@@ -1,13 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { api, type ArtistSearchResult, type BulkArtistSearchResult } from '../api'
 import { useToast } from '../Toast'
 
 export function AddArtistPage() {
-  const [q, setQ] = useState('')
-  const [submitted, setSubmitted] = useState('')
+  const [searchParams] = useSearchParams()
+  const qFromUrl = searchParams.get('q') || ''
+  const [q, setQ] = useState(qFromUrl)
+  const [submitted, setSubmitted] = useState(qFromUrl)
   const [bulkText, setBulkText] = useState('')
   const [bulkMode, setBulkMode] = useState(false)
   const [bulkResults, setBulkResults] = useState<BulkArtistSearchResult[] | null>(null)

@@ -7,15 +7,17 @@ import { useToast } from '../Toast'
 
 export function LibraryPage() {
   const [filter, setFilter] = useState('')
+  const [genre, setGenre] = useState('')
   const [mergeGroup, setMergeGroup] = useState<
     { id: number; name: string; provider: string; provider_id: string }[] | null
   >(null)
   const qc = useQueryClient()
   const toast = useToast()
   const { data, isLoading, error } = useQuery({
-    queryKey: ['artists'],
-    queryFn: api.artists,
+    queryKey: ['artists', genre],
+    queryFn: () => api.artists(genre || undefined),
   })
+  const genres = useQuery({ queryKey: ['library-genres'], queryFn: api.libraryGenres })
   const { data: upgradable } = useQuery({
     queryKey: ['upgradable'],
     queryFn: api.upgradable,
@@ -181,6 +183,16 @@ export function LibraryPage() {
             onChange={(e) => setFilter(e.target.value)}
             style={{ flex: 1, minWidth: 180 }}
           />
+          {!!genres.data?.length && (
+            <select value={genre} onChange={(e) => setGenre(e.target.value)} style={{ minWidth: 160 }}>
+              <option value="">All genres</option>
+              {genres.data.map((g) => (
+                <option key={g.genre} value={g.genre}>
+                  {g.genre} ({g.count})
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       )}
 

@@ -57,6 +57,14 @@ class SettingsOut(BaseModel):
     default_download_mode: str = "manual"
     lastfm_api_key: str = ""
     lastfm_api_secret_set: bool = False
+    spotify_client_id: str = ""
+    spotify_client_secret_set: bool = False
+    backup_schedule_enabled: bool = True
+    backup_retention_count: int = 7
+    dedupe_scan_schedule_enabled: bool = True
+    low_disk_threshold_gb: int = 10
+    notify_on_maintenance: bool = True
+    notify_on_health_alerts: bool = True
     provider_ok: bool | None = None
     provider_error: str | None = None
     deezer_ok: bool | None = None
@@ -109,6 +117,14 @@ class SettingsUpdate(BaseModel):
     default_download_mode: Literal["auto", "manual"] | None = None
     lastfm_api_key: str | None = None
     lastfm_api_secret: str | None = None
+    spotify_client_id: str | None = None
+    spotify_client_secret: str | None = None
+    backup_schedule_enabled: bool | None = None
+    backup_retention_count: int | None = Field(default=None, ge=1, le=60)
+    dedupe_scan_schedule_enabled: bool | None = None
+    low_disk_threshold_gb: int | None = Field(default=None, ge=1, le=1000)
+    notify_on_maintenance: bool | None = None
+    notify_on_health_alerts: bool | None = None
 
 
 class NotifyTestRequest(BaseModel):
@@ -135,6 +151,8 @@ class HealthOut(BaseModel):
     queue_size: int
     pending_artists: int = 0
     skipped_albums: int = 0
+    disk_free_bytes: int | None = None
+    low_disk_warning: bool = False
 
 
 class SearchArtistHit(BaseModel):
@@ -297,6 +315,12 @@ class RelatedArtistOut(BaseModel):
     provider: str | None = None
 
 
+class SimilarArtistOut(BaseModel):
+    name: str
+    match: float = 0.0
+    already_in_library: int | None = None
+
+
 class ArtistOut(BaseModel):
     id: int
     provider: str = "deezer"
@@ -354,7 +378,8 @@ class BulkArtistIdsRequest(BaseModel):
 
 class ImportListCreate(BaseModel):
     name: str
-    names_raw: str
+    names_raw: str = ""
+    spotify_playlist_url: str | None = None
     interval_minutes: int = Field(default=720, ge=15, le=10080)
     enabled: bool = True
 
@@ -362,6 +387,7 @@ class ImportListCreate(BaseModel):
 class ImportListUpdate(BaseModel):
     name: str | None = None
     names_raw: str | None = None
+    spotify_playlist_url: str | None = None
     interval_minutes: int | None = Field(default=None, ge=15, le=10080)
     enabled: bool | None = None
 
@@ -370,6 +396,7 @@ class ImportListOut(BaseModel):
     id: int
     name: str
     names_raw: str
+    spotify_playlist_url: str | None = None
     interval_minutes: int
     enabled: bool
     last_run_at: datetime | None
@@ -524,6 +551,29 @@ class AppAuthStatus(BaseModel):
     authenticated: bool
     username: str | None = None
     password_set: bool = False
+
+
+class AdminUserOut(BaseModel):
+    id: int
+    username: str
+    display_name: str = ""
+    is_active: bool = True
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AdminUserCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=4, max_length=256)
+    display_name: str = ""
+
+
+class AdminUserUpdate(BaseModel):
+    password: str | None = Field(default=None, min_length=4, max_length=256)
+    display_name: str | None = None
+    is_active: bool | None = None
 
 
 class PlayerUserOut(BaseModel):

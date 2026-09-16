@@ -20,16 +20,24 @@ export function ImportListsPage() {
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
   const [namesRaw, setNamesRaw] = useState('')
+  const [spotifyUrl, setSpotifyUrl] = useState('')
   const [interval, setInterval] = useState(720)
 
   const create = useMutation({
     mutationFn: () =>
-      api.createImportList({ name, names_raw: namesRaw, interval_minutes: interval, enabled: true }),
+      api.createImportList({
+        name,
+        names_raw: spotifyUrl.trim() ? '' : namesRaw,
+        spotify_playlist_url: spotifyUrl.trim() || undefined,
+        interval_minutes: interval,
+        enabled: true,
+      }),
     onSuccess: () => {
       toast.push('Import list created', 'ok')
       setCreating(false)
       setName('')
       setNamesRaw('')
+      setSpotifyUrl('')
       setInterval(720)
       qc.invalidateQueries({ queryKey: ['import-lists'] })
     },
@@ -89,7 +97,20 @@ export function ImportListsPage() {
               value={namesRaw}
               onChange={(e) => setNamesRaw(e.target.value)}
               placeholder={'Luke Combs\nEd Sheeran\nShenandoah'}
+              disabled={!!spotifyUrl.trim()}
             />
+          </div>
+          <div className="field" style={{ margin: 0 }}>
+            <label>…or a Spotify playlist URL</label>
+            <input
+              value={spotifyUrl}
+              onChange={(e) => setSpotifyUrl(e.target.value)}
+              placeholder="https://open.spotify.com/playlist/..."
+            />
+            <p className="muted tiny" style={{ margin: '0.25rem 0 0' }}>
+              Pulls artist names from the playlist instead of the list above. Requires a Spotify
+              app key in Settings → Player.
+            </p>
           </div>
           <div className="field" style={{ margin: 0, maxWidth: 220 }}>
             <label>Check every</label>
@@ -105,7 +126,7 @@ export function ImportListsPage() {
             <button
               className="btn"
               onClick={() => create.mutate()}
-              disabled={create.isPending || !name.trim() || !namesRaw.trim()}
+              disabled={create.isPending || !name.trim() || (!namesRaw.trim() && !spotifyUrl.trim())}
             >
               Create
             </button>
@@ -125,6 +146,7 @@ export function ImportListsPage() {
       <div className="album-list">
         {(data || []).map((list: ImportList) => {
           const names = list.names_raw.split('\n').filter((n) => n.trim()).length
+          const isSpotify = !!list.spotify_playlist_url
           return (
             <div
               key={list.id}
@@ -139,7 +161,8 @@ export function ImportListsPage() {
                   </span>
                 </div>
                 <div className="muted">
-                  {names} artist{names === 1 ? '' : 's'} · every <IntervalLabel minutes={list.interval_minutes} />
+                  {isSpotify ? 'Spotify playlist' : `${names} artist${names === 1 ? '' : 's'}`} · every{' '}
+                  <IntervalLabel minutes={list.interval_minutes} />
                   {list.last_run_at ? ` · last run ${new Date(list.last_run_at).toLocaleString()}` : ' · never run'}
                 </div>
                 {list.last_result && (

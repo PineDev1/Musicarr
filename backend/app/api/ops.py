@@ -150,6 +150,21 @@ def library_job():
     return library_jobs.job_dict()
 
 
+@router.get("/library/genres")
+def library_genres(db: Session = Depends(get_db)):
+    from sqlalchemy import func
+
+    from app.models import Track
+
+    rows = db.execute(
+        select(Track.genre, func.count())
+        .where(Track.genre.is_not(None), Track.genre != "")
+        .group_by(Track.genre)
+        .order_by(func.count().desc())
+    ).all()
+    return [{"genre": g, "count": c} for g, c in rows]
+
+
 @router.get("/library/review", response_model=ImportReviewOut)
 def library_review(db: Session = Depends(get_db), suggest: bool = True):
     """Show local / weakly tagged imports that need manual linking."""

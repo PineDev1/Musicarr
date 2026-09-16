@@ -12,6 +12,7 @@ from app.models.schemas import (
     BulkArtistIdsRequest,
     BulkArtistSearchRequest,
     BulkArtistSearchResult,
+    SimilarArtistOut,
 )
 from app.services.artists import (
     add_artist,
@@ -22,6 +23,7 @@ from app.services.artists import (
     delete_artist,
     effective_download_mode,
     effective_quality,
+    find_artist_by_normalized_name,
     find_linked_artists,
     get_artist_detail,
     grouped_artist_stats,
@@ -344,11 +346,31 @@ def merge_artist_rows(payload: ArtistMergeRequest, db: Session = Depends(get_db)
 
 
 @router.get("", response_model=list[ArtistOut])
-def get_artists(db: Session = Depends(get_db)):
+def get_artists(db: Session = Depends(get_db), genre: str | None = Query(None)):
     settings = ensure_settings(db)
     active = (settings.active_provider or "deezer").lower()
     up_on = bool(getattr(settings, "upgrade_enabled", True))
     collisions = name_collision_ids(db)
+
+    genre_artist_ids: set[int] | None = None
+    if genre:
+        from sqlalchemy import select as _select
+
+        from app.models import Album, Track
+
+        genre_artist_ids = set(
+            db.scalars(
+                _select(Album.artist_id)
+                .join(Track, Track.album_id == Album.id)
+                .where(Track.genre == genre)
+                .distinct()
+            ).all()
+        )
+
+    groups = list_artists_grouped(db)
+    if genre_artist_ids is not None:
+        groups = [g for g in groups if any(a.id in genre_artist_ids for a in g)]
+
     return [
         _artist_group_out(
             group,
@@ -358,7 +380,7 @@ def get_artists(db: Session = Depends(get_db)):
             upgrade_enabled=up_on,
             collision_ids=collisions,
         )
-        for group in list_artists_grouped(db)
+        for group in groups
     ]
 
 
@@ -470,6 +492,30 @@ def get_artist(artist_id: int, db: Session = Depends(get_db)):
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
         collision_ids=name_collision_ids(db),
     )
+
+
+@router.get("/{artist_id}/similar", response_model=list[SimilarArtistOut])
+def get_similar_artists(artist_id: int, db: Session = Depends(get_db)):
+    from app.services import lastfm
+
+    artist = db.get(Artist, artist_id)
+    if not artist:
+        raise HTTPException(status_code=404, detail="Artist not found")
+    try:
+        hits = lastfm.similar_artists(db, artist.name)
+    except lastfm.LastfmError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    out = []
+    for hit in hits:
+        existing = find_artist_by_normalized_name(db, hit["name"], artist.provider)
+        out.append(
+            SimilarArtistOut(
+                name=hit["name"],
+                match=hit["match"],
+                already_in_library=existing.id if existing else None,
+            )
+        )
+    return out
 
 
 @router.patch("/{artist_id}", response_model=ArtistOut)

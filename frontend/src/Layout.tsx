@@ -255,6 +255,14 @@ export function Layout() {
               `Configure a valid ${provider} account in Settings to download music.`}
           </div>
         )}
+        {health.data?.low_disk_warning && (
+          <div className="banner danger">
+            Low disk space
+            {health.data.disk_free_bytes != null
+              ? ` — ${(health.data.disk_free_bytes / 1024 ** 3).toFixed(1)}GB free`
+              : ''}
+          </div>
+        )}
         <AnimatePresence mode="wait">
           <motion.div
             key={location.pathname}

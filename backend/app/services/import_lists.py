@@ -39,10 +39,31 @@ def run_import_list(db: Session, import_list: ImportList) -> dict:
     runs unattended, so an ambiguous or fuzzy hit is skipped rather than
     guessed at.
     """
-    names = _parse_names(import_list.names_raw)
     added: list[str] = []
     skipped: list[str] = []
     errors: list[str] = []
+
+    playlist_url = (getattr(import_list, "spotify_playlist_url", None) or "").strip()
+    if playlist_url:
+        from app.services import spotify
+
+        playlist_id = spotify.extract_playlist_id(playlist_url)
+        if not playlist_id:
+            summary = "Could not parse a playlist id from that Spotify URL"
+            import_list.last_run_at = datetime.now(timezone.utc)
+            import_list.last_result = summary
+            db.commit()
+            return {"added": added, "skipped": skipped, "errors": errors, "summary": summary}
+        try:
+            names = spotify.playlist_artist_names(db, playlist_id)
+        except spotify.SpotifyError as exc:
+            summary = f"Spotify lookup failed: {exc}"
+            import_list.last_run_at = datetime.now(timezone.utc)
+            import_list.last_result = summary
+            db.commit()
+            return {"added": added, "skipped": skipped, "errors": errors, "summary": summary}
+    else:
+        names = _parse_names(import_list.names_raw)
 
     if not names:
         summary = "No names in this list"

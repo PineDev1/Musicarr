@@ -115,6 +115,25 @@ def write_track_tags(
         logger.warning("Failed tagging %s: %s", path, exc)
 
 
+def write_track_genre(path: Path, genre: str) -> None:
+    """Rewrite just the genre tag. Uses mutagen's format-agnostic "easy" tag
+    interface (same one _read_tags reads through) rather than duplicating the
+    per-format branching in write_track_tags — genre is the one field every
+    format's easy mapping already normalizes to a single "genre" key."""
+    if not path.exists():
+        return
+    try:
+        from mutagen import File as MutagenFile
+
+        audio = MutagenFile(path, easy=True)
+        if audio is None:
+            return
+        audio["genre"] = [genre]
+        audio.save()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed writing genre for %s: %s", path, exc)
+
+
 def format_credit_artist(primary: str, collaborators: list[str]) -> str:
     """Build a clean artist credit string without duplicating the primary name."""
     primary_clean = (primary or "").strip()

@@ -86,6 +86,14 @@ class AppSettings(Base):
     # each PlayerUser connects their own account via lastfm_session_key)
     lastfm_api_key: Mapped[str] = mapped_column(String(64), default="")
     lastfm_api_secret: Mapped[str] = mapped_column(String(64), default="")
+    spotify_client_id: Mapped[str] = mapped_column(String(128), default="")
+    spotify_client_secret: Mapped[str] = mapped_column(String(128), default="")
+    backup_schedule_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    backup_retention_count: Mapped[int] = mapped_column(Integer, default=7)
+    dedupe_scan_schedule_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    low_disk_threshold_gb: Mapped[int] = mapped_column(Integer, default=10)
+    notify_on_maintenance: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_on_health_alerts: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -250,10 +258,26 @@ class ImportList(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(256), default="")
     names_raw: Mapped[str] = mapped_column(Text, default="")
+    # When set, artist names are pulled from this Spotify playlist instead of
+    # parsing names_raw — see app/services/spotify.py
+    spotify_playlist_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     interval_minutes: Mapped[int] = mapped_column(Integer, default=720)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_result: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AdminUser(Base):
+    """Multi-admin login — each has full access (no role tiers)."""
+
+    __tablename__ = "admin_users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(Text, default="")
+    display_name: Mapped[str] = mapped_column(String(256), default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

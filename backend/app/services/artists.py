@@ -891,7 +891,6 @@ def _sync_from_musicbrainz(
 
     if discover_featured:
         featured_names: list[str] = []
-        collab_titles: list[str] = []
         for a in touched:
             if a.status not in {"wanted", "missing", "downloaded"}:
                 continue
@@ -901,26 +900,16 @@ def _sync_from_musicbrainz(
             credit = (getattr(a, "artist_credit", None) or "")
             if names:
                 featured_names.extend(names)
-                collab_titles.append(a.title or "")
             elif credit:
                 for chunk in credit.replace(" feat. ", ",").replace(" & ", ",").split(","):
                     name = chunk.strip()
                     if name and _norm_artist_name(name) != _norm_artist_name(artist.name):
                         featured_names.append(name)
-                        collab_titles.append(a.title or "")
         featured_names = list(dict.fromkeys(featured_names))
-        # Commit primary catalog first so featured sync can't UNIQUE-clash on unflushed rows.
         if not _safe_commit_artist_sync(db, artist):
             return touched
         try:
-            related = _ensure_featured_artists(
-                db,
-                primary=artist,
-                featured_names=featured_names,
-                provider_name=provider_name,
-                collab_titles=collab_titles,
-                require_approval=require_approval,
-            )
+            related = _related_artists_display(db, primary=artist, featured_names=featured_names)
             if not _artist_still_exists(db, artist.id):
                 db.rollback()
                 return touched
@@ -953,104 +942,38 @@ def _sync_from_musicbrainz(
     return touched
 
 
-def _ensure_featured_artists(
+def _related_artists_display(
     db: Session,
     *,
     primary: Artist,
     featured_names: list[str],
-    provider_name: str,
-    collab_titles: list[str] | None = None,
-    require_approval: bool = False,
 ) -> list[dict]:
-    """Add collab artists with full MB catalog; auto-queue only shared releases."""
-    from app.services.providers import get_provider
-    from app.services.download_queue import download_queue
+    """Build the "Featured / related" display list shown on the artist page.
 
-    provider = get_provider(db, provider_name)
+    Read-only: looks up names against artists already in the library and
+    otherwise just reports the name. Does NOT create Artist rows, search
+    providers, or touch albums/downloads — a collaborator is only ever added
+    to the library once one of their actual shared tracks is downloaded (see
+    mirror_downloaded_album_to_collaborators, called on download completion).
+    This keeps adding/refreshing/monitoring an artist a purely local, cheap
+    operation instead of a recursive provider-search-and-create cascade.
+    """
     related: list[dict] = []
     primary_key = _norm_artist_name(primary.name)
-    title_keys = {_norm_album_title(t) for t in (collab_titles or []) if t}
-    # Also match cleaned titles
-    title_keys |= {_norm_album_title(_clean_collab_title(t, primary.name)) for t in (collab_titles or []) if t}
-
-    from sqlalchemy.exc import IntegrityError
-
     for name in featured_names[:12]:
         if _norm_artist_name(name) == primary_key:
             continue
         existing = db.scalar(
-            select(Artist).where(Artist.name == name, Artist.provider == provider_name)
+            select(Artist).where(Artist.name == name, Artist.provider == primary.provider)
         )
         if existing is None:
-            existing = find_artist_by_normalized_name(db, name, provider_name)
-        if existing is None:
-            try:
-                hits = provider.search_artists(name, limit=5)
-            except Exception:  # noqa: BLE001
-                hits = []
-            hit = next(
-                (h for h in hits if _norm_artist_name(h.name) == _norm_artist_name(name)),
-                hits[0] if hits else None,
-            )
-            if not hit:
-                related.append({"id": None, "name": name, "musicbrainz_id": None, "provider": None})
-                continue
-            try:
-                # Featured artists: albums + EPs only (not full singles catalog).
-                # Shared collabs are still kept via multi-credit / title matching.
-                existing = add_artist(
-                    db,
-                    hit.provider_id,
-                    monitored=True,
-                    download_missing=False,
-                    provider_name=provider_name,
-                    skip_featured=True,
-                    include_singles=False,
-                    require_approval=require_approval,
-                    pending_reason="featured" if require_approval else "",
-                )
-            except IntegrityError as exc:
-                db.rollback()
-                add_history(
-                    db,
-                    "featured_artist_error",
-                    f"Could not add featured artist {name}: {exc}",
-                )
-                continue
-
-        albums = list(db.scalars(select(Album).where(Album.artist_id == existing.id)).all())
-        for album in albums:
-            if (album.status or "") == "downloaded":
-                continue
-            title_key = _norm_album_title(album.title or "")
-            collab_hit = bool(title_key and title_key in title_keys)
-            mentions_primary = bool(primary_key and primary_key in (album.title or "").lower())
-            collabs = _album_collaborators(album)
-            credit = (getattr(album, "artist_credit", None) or "").lower()
-            mentions_via_credit = any(
-                _norm_artist_name(c) == primary_key for c in collabs
-            ) or (primary_key and primary_key in credit)
-            # Keep full MusicBrainz catalog visible (wanted/missing). Only auto-queue shared collabs.
-            if collab_hit or mentions_primary or mentions_via_credit:
-                if album.status == "missing":
-                    album.monitored = True
-                elif album.status != "wanted":
-                    album.status = "wanted"
-                    album.monitored = True
-                    album.status_reason = ""
-                if (
-                    existing.status == "active"
-                    and effective_download_mode(db, existing) == "auto"
-                ):
-                    download_queue.enqueue_album(db, album.id)
-        db.commit()
-
+            existing = find_artist_by_normalized_name(db, name, primary.provider)
         related.append(
             {
-                "id": existing.id,
-                "name": existing.name,
-                "musicbrainz_id": getattr(existing, "musicbrainz_id", None),
-                "provider": existing.provider,
+                "id": existing.id if existing else None,
+                "name": existing.name if existing else name,
+                "musicbrainz_id": getattr(existing, "musicbrainz_id", None) if existing else None,
+                "provider": existing.provider if existing else None,
             }
         )
     return related

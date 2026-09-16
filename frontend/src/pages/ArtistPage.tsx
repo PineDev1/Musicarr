@@ -35,6 +35,12 @@ export function ArtistPage() {
     queryFn: () => api.queue(true),
     refetchInterval: 2000,
   })
+  const similar = useQuery({
+    queryKey: ['similar-artists', artistId],
+    queryFn: () => api.similarArtists(artistId),
+    enabled: Number.isFinite(artistId),
+    retry: false,
+  })
 
   useEffect(() => {
     const es = new EventSource('/api/events/queue')
@@ -326,6 +332,21 @@ export function ArtistPage() {
                 <span key={`${r.name}-${i}`}>
                   {i > 0 ? ', ' : ''}
                   {r.id ? <Link to={`/artists/${r.id}`}>{r.name}</Link> : r.name}
+                </span>
+              ))}
+            </p>
+          )}
+          {!!similar.data?.length && (
+            <p className="muted" style={{ marginTop: '0.5rem' }}>
+              You might also like:{' '}
+              {similar.data.map((s, i) => (
+                <span key={`${s.name}-${i}`}>
+                  {i > 0 ? ', ' : ''}
+                  {s.already_in_library ? (
+                    <Link to={`/artists/${s.already_in_library}`}>{s.name}</Link>
+                  ) : (
+                    <Link to={`/add?q=${encodeURIComponent(s.name)}`}>{s.name}</Link>
+                  )}
                 </span>
               ))}
             </p>

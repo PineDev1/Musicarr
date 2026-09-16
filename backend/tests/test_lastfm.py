@@ -102,3 +102,46 @@ def test_scrobble_calls_api_with_session_key(db, monkeypatch):
     assert captured["data"]["sk"] == "sess-key"
     assert captured["data"]["timestamp"] == "1000"
     assert "api_sig" in captured["data"]
+
+
+def test_similar_artists_parses_results(db, monkeypatch):
+    _settings_with_lastfm(db)
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "similarartists": {
+                    "artist": [
+                        {"name": "Ed Sheeran", "match": "0.95"},
+                        {"name": "Shenandoah", "match": "0.5"},
+                    ]
+                }
+            }
+
+    monkeypatch.setattr(lastfm.requests, "get", lambda *a, **k: FakeResp())
+
+    results = lastfm.similar_artists(db, "Luke Combs")
+
+    assert results == [
+        {"name": "Ed Sheeran", "match": 0.95},
+        {"name": "Shenandoah", "match": 0.5},
+    ]
+
+
+def test_similar_artists_empty_name_short_circuits(db):
+    assert lastfm.similar_artists(db, "") == []
+
+
+def test_similar_artists_raises_on_http_error(db, monkeypatch):
+    _settings_with_lastfm(db)
+
+    class FakeResp:
+        status_code = 500
+        text = "boom"
+
+    monkeypatch.setattr(lastfm.requests, "get", lambda *a, **k: FakeResp())
+
+    with pytest.raises(lastfm.LastfmError):
+        lastfm.similar_artists(db, "Luke Combs")

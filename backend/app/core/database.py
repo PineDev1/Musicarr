@@ -114,6 +114,14 @@ def migrate_schema(engine_: Engine | None = None) -> None:
         "notify_on_library_events": "BOOLEAN DEFAULT 0",
         "lastfm_api_key": "VARCHAR(64) DEFAULT ''",
         "lastfm_api_secret": "VARCHAR(64) DEFAULT ''",
+        "spotify_client_id": "VARCHAR(128) DEFAULT ''",
+        "spotify_client_secret": "VARCHAR(128) DEFAULT ''",
+        "backup_schedule_enabled": "BOOLEAN DEFAULT 1",
+        "backup_retention_count": "INTEGER DEFAULT 7",
+        "dedupe_scan_schedule_enabled": "BOOLEAN DEFAULT 1",
+        "low_disk_threshold_gb": "INTEGER DEFAULT 10",
+        "notify_on_maintenance": "BOOLEAN DEFAULT 1",
+        "notify_on_health_alerts": "BOOLEAN DEFAULT 1",
     }
     existing = existing_columns("app_settings")
     for name, definition in settings_cols.items():
@@ -248,6 +256,10 @@ def migrate_schema(engine_: Engine | None = None) -> None:
             add_column("tracks", "lyrics_synced TEXT")
         if "lyrics_checked_at" not in track_cols:
             add_column("tracks", "lyrics_checked_at DATETIME")
+
+    import_list_cols = existing_columns("import_lists")
+    if import_list_cols and "spotify_playlist_url" not in import_list_cols:
+        add_column("import_lists", "spotify_playlist_url VARCHAR(1024)")
 
     # Drop retired indexer / download-client tables (streaming-only).
     with eng.begin() as conn:

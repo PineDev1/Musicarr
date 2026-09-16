@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
 import { useToast } from '../Toast'
@@ -16,6 +17,8 @@ export function AlbumPage() {
   const qc = useQueryClient()
   const toast = useToast()
   const navigate = useNavigate()
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [bulkGenre, setBulkGenre] = useState('')
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['album', albumId],
@@ -46,6 +49,17 @@ export function AlbumPage() {
       qc.invalidateQueries({ queryKey: ['wanted'] })
       if (data?.artist_id) navigate(`/artists/${data.artist_id}`)
       else navigate('/')
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+
+  const bulkGenreMutation = useMutation({
+    mutationFn: () => api.bulkSetTrackGenre(albumId, Array.from(selected), bulkGenre.trim()),
+    onSuccess: (res) => {
+      toast.push(`Genre updated on ${res.updated} track(s)`, 'ok')
+      setSelected(new Set())
+      setBulkGenre('')
+      qc.invalidateQueries({ queryKey: ['album', albumId] })
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
@@ -163,9 +177,33 @@ export function AlbumPage() {
         Tracks on disk: {downloadedTracks}/{data.tracks.length || data.track_count}
       </p>
 
+      {selected.size > 0 && (
+        <div className="toolbar" style={{ alignItems: 'center' }}>
+          <span className="muted">{selected.size} selected</span>
+          <input
+            type="text"
+            placeholder="Genre"
+            value={bulkGenre}
+            onChange={(e) => setBulkGenre(e.target.value)}
+            style={{ maxWidth: 180 }}
+          />
+          <button
+            className="btn secondary"
+            disabled={!bulkGenre.trim() || bulkGenreMutation.isPending}
+            onClick={() => bulkGenreMutation.mutate()}
+          >
+            Apply genre
+          </button>
+          <button className="btn ghost" onClick={() => setSelected(new Set())}>
+            Clear
+          </button>
+        </div>
+      )}
+
       <table className="table">
         <thead>
           <tr>
+            <th></th>
             <th>#</th>
             <th>Title</th>
             <th>Duration</th>
@@ -175,6 +213,22 @@ export function AlbumPage() {
         <tbody>
           {data.tracks.map((t) => (
             <tr key={t.id}>
+              <td>
+                {t.downloaded && (
+                  <input
+                    type="checkbox"
+                    checked={selected.has(t.id)}
+                    onChange={() => {
+                      setSelected((prev) => {
+                        const next = new Set(prev)
+                        if (next.has(t.id)) next.delete(t.id)
+                        else next.add(t.id)
+                        return next
+                      })
+                    }}
+                  />
+                )}
+              </td>
               <td>
                 {t.disc_no > 1 ? `${t.disc_no}-` : ''}
                 {t.track_no || '—'}
@@ -199,7 +253,7 @@ export function AlbumPage() {
           ))}
           {data.tracks.length === 0 && (
             <tr>
-              <td colSpan={4} className="muted">
+              <td colSpan={5} className="muted">
                 No track metadata yet. Download or refresh the artist to sync tracks.
               </td>
             </tr>

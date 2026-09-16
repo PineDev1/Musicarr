@@ -136,6 +136,14 @@ def settings_to_out(row: AppSettings, validate: bool = False) -> SettingsOut:
         default_download_mode=(getattr(row, "default_download_mode", None) or "manual"),
         lastfm_api_key=getattr(row, "lastfm_api_key", "") or "",
         lastfm_api_secret_set=bool((getattr(row, "lastfm_api_secret", "") or "").strip()),
+        spotify_client_id=getattr(row, "spotify_client_id", "") or "",
+        spotify_client_secret_set=bool((getattr(row, "spotify_client_secret", "") or "").strip()),
+        backup_schedule_enabled=bool(getattr(row, "backup_schedule_enabled", True)),
+        backup_retention_count=int(getattr(row, "backup_retention_count", 7) or 7),
+        dedupe_scan_schedule_enabled=bool(getattr(row, "dedupe_scan_schedule_enabled", True)),
+        low_disk_threshold_gb=int(getattr(row, "low_disk_threshold_gb", 10) or 10),
+        notify_on_maintenance=bool(getattr(row, "notify_on_maintenance", True)),
+        notify_on_health_alerts=bool(getattr(row, "notify_on_health_alerts", True)),
     )
 
 
