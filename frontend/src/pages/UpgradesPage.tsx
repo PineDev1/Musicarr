@@ -9,7 +9,7 @@ export function UpgradesPage() {
   const qc = useQueryClient()
   const toast = useToast()
   const [selected, setSelected] = useState<Set<number>>(new Set())
-  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.settings() })
+  const settings = useQuery({ queryKey: ['settings', false], queryFn: () => api.settings() })
   const { data, isLoading, error } = useQuery({
     queryKey: ['upgradable'],
     queryFn: api.upgradable,

@@ -67,7 +67,7 @@ def notify_test(payload: NotifyTestRequest | None = None, db: Session = Depends(
     try:
         send_test_notification(
             db,
-            webhook_url=payload.notify_webhook_url,
+            webhook_url=url,
             channel=payload.notify_channel,
             token=payload.notify_token,
         )
@@ -80,15 +80,22 @@ def notify_test(payload: NotifyTestRequest | None = None, db: Session = Depends(
 def health(db: Session = Depends(get_db)):
     row = ensure_settings(db)
     active = (row.active_provider or "deezer").lower()
-    deezer_ok, deezer_error = get_provider(db, "deezer").validate_session()
-    tidal_ok, tidal_error = get_provider(db, "tidal").validate_session()
-    qobuz_ok, qobuz_error = get_provider(db, "qobuz").validate_session()
-    mapping = {
-        "deezer": (deezer_ok, deezer_error),
-        "tidal": (tidal_ok, tidal_error),
-        "qobuz": (qobuz_ok, qobuz_error),
-    }
-    provider_ok, provider_error = mapping.get(active, (False, "Unknown provider"))
+    streaming_enabled = bool(getattr(row, "streaming_enabled", True))
+    if streaming_enabled:
+        deezer_ok, deezer_error = get_provider(db, "deezer").validate_session()
+        tidal_ok, tidal_error = get_provider(db, "tidal").validate_session()
+        qobuz_ok, qobuz_error = get_provider(db, "qobuz").validate_session()
+        mapping = {
+            "deezer": (deezer_ok, deezer_error),
+            "tidal": (tidal_ok, tidal_error),
+            "qobuz": (qobuz_ok, qobuz_error),
+        }
+        provider_ok, provider_error = mapping.get(active, (False, "Unknown provider"))
+    else:
+        # Streaming turned off (torrent/Usenet-only) — skip session checks
+        # entirely so no "not connected" error ever surfaces for it.
+        deezer_ok = tidal_ok = qobuz_ok = provider_ok = True
+        deezer_error = tidal_error = qobuz_error = provider_error = None
     lib = Path(row.library_path)
     wanted = db.scalar(
         select(func.count())
@@ -141,4 +148,5 @@ def health(db: Session = Depends(get_db)):
         skipped_albums=skipped_albums,
         disk_free_bytes=disk_free_bytes,
         low_disk_warning=low_disk_warning,
+        streaming_enabled=streaming_enabled,
     )

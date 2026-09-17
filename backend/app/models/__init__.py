@@ -94,6 +94,16 @@ class AppSettings(Base):
     low_disk_threshold_gb: Mapped[int] = mapped_column(Integer, default=10)
     notify_on_maintenance: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_on_health_alerts: Mapped[bool] = mapped_column(Boolean, default=True)
+    # streaming | indexer | streaming_then_indexer
+    preferred_download_method: Mapped[str] = mapped_column(String(32), default="streaming")
+    # When False, streaming providers (Deezer/Tidal/Qobuz) are treated as
+    # entirely off: no session validation, no download attempts, no errors
+    # surfaced anywhere in the UI — for torrent/Usenet-only setups.
+    streaming_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    completed_download_scan_interval_seconds: Mapped[int] = mapped_column(Integer, default=60)
+    # hardlink | copy | move — how a finished indexer download is placed into the library
+    import_mechanism: Mapped[str] = mapped_column(String(16), default="hardlink")
+    remove_completed_downloads: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -226,7 +236,7 @@ class DownloadJob(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_category: Mapped[str] = mapped_column(String(32), default="")
     retries: Mapped[int] = mapped_column(Integer, default=0)
-    # Kept for DB compatibility; always "streaming" after indexer removal
+    # streaming | indexer
     source: Mapped[str] = mapped_column(String(32), default="streaming")
     indexer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     client_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -241,6 +251,56 @@ class DownloadJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class Indexer(Base):
+    __tablename__ = "indexers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), default="")
+    # usenet | torrent
+    protocol: Mapped[str] = mapped_column(String(16), default="usenet")
+    # newznab | torznab
+    implementation: Mapped[str] = mapped_column(String(32), default="newznab")
+    base_url: Mapped[str] = mapped_column(String(1024), default="")
+    api_key: Mapped[str] = mapped_column(Text, default="")
+    # JSON array of newznab/torznab category ids
+    categories: Mapped[str] = mapped_column(Text, default="[3000,3010,3040]")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    priority: Mapped[int] = mapped_column(Integer, default=25)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DownloadClient(Base):
+    __tablename__ = "download_clients"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), default="")
+    # usenet | torrent
+    protocol: Mapped[str] = mapped_column(String(16), default="torrent")
+    # qbittorrent | sabnzbd
+    implementation: Mapped[str] = mapped_column(String(32), default="qbittorrent")
+    host: Mapped[str] = mapped_column(String(512), default="localhost")
+    port: Mapped[int] = mapped_column(Integer, default=8080)
+    use_ssl: Mapped[bool] = mapped_column(Boolean, default=False)
+    verify_ssl: Mapped[bool] = mapped_column(Boolean, default=True)
+    username: Mapped[str] = mapped_column(String(256), default="")
+    password: Mapped[str] = mapped_column(Text, default="")
+    api_key: Mapped[str] = mapped_column(Text, default="")
+    category: Mapped[str] = mapped_column(String(128), default="musicarr")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    priority: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RemotePathMapping(Base):
+    __tablename__ = "remote_path_mappings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    host: Mapped[str] = mapped_column(String(512), default="")
+    remote_path: Mapped[str] = mapped_column(String(2048), default="")
+    local_path: Mapped[str] = mapped_column(String(2048), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class HistoryEvent(Base):

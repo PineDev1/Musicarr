@@ -84,11 +84,14 @@ def build_album_folder(
         "type": album_type,
     }
     relative = render_template(folder_template, values)
-    parts = [sanitize_filename(p) for p in Path(relative).parts if p not in ("", ".")]
+    parts = [sanitize_filename(p) for p in Path(relative).parts if p not in ("", ".", "..")]
     folder = library_root.joinpath(*parts)
-    # Safety: never escape library root
+    # Safety: never escape library root. A bare string-prefix check would
+    # wrongly accept a sibling directory that merely shares the root's name
+    # as a prefix (e.g. root "/data/music" vs. "/data/music-private/...").
+    root_resolved = library_root.resolve()
     resolved = folder.resolve()
-    if not str(resolved).startswith(str(library_root.resolve())):
+    if resolved != root_resolved and root_resolved not in resolved.parents:
         raise ValueError("Resolved path escapes library root")
     return resolved
 

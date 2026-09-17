@@ -19,6 +19,7 @@ export function AlbumPage() {
   const navigate = useNavigate()
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [bulkGenre, setBulkGenre] = useState('')
+  const [showReleases, setShowReleases] = useState(false)
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['album', albumId],
@@ -49,6 +50,35 @@ export function AlbumPage() {
       qc.invalidateQueries({ queryKey: ['wanted'] })
       if (data?.artist_id) navigate(`/artists/${data.artist_id}`)
       else navigate('/')
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+
+  const releases = useQuery({
+    queryKey: ['releases', albumId],
+    queryFn: () => api.searchReleases(albumId),
+    enabled: showReleases,
+  })
+
+  const grab = useMutation({
+    mutationFn: (release: {
+      grab_url: string
+      protocol: 'usenet' | 'torrent'
+      indexer_id: number
+      title: string
+    }) =>
+      api.grabRelease({
+        album_id: albumId,
+        grab_url: release.grab_url,
+        protocol: release.protocol,
+        indexer_id: release.indexer_id,
+        title: release.title,
+      }),
+    onSuccess: () => {
+      toast.push('Sent to download client', 'ok')
+      setShowReleases(false)
+      qc.invalidateQueries({ queryKey: ['queue'] })
+      qc.invalidateQueries({ queryKey: ['album', albumId] })
     },
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
@@ -145,6 +175,9 @@ export function AlbumPage() {
             Re-download
           </button>
         )}
+        <button className="btn ghost" onClick={() => setShowReleases((v) => !v)}>
+          {showReleases ? 'Hide releases' : 'Search releases'}
+        </button>
         <button
           className="btn ghost"
           onClick={() => {
@@ -172,6 +205,67 @@ export function AlbumPage() {
           Delete files
         </button>
       </div>
+
+      {showReleases && (
+        <div className="card" style={{ marginBottom: '1rem' }}>
+          <h3 style={{ margin: '0 0 0.25rem', fontSize: '1.05rem' }}>Indexer releases</h3>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Ranked by title/artist match, format, and seeders. Nothing here is grabbed
+            automatically — pick one to send it to your configured download client.
+          </p>
+          {releases.isLoading && <p className="muted">Searching indexers…</p>}
+          {releases.error && <p className="error">{(releases.error as Error).message}</p>}
+          {releases.data && releases.data.length === 0 && (
+            <p className="muted">No results. Add or check your indexers under Settings → Indexers.</p>
+          )}
+          {releases.data && releases.data.length > 0 && (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Release</th>
+                  <th>Indexer</th>
+                  <th>Size</th>
+                  <th>Seeders</th>
+                  <th>Score</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {releases.data.map((r, i) => (
+                  <tr key={`${r.indexer_id}-${i}`}>
+                    <td style={{ maxWidth: 420, wordBreak: 'break-word' }}>{r.title}</td>
+                    <td className="muted">{r.indexer_name}</td>
+                    <td className="muted">{r.size ? `${(r.size / (1024 * 1024)).toFixed(0)} MB` : '—'}</td>
+                    <td className="muted">{r.protocol === 'torrent' ? r.seeders : '—'}</td>
+                    <td>
+                      <span className={`badge ${r.score >= 10 ? 'queued' : 'skipped'}`}>
+                        {r.score.toFixed(1)}
+                      </span>
+                    </td>
+                    <td className="row-actions">
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        disabled={grab.isPending}
+                        onClick={() =>
+                          grab.mutate({
+                            grab_url: r.grab_url,
+                            protocol: r.protocol as 'usenet' | 'torrent',
+                            indexer_id: r.indexer_id,
+                            title: r.title,
+                          })
+                        }
+                      >
+                        Grab
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
 
       <p className="muted" style={{ marginBottom: '0.75rem' }}>
         Tracks on disk: {downloadedTracks}/{data.tracks.length || data.track_count}

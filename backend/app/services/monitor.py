@@ -107,10 +107,15 @@ class ReleaseMonitor:
                             continue
                         if album.provider_id not in before_ids and album.status == "wanted":
                             new_albums += 1
+                            job = None
                             if effective_download_mode(db, artist) == "auto":
-                                download_queue.enqueue_album(db, album.id)
+                                job = download_queue.enqueue_album(db, album.id)
+                            if job:
                                 queued += 1
                             else:
+                                # Also covers indexer-only / streaming-disabled setups,
+                                # where enqueue_album refuses to auto-queue anything —
+                                # those need manual review just like "manual" mode.
                                 awaiting_manual += 1
                 except ProviderError as exc:
                     skipped += 1

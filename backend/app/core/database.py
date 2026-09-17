@@ -107,6 +107,7 @@ def migrate_schema(engine_: Engine | None = None) -> None:
         "player_enabled": "BOOLEAN DEFAULT 0",
         "player_sharing_enabled": "BOOLEAN DEFAULT 1",
         "preferred_download_method": "VARCHAR(32) DEFAULT 'streaming'",
+        "streaming_enabled": "BOOLEAN DEFAULT 1",
         "completed_download_scan_interval_seconds": "INTEGER DEFAULT 60",
         "import_mechanism": "VARCHAR(16) DEFAULT 'hardlink'",
         "remove_completed_downloads": "BOOLEAN DEFAULT 0",
@@ -260,11 +261,6 @@ def migrate_schema(engine_: Engine | None = None) -> None:
     import_list_cols = existing_columns("import_lists")
     if import_list_cols and "spotify_playlist_url" not in import_list_cols:
         add_column("import_lists", "spotify_playlist_url VARCHAR(1024)")
-
-    # Drop retired indexer / download-client tables (streaming-only).
-    with eng.begin() as conn:
-        for table in ("indexers", "download_clients", "remote_path_mappings"):
-            conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
 
     # Indexes added after these tables already existed in the wild — create_all()
     # only creates indexes for brand-new tables, so add them explicitly here.

@@ -10,6 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
 from app.api import (
+    acquisition,
     albums,
     artists,
     auth,
@@ -27,6 +28,7 @@ from app.api import (
 )
 from app.core.database import SessionLocal, ensure_dirs, init_db
 from app.services import app_auth, player_auth, player_presence
+from app.services.completed_download_handler import completed_download_handler
 from app.services.cors_origins import LOCAL_CORS_ORIGINS, origin_is_allowed
 from app.services.download_queue import download_queue
 from app.services.import_lists import import_list_runner
@@ -62,11 +64,13 @@ async def lifespan(_: FastAPI):
     release_monitor.start()
     import_list_runner.start()
     maintenance_scheduler.start()
+    completed_download_handler.start()
     yield
     download_queue.stop()
     release_monitor.stop()
     import_list_runner.stop()
     maintenance_scheduler.stop()
+    completed_download_handler.stop()
 
 
 app = FastAPI(title="Musicarr", version="0.1.0", lifespan=lifespan)
@@ -189,6 +193,7 @@ app.include_router(search.router, prefix="/api")
 app.include_router(stats.router, prefix="/api")
 app.include_router(calendar.router, prefix="/api")
 app.include_router(maintenance.router, prefix="/api")
+app.include_router(acquisition.router, prefix="/api")
 
 
 @app.get("/api")

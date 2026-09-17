@@ -109,22 +109,30 @@ export function QueuePage() {
   })
 
   const jobs = data || []
-  const merged = jobs.map((j) => {
-    const liveJob = live?.find((l) => l.id === j.id)
-    return liveJob
-      ? {
-          ...j,
-          progress: liveJob.progress,
-          state: liveJob.state,
-          error: liveJob.error,
-          error_category: liveJob.error_category || j.error_category,
-          source: liveJob.source || j.source,
-        }
-      : j
-  })
+  const merged = useMemo(() => {
+    const byId = new Map<number, DownloadJob>()
+    for (const j of jobs) byId.set(j.id, j)
+    // A job the SSE stream already knows about but the last 2s poll hasn't
+    // picked up yet (e.g. just queued from another tab) must still show up
+    // immediately, not wait for the next poll — so union by id instead of
+    // only overlaying onto what the poll returned.
+    for (const liveJob of live || []) {
+      const prev = byId.get(liveJob.id)
+      byId.set(liveJob.id, prev ? { ...prev, ...liveJob } : liveJob)
+    }
+    return Array.from(byId.values())
+  }, [jobs, live])
 
   const selectableIds = merged
-    .filter((j) => j.state === 'queued' || j.state === 'running' || j.state === 'failed')
+    .filter(
+      (j) =>
+        j.state === 'queued' ||
+        j.state === 'running' ||
+        j.state === 'failed' ||
+        j.state === 'grabbed' ||
+        j.state === 'downloading' ||
+        j.state === 'importing',
+    )
     .map((j) => j.id)
   const allSelectableSelected =
     selectableIds.length > 0 && selectableIds.every((id) => selected.has(id))
@@ -247,7 +255,12 @@ export function QueuePage() {
           <tbody>
             {merged.map((job) => {
               const selectable =
-                job.state === 'queued' || job.state === 'running' || job.state === 'failed'
+                job.state === 'queued' ||
+                job.state === 'running' ||
+                job.state === 'failed' ||
+                job.state === 'grabbed' ||
+                job.state === 'downloading' ||
+                job.state === 'importing'
               return (
               <tr key={job.id}>
                 <td>
@@ -281,15 +294,22 @@ export function QueuePage() {
                   </div>
                 </td>
                 <td className="row-actions">
-                  {(job.state === 'queued' || job.state === 'running') && (
+                  {(job.state === 'queued' ||
+                    job.state === 'running' ||
+                    job.state === 'grabbed' ||
+                    job.state === 'downloading' ||
+                    job.state === 'importing') && (
                     <button className="btn ghost" onClick={() => cancel.mutate(job.id)}>
                       Cancel
                     </button>
                   )}
-                  {job.state === 'failed' && (
+                  {job.state === 'failed' && job.source !== 'indexer' && (
                     <button className="btn secondary" onClick={() => retry.mutate(job.id)}>
                       Retry
                     </button>
+                  )}
+                  {job.state === 'failed' && job.source === 'indexer' && (
+                    <span className="muted tiny">Search releases again to retry</span>
                   )}
                 </td>
               </tr>

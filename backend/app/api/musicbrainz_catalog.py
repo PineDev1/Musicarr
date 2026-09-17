@@ -61,4 +61,9 @@ def set_mode(payload: CatalogModeUpdate, db: Session = Depends(get_db)):
     if mode not in {"local", "live", "local_with_live_fallback"}:
         raise HTTPException(status_code=400, detail="Invalid mode")
     update_settings(db, SettingsUpdate(mb_catalog_mode=mode))  # type: ignore[arg-type]
+    from app.services.musicbrainz import clear_cache
+
+    # Cached lookups aren't keyed by mode, so a stale live-mode (or local-mode)
+    # response could otherwise be served for up to the cache TTL after switching.
+    clear_cache()
     return catalog_status(db)

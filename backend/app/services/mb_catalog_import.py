@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import bz2
 import json
 import logging
 import os
+import shutil
 import sqlite3
 import tarfile
 import time
@@ -128,12 +128,29 @@ def start_catalog_update(*, force: bool = False) -> CatalogJob:
         return get_job()
 
 
+# Headroom for the download archives (~7GB combined) plus their extracted
+# TSVs and the new catalog build, all of which must coexist alongside the
+# untouched old catalog until the atomic swap at the very end. Checked
+# up front so a doomed run fails in seconds instead of after an hours-long
+# download — and, since the old catalog is never touched until the final
+# os.replace, running out of space mid-build always leaves it fully intact
+# either way; this is purely about failing fast, not about safety.
+MIN_FREE_BYTES_FOR_UPDATE = 25 * 1024 * 1024 * 1024  # 25 GiB
+
+
 def _run_import_job() -> None:
     work = catalog_work_dir()
     core_archive = work / "mbdump.tar.bz2"
     derived_archive = work / "mbdump-derived.tar.bz2"
     extract_dir = work / "extract"
     try:
+        free = shutil.disk_usage(catalog_dir()).free
+        if free < MIN_FREE_BYTES_FOR_UPDATE:
+            raise RuntimeError(
+                f"Only {free / (1024**3):.1f} GiB free — need at least "
+                f"{MIN_FREE_BYTES_FOR_UPDATE / (1024**3):.0f} GiB to safely download and "
+                "build the new catalog alongside the current one. Free up space and try again."
+            )
         _set_job(phase="downloading", message="Resolving latest dump version…", progress_pct=1.0)
         version = fetch_latest_dump_version()
         _set_job(dump_version=version, message=f"Latest dump: {version}")
@@ -261,7 +278,19 @@ def _remote_content_length(url: str) -> int | None:
         ) as client:
             res = client.head(url)
             if res.status_code >= 400:
-                res = client.get(url, headers={"Range": "bytes=0-0"})
+                # Some hosts/CDNs reject HEAD or ignore Range and return the
+                # full ~7GB body — stream so we only ever read the headers,
+                # never buffer the response into memory.
+                with client.stream("GET", url, headers={"Range": "bytes=0-0"}) as streamed:
+                    streamed.raise_for_status()
+                    total = int(streamed.headers.get("Content-Length") or 0)
+                    cr = streamed.headers.get("Content-Range") or ""
+                    if "/" in cr:
+                        try:
+                            total = int(cr.rsplit("/", 1)[-1])
+                        except ValueError:
+                            pass
+                    return total if total > 0 else None
             res.raise_for_status()
             total = int(res.headers.get("Content-Length") or 0)
             cr = res.headers.get("Content-Range") or ""

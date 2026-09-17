@@ -144,13 +144,36 @@ def settings_to_out(row: AppSettings, validate: bool = False) -> SettingsOut:
         low_disk_threshold_gb=int(getattr(row, "low_disk_threshold_gb", 10) or 10),
         notify_on_maintenance=bool(getattr(row, "notify_on_maintenance", True)),
         notify_on_health_alerts=bool(getattr(row, "notify_on_health_alerts", True)),
+        preferred_download_method=(getattr(row, "preferred_download_method", None) or "streaming"),
+        streaming_enabled=bool(getattr(row, "streaming_enabled", True)),
+        completed_download_scan_interval_seconds=int(
+            getattr(row, "completed_download_scan_interval_seconds", 60) or 60
+        ),
+        import_mechanism=(getattr(row, "import_mechanism", None) or "hardlink"),
+        remove_completed_downloads=bool(getattr(row, "remove_completed_downloads", False)),
     )
 
 
 def settings_to_out_validated(db: Session, row: AppSettings) -> SettingsOut:
+    out = settings_to_out(row, validate=False)
+    if not bool(getattr(row, "streaming_enabled", True)):
+        # Streaming turned off entirely (torrent/Usenet-only setup) — skip the
+        # session checks and never surface a "not connected" error for it.
+        return out.model_copy(
+            update={
+                "deezer_ok": None,
+                "deezer_error": None,
+                "tidal_ok": None,
+                "tidal_error": None,
+                "qobuz_ok": None,
+                "qobuz_error": None,
+                "provider_ok": None,
+                "provider_error": None,
+            }
+        )
+
     from app.services.providers import get_provider
 
-    out = settings_to_out(row, validate=False)
     deezer_ok, deezer_error = get_provider(db, "deezer").validate_session()
     tidal_ok, tidal_error = get_provider(db, "tidal").validate_session()
     qobuz_ok, qobuz_error = get_provider(db, "qobuz").validate_session()

@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings as app_config
 from app.core.database import SessionLocal
-from app.models import Album, Artist, DownloadJob
+from app.models import Album, Artist, DownloadJob, Indexer
 from app.services.history import add_history
 from app.services.naming import (
     artist_folder_name,
@@ -28,7 +28,22 @@ from app.services.text_match import normalize_key
 
 logger = logging.getLogger("musicarr.download")
 
-ACTIVE_JOB_STATES = ["queued", "running"]
+# Streaming states this worker drives directly, plus the indexer states an
+# indexer-sourced job passes through under completed_download_handler (never
+# claimed by this queue's own loop, but counted here so a streaming grab and
+# an indexer grab can't both be started on the same album at once).
+ACTIVE_JOB_STATES = ["queued", "running", "grabbed", "downloading", "importing"]
+DOWNLOAD_METHODS = {"streaming", "indexer", "streaming_then_indexer"}
+
+
+def resolve_download_method(settings, method: str | None = None) -> str:
+    requested = (method or getattr(settings, "preferred_download_method", None) or "").lower()
+    resolved = requested if requested in DOWNLOAD_METHODS else "streaming"
+    if resolved != "indexer" and not bool(getattr(settings, "streaming_enabled", True)):
+        # Streaming turned off entirely — never attempt it, whatever the
+        # stored preference says (covers "streaming" and "streaming_then_indexer").
+        return "indexer"
+    return resolved
 
 
 def pick_unique_artist_search_hit(artist_name: str, hits: list) -> object | None:
@@ -176,6 +191,7 @@ class DownloadQueue:
         album_id: int,
         *,
         allow_upgrade: bool = False,
+        method: str | None = None,
     ) -> DownloadJob | None:
         album = db.get(Album, album_id)
         if not album:
@@ -183,6 +199,12 @@ class DownloadQueue:
         if album.status == "skipped" and not allow_upgrade:
             return None
         if album.status == "missing":
+            return None
+        settings = ensure_settings(db)
+        # Indexer grabs are interactive only (Search releases → pick → grab) —
+        # never auto-enqueued here, whether triggered by a manual "download
+        # missing" click or the release monitor.
+        if resolve_download_method(settings, method) == "indexer":
             return None
         from app.services.artists import effective_provider_album_id
 
@@ -241,6 +263,8 @@ class DownloadQueue:
         self,
         db: Session,
         artist_id: int,
+        *,
+        method: str | None = None,
     ) -> list[DownloadJob]:
         albums = db.scalars(
             select(Album).where(
@@ -251,10 +275,34 @@ class DownloadQueue:
         ).all()
         jobs = []
         for album in albums:
-            job = self.enqueue_album(db, album.id)
+            job = self.enqueue_album(db, album.id, method=method)
             if job:
                 jobs.append(job)
         return jobs
+
+    def _abort_client_item(self, db: Session, job: DownloadJob) -> None:
+        """Best-effort: tell the download client to drop an in-progress indexer grab."""
+        if not job.client_id or not job.client_item_id:
+            return
+        from app.models import DownloadClient
+        from app.services.download_clients import DownloadClientError, get_client
+
+        client_row = db.get(DownloadClient, job.client_id)
+        if not client_row:
+            return
+        try:
+            client = get_client(client_row)
+        except DownloadClientError as exc:
+            logger.warning("Cannot abort client item %s: %s", job.client_item_id, exc)
+            return
+        try:
+            client.remove(job.client_item_id, delete_data=True)
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not abort client item %s", job.client_item_id)
+        finally:
+            closer = getattr(client, "close", None)
+            if callable(closer):
+                closer()
 
     def cancel(self, db: Session, job_id: int) -> DownloadJob | None:
         job = db.get(DownloadJob, job_id)
@@ -262,6 +310,8 @@ class DownloadQueue:
             return None
         if job.state in {"completed", "failed", "cancelled"}:
             return job
+        if job.source == "indexer" and job.client_item_id:
+            self._abort_client_item(db, job)
         job.state = "cancelled"
         job.finished_at = datetime.now(timezone.utc)
         db.commit()
@@ -273,6 +323,9 @@ class DownloadQueue:
     def retry(self, db: Session, job_id: int) -> DownloadJob | None:
         job = db.get(DownloadJob, job_id)
         if not job or not job.album_id:
+            return None
+        # Indexer grabs are interactive — use Search releases on the album again.
+        if job.source == "indexer":
             return None
         job.state = "queued"
         job.progress = 0.0
@@ -317,6 +370,17 @@ class DownloadQueue:
         db.commit()
         return count
 
+    def _indexer_nudge_suffix(self, db: Session, settings) -> str:
+        """Extra hint appended to a streaming failure when the user opted into
+        streaming_then_indexer — streaming never auto-falls-back to an indexer
+        grab (that's always a manual pick), so just point at the escape hatch."""
+        if resolve_download_method(settings) != "streaming_then_indexer":
+            return ""
+        has_indexer = db.scalar(select(Indexer).where(Indexer.enabled.is_(True)))
+        if not has_indexer:
+            return ""
+        return " — streaming failed; open Search releases on this album to grab a torrent/NZB manually."
+
     def _is_cancelled(self, job_id: int) -> bool:
         with self._lock:
             return job_id in self._cancel_ids
@@ -360,6 +424,7 @@ class DownloadQueue:
                 )
                 job.album_id = album.id
                 job.target_provider_id = album.provider_id
+                job.target_id = int(album.provider_id) if album.provider_id.isdigit() else 0
                 job.album_title = album.title
                 if album.artist:
                     job.artist_name = album.artist.name
@@ -374,18 +439,19 @@ class DownloadQueue:
             except ProviderError as exc:
                 logger.error("Download auth/rematch failed for job %s: %s", job_id, exc)
                 category = classify_download_error(str(exc))
+                message = str(exc) + self._indexer_nudge_suffix(db, settings)
                 job.state = "failed"
-                job.error = str(exc)
+                job.error = message
                 job.error_category = category
                 job.finished_at = datetime.now(timezone.utc)
                 db.commit()
-                add_history(db, "auth_error" if category == "auth" else "download_failed", str(exc))
+                add_history(db, "auth_error" if category == "auth" else "download_failed", message)
                 from app.services.notifications import send_notification
 
                 send_notification(
                     db,
                     "Download failed",
-                    f"{job.artist_name} – {job.album_title}\n{exc}",
+                    f"{job.artist_name} – {job.album_title}\n{message}",
                     kind="auth" if category == "auth" else "failure",
                 )
                 return
@@ -415,9 +481,14 @@ class DownloadQueue:
                     return
                 value = float(value)
                 now = time.monotonic()
+                # Providers report 0-100 (deemix's "progress" key, and
+                # Qobuz/Tidal's (idx+1)/total*100), not a 0-1 fraction —
+                # comparing against 1.0 here made this throttle a no-op for
+                # every real tick, reintroducing the DB-writer-lock
+                # contention this was written to fix.
                 if (
-                    value < 1.0
-                    and value - progress_state["value"] < 0.01
+                    value < 100.0
+                    and value - progress_state["value"] < 1.0
                     and now - progress_state["at"] < 0.5
                 ):
                     return
@@ -474,22 +545,23 @@ class DownloadQueue:
                     self.wake()
                     shutil.rmtree(staging, ignore_errors=True)
                     return
+                message = str(exc) + self._indexer_nudge_suffix(db, settings)
                 job.state = "failed"
-                job.error = str(exc)
+                job.error = message
                 job.error_category = category
                 job.finished_at = datetime.now(timezone.utc)
                 db.commit()
                 add_history(
                     db,
                     "download_failed",
-                    f"Failed {artist.name if artist else ''} – {album.title}: {exc}",
+                    f"Failed {artist.name if artist else ''} – {album.title}: {message}",
                 )
                 from app.services.notifications import send_notification
 
                 send_notification(
                     db,
                     "Download failed",
-                    f"{artist.name if artist else ''} – {album.title}\n{exc}",
+                    f"{artist.name if artist else ''} – {album.title}\n{message}",
                     kind="failure",
                 )
                 shutil.rmtree(staging, ignore_errors=True)

@@ -26,14 +26,24 @@ _conn: sqlite3.Connection | None = None
 
 
 def configure(path: Path | None = None) -> None:
+    """Point future connections at `path` (e.g. after a catalog rebuild).
+
+    Deliberately does NOT close the outgoing connection here: another thread
+    may be mid-query against it right now (this module is used from request
+    handlers, the monitor loop, and background jobs concurrently, all
+    sharing this one cached connection via check_same_thread=False). Closing
+    it out from under an in-flight query would raise
+    "Cannot operate on a closed database" and break whatever page/job was
+    reading the OLD catalog — which must keep working right up until the
+    NEW one is fully swapped in. Instead, just stop handing this connection
+    out to new callers; the object stays alive via each caller's own local
+    reference until they're done with it, then Python's refcounting closes
+    the underlying (already-replaced-on-disk, still safely readable) file
+    handle once nothing references it anymore.
+    """
     global _db_path, _conn
     with _lock:
-        if _conn is not None:
-            try:
-                _conn.close()
-            except Exception:  # noqa: BLE001
-                pass
-            _conn = None
+        _conn = None
         _db_path = path
 
 
@@ -82,13 +92,24 @@ def resolve_artist(name: str, *, fast: bool = False) -> str | None:
         return None
     con = _connect()
     # Exact name / alias (indexed, case-insensitive) — cheap, covers most hits.
+    # MusicBrainz has plenty of genuinely different artists sharing one exact
+    # name, and this slim catalog stores no disambiguation/popularity field
+    # to break the tie with — so a bare UNION + LIMIT 1 would return whichever
+    # row SQLite's query plan happens to produce first, arbitrarily and
+    # non-deterministically (e.g. a near-empty stub with zero releases
+    # instead of the real artist). Break ties with the one real signal this
+    # schema does have: how many release groups the candidate is actually
+    # credited on.
     row = con.execute(
         """
-        SELECT gid FROM artist WHERE name = ? COLLATE NOCASE
-        UNION
-        SELECT a.gid FROM artist a
+        SELECT a.gid AS gid, (SELECT COUNT(*) FROM artist_rg ar WHERE ar.artist_id = a.id) AS rg_count
+        FROM artist a WHERE a.name = ? COLLATE NOCASE
+        UNION ALL
+        SELECT a.gid AS gid, (SELECT COUNT(*) FROM artist_rg ar WHERE ar.artist_id = a.id) AS rg_count
+        FROM artist a
         JOIN artist_alias aa ON aa.artist_id = a.id
         WHERE aa.name = ? COLLATE NOCASE
+        ORDER BY rg_count DESC
         LIMIT 1
         """,
         (q, q),
@@ -425,8 +446,25 @@ def search_release_group_for_artist(
             continue
         cand = normalize_title(rg.title)
         ratio = SequenceMatcher(None, clean, cand).ratio()
-        if cand == clean or clean in cand or cand in clean:
+        length_delta = abs(len(clean) - len(cand))
+        if cand == clean:
             ratio = 1.0
+        elif (clean in cand or cand in clean) and length_delta <= 4:
+            # Containment alone would treat "Reputation" as a perfect match
+            # for "Reputation Stadium Tour" (a different, real release by the
+            # same artist) — only trust it for a handful of stray characters
+            # (punctuation/typo), same guard as library.py's album matcher.
+            ratio = 1.0
+        elif length_delta > 4:
+            # SequenceMatcher alone can still score a shared-prefix pair like
+            # "Reputation" / "Reputation Stadium Tour" around 0.6 — combined
+            # with the +0.15 credited-artist and +0.1 edition bonuses below,
+            # that clears the 0.75 acceptance floor even though these are
+            # different releases. Cap the base ratio here so a whole extra
+            # word/phrase can't be rescued by those bonuses; a title that's
+            # genuinely just reformatted stays within the small-delta
+            # containment case above instead.
+            ratio = min(ratio, 0.5)
         # Prefer the release-group whose edition wording actually matches the
         # query instead of treating every edition as interchangeable once the
         # noise-stripped titles tie (e.g. "Album (Deluxe)" vs "Album (Live)").

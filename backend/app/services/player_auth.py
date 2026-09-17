@@ -144,6 +144,10 @@ def create_user(
     name = username.strip()
     if not name:
         raise ValueError("Username required")
+    if not password:
+        # verify_password unconditionally rejects an empty password, so a
+        # user "created" with one could never actually log in.
+        raise ValueError("Password required")
     existing = db.scalar(select(PlayerUser).where(PlayerUser.username == name))
     if existing:
         raise ValueError("Username already exists")
