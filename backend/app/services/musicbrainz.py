@@ -183,7 +183,12 @@ def _throttle() -> None:
 
 
 _consecutive_failures = 0
+_circuit_opened_at = 0.0
 _CIRCUIT_OPEN_AFTER = 8
+# After this many seconds with the circuit open, let one trial request
+# through (half-open) instead of staying tripped forever — otherwise a
+# transient outage permanently kills live lookups until the process restarts.
+_CIRCUIT_COOLDOWN_S = 60.0
 
 
 def _catalog_mode() -> str:
@@ -241,9 +246,12 @@ def reload_local_store() -> None:
 
 
 def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-    global _consecutive_failures
+    global _consecutive_failures, _circuit_opened_at
     if _consecutive_failures >= _CIRCUIT_OPEN_AFTER:
-        return {"_error": "MusicBrainz temporarily unavailable (circuit open)", "_status": 503}
+        if time.monotonic() - _circuit_opened_at < _CIRCUIT_COOLDOWN_S:
+            return {"_error": "MusicBrainz temporarily unavailable (circuit open)", "_status": 503}
+        # Cooldown elapsed — half-open: let this one request through as a
+        # trial. A failure below re-opens the circuit for another cooldown.
 
     query = {"fmt": "json", **(params or {})}
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
@@ -280,6 +288,8 @@ def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
                         "MusicBrainz request failed %s: %s %s", path, res.status_code, err
                     )
                     _consecutive_failures += 1
+                    if _consecutive_failures >= _CIRCUIT_OPEN_AFTER:
+                        _circuit_opened_at = time.monotonic()
                     return {"_error": str(err), "_status": res.status_code}
                 _consecutive_failures = 0
                 return res.json()
@@ -287,6 +297,8 @@ def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
             last_exc = exc
             time.sleep(1.2 * (attempt + 1))
     _consecutive_failures += 1
+    if _consecutive_failures >= _CIRCUIT_OPEN_AFTER:
+        _circuit_opened_at = time.monotonic()
     logger.warning("MusicBrainz request failed %s: %s", path, last_exc)
     return {"_error": str(last_exc or "MusicBrainz unavailable")}
 
@@ -474,8 +486,10 @@ def count_release_groups(mbid: str) -> int | None:
     if _prefer_local():
         from app.services import mb_local
 
-        return mb_local.count_release_groups(key)
-    if not _allow_live():
+        local_count = mb_local.count_release_groups(key)
+        if local_count is not None or not _allow_live():
+            return local_count
+    elif not _allow_live():
         return None
     return len(fetch_catalog(key).release_groups)
 
@@ -488,7 +502,10 @@ def fetch_catalog(mbid: str, *, use_cache: bool = True) -> CatalogResult:
     if use_cache:
         cached = _rg_cache.get(key)
         if cached is not None:
-            return CatalogResult(release_groups=list(cached))
+            cached_groups, cached_collaborators = cached
+            return CatalogResult(
+                release_groups=list(cached_groups), collaborators=list(cached_collaborators)
+            )
 
     if _prefer_local():
         from app.services import mb_local
@@ -551,7 +568,7 @@ def fetch_catalog(mbid: str, *, use_cache: bool = True) -> CatalogResult:
             break
 
     if use_cache:
-        _rg_cache.set(key, out)
+        _rg_cache.set(key, (out, list(collaborators.values())))
     return CatalogResult(
         release_groups=list(out),
         collaborators=list(collaborators.values()),
@@ -566,10 +583,11 @@ def cover_url_for_release_group(rg_mbid: str) -> str | None:
 
 
 def clear_cache() -> None:
-    global _consecutive_failures
+    global _consecutive_failures, _circuit_opened_at
     _rg_cache.clear()
     _credit_cache.clear()
     _consecutive_failures = 0
+    _circuit_opened_at = 0.0
 
 
 def enrich_release_group_credits(rg: ReleaseGroup) -> ReleaseGroup:

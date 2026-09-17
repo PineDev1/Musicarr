@@ -184,6 +184,7 @@ def _artist_group_out(
         status=getattr(primary, "status", None) or "active",
         pending_reason=getattr(primary, "pending_reason", None) or "",
         download_mode=getattr(primary, "download_mode", None),
+        quality_pref=getattr(primary, "quality_pref", None),
         musicbrainz_id=next(
             (
                 (getattr(a, "musicbrainz_id", None) or "").strip()
@@ -585,6 +586,7 @@ def refresh_artist(artist_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Artist not found")
     linked = find_linked_artists(db, artist)
     errors: list[str] = []
+    synced_count = 0
     for row in linked:
         provider_name = getattr(row, "provider", None) or "?"
         artist_row_id = getattr(row, "id", None)
@@ -602,6 +604,7 @@ def refresh_artist(artist_id: int, db: Session = Depends(get_db)):
                 errors.append(f"{provider_name}: artist was deleted")
                 continue
             sync_artist_albums(db, fresh)
+            synced_count += 1
         except ProviderError as exc:
             db.rollback()
             errors.append(f"{provider_name}: {exc}")
@@ -622,7 +625,7 @@ def refresh_artist(artist_id: int, db: Session = Depends(get_db)):
         upgrade_enabled=bool(getattr(settings, "upgrade_enabled", True)),
         collision_ids=name_collision_ids(db),
     )
-    if errors and not any(True for _ in linked):
+    if errors and synced_count == 0:
         raise HTTPException(status_code=400, detail="; ".join(errors))
     return out
 

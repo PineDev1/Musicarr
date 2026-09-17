@@ -18,6 +18,7 @@ export type Health = {
   skipped_albums: number
   disk_free_bytes: number | null
   low_disk_warning: boolean
+  streaming_enabled: boolean
 }
 
 export type Settings = {
@@ -76,6 +77,11 @@ export type Settings = {
   low_disk_threshold_gb: number
   notify_on_maintenance: boolean
   notify_on_health_alerts: boolean
+  preferred_download_method: 'streaming' | 'indexer' | 'streaming_then_indexer'
+  streaming_enabled: boolean
+  completed_download_scan_interval_seconds: number
+  import_mechanism: 'hardlink' | 'copy' | 'move'
+  remove_completed_downloads: boolean
   provider_ok: boolean | null
   provider_error: string | null
   deezer_ok: boolean | null
@@ -687,6 +693,112 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ mode }),
     }),
+  acquisitionStatus: () => request<AcquisitionStatus>('/acquisition/status'),
+  indexers: () => request<Indexer[]>('/acquisition/indexers'),
+  createIndexer: (body: Record<string, unknown>) =>
+    request<Indexer>('/acquisition/indexers', { method: 'POST', body: JSON.stringify(body) }),
+  updateIndexer: (id: number, body: Record<string, unknown>) =>
+    request<Indexer>(`/acquisition/indexers/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteIndexer: (id: number) => request<{ ok: boolean }>(`/acquisition/indexers/${id}`, { method: 'DELETE' }),
+  testIndexer: (id: number) => request<TestResult>(`/acquisition/indexers/${id}/test`, { method: 'POST' }),
+  downloadClients: () => request<DownloadClient[]>('/acquisition/download-clients'),
+  createDownloadClient: (body: Record<string, unknown>) =>
+    request<DownloadClient>('/acquisition/download-clients', { method: 'POST', body: JSON.stringify(body) }),
+  updateDownloadClient: (id: number, body: Record<string, unknown>) =>
+    request<DownloadClient>(`/acquisition/download-clients/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteDownloadClient: (id: number) =>
+    request<{ ok: boolean }>(`/acquisition/download-clients/${id}`, { method: 'DELETE' }),
+  testDownloadClient: (id: number) =>
+    request<TestResult>(`/acquisition/download-clients/${id}/test`, { method: 'POST' }),
+  testDownloadClientDraft: (body: Record<string, unknown>) =>
+    request<TestResult>('/acquisition/download-clients/test-draft', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  pathMappings: () => request<RemotePathMapping[]>('/acquisition/path-mappings'),
+  createPathMapping: (body: Record<string, unknown>) =>
+    request<RemotePathMapping>('/acquisition/path-mappings', { method: 'POST', body: JSON.stringify(body) }),
+  updatePathMapping: (id: number, body: Record<string, unknown>) =>
+    request<RemotePathMapping>(`/acquisition/path-mappings/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deletePathMapping: (id: number) =>
+    request<{ ok: boolean }>(`/acquisition/path-mappings/${id}`, { method: 'DELETE' }),
+  searchReleases: (albumId: number) =>
+    request<ReleaseCandidate[]>(`/acquisition/releases/search?album_id=${albumId}`),
+  grabRelease: (body: {
+    album_id: number
+    grab_url: string
+    protocol: 'usenet' | 'torrent'
+    indexer_id?: number
+    title?: string
+  }) =>
+    request<{ ok: boolean; job_id: number; client: string; client_item_id: string }>(
+      '/acquisition/releases/grab',
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
+  scanCompletedDownloads: () =>
+    request<{ polled: number; imported: number; failed: number }>('/acquisition/completed/scan', {
+      method: 'POST',
+    }),
+}
+
+export type AcquisitionStatus = {
+  indexers_enabled: number
+  torrent_client: boolean
+  usenet_client: boolean
+  path_mappings: number
+  messages: string[]
+}
+
+export type Indexer = {
+  id: number
+  name: string
+  protocol: 'usenet' | 'torrent'
+  implementation: 'newznab' | 'torznab'
+  base_url: string
+  api_key_set: boolean
+  categories: number[]
+  enabled: boolean
+  priority: number
+}
+
+export type DownloadClient = {
+  id: number
+  name: string
+  protocol: 'usenet' | 'torrent'
+  implementation: 'qbittorrent' | 'sabnzbd'
+  host: string
+  port: number
+  use_ssl: boolean
+  verify_ssl: boolean
+  username: string
+  password_set: boolean
+  api_key_set: boolean
+  category: string
+  enabled: boolean
+  priority: number
+  base_url: string
+}
+
+export type RemotePathMapping = {
+  id: number
+  host: string
+  remote_path: string
+  local_path: string
+}
+
+export type TestResult = { ok: boolean; message: string }
+
+export type ReleaseCandidate = {
+  title: string
+  size: number
+  seeders: number
+  protocol: string
+  download_url: string
+  magnet_url: string
+  grab_url: string
+  indexer_id: number
+  indexer_name: string
+  score: number
 }
 
 export type MbCatalogJob = {

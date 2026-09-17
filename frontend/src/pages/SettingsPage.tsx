@@ -4,12 +4,14 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import { playerApi } from '../player/playerApi'
 import { useToast } from '../Toast'
+import { AcquisitionPanels } from './AcquisitionPanels'
 
 type TabId =
   | 'sources'
   | 'library'
   | 'musicbrainz'
   | 'downloads'
+  | 'indexers'
   | 'notifications'
   | 'media'
   | 'security'
@@ -22,6 +24,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'library', label: 'Library' },
   { id: 'musicbrainz', label: 'MusicBrainz' },
   { id: 'downloads', label: 'Downloads' },
+  { id: 'indexers', label: 'Indexers' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'media', label: 'Media servers' },
   { id: 'security', label: 'Security' },
@@ -82,7 +85,7 @@ export function SettingsPage() {
   }, [searchParams])
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['settings'],
+    queryKey: ['settings', true],
     queryFn: () => api.settings(true),
   })
   const { data: authStatus } = useQuery({
@@ -144,6 +147,10 @@ export function SettingsPage() {
   const [tidalCode, setTidalCode] = useState<string | null>(null)
   const [tidalUri, setTidalUri] = useState<string | null>(null)
   const [defaultDownloadMode, setDefaultDownloadMode] = useState<'auto' | 'manual'>('manual')
+  const [preferredDownloadMethod, setPreferredDownloadMethod] = useState<
+    'streaming' | 'indexer' | 'streaming_then_indexer'
+  >('streaming')
+  const [streamingEnabled, setStreamingEnabled] = useState(true)
   const [lastfmApiKey, setLastfmApiKey] = useState('')
   const [lastfmApiSecret, setLastfmApiSecret] = useState('')
   const [spotifyClientId, setSpotifyClientId] = useState('')
@@ -192,6 +199,8 @@ export function SettingsPage() {
     setQobuzUserId(data.qobuz_user_id || '')
     setQobuzAppId(data.qobuz_app_id || '')
     setDefaultDownloadMode(data.default_download_mode || 'manual')
+    setPreferredDownloadMethod(data.preferred_download_method || 'streaming')
+    setStreamingEnabled(data.streaming_enabled ?? true)
     setLastfmApiKey(data.lastfm_api_key || '')
     setLastfmApiSecret('')
     setSpotifyClientId(data.spotify_client_id || '')
@@ -221,6 +230,8 @@ export function SettingsPage() {
         monitor_interval_minutes: interval,
         max_retries: maxRetries,
         default_download_mode: defaultDownloadMode,
+        preferred_download_method: preferredDownloadMethod,
+        streaming_enabled: streamingEnabled,
         include_albums: includeAlbums,
         include_eps: includeEps,
         include_singles: includeSingles,
@@ -574,7 +585,7 @@ export function SettingsPage() {
 
   function onSubmit(e: FormEvent) {
     e.preventDefault()
-    if (tab === 'tools' || tab === 'musicbrainz' || tab === 'backup') return
+    if (tab === 'tools' || tab === 'musicbrainz' || tab === 'backup' || tab === 'indexers') return
     save.mutate()
   }
 
@@ -590,7 +601,7 @@ export function SettingsPage() {
         </div>
       </div>
 
-      {data && data.provider_ok === false && tab === 'sources' && (
+      {data && streamingEnabled && data.provider_ok === false && tab === 'sources' && (
         <div className="banner warn">
           {data.provider_error || 'Active provider is not connected.'}
         </div>
@@ -615,9 +626,39 @@ export function SettingsPage() {
         {tab === 'sources' && (
           <>
             <div className="field">
+              <label>Streaming sources</label>
+              <div className="checks">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={streamingEnabled}
+                    onChange={(e) => {
+                      const next = e.target.checked
+                      setStreamingEnabled(next)
+                      api
+                        .updateSettings({ streaming_enabled: next })
+                        .then(() => {
+                          toast.push(next ? 'Streaming sources enabled' : 'Streaming sources disabled', 'ok')
+                          qc.invalidateQueries({ queryKey: ['settings'] })
+                          qc.invalidateQueries({ queryKey: ['health'] })
+                        })
+                        .catch((err) => toast.push((err as Error).message, 'error'))
+                    }}
+                  />
+                  Enable Deezer / Tidal / Qobuz
+                </label>
+              </div>
+              <span className="muted tiny">
+                Turn this off for a torrent/Usenet-only setup — connection errors for these
+                sources stop showing everywhere and they're never used for downloads.
+              </span>
+            </div>
+
+            <div className="field">
               <label>Active download source</label>
               <select
                 value={activeProvider}
+                disabled={!streamingEnabled}
                 onChange={(e) => {
                   const next = e.target.value
                   setActiveProvider(next)
@@ -653,6 +694,7 @@ export function SettingsPage() {
                   value={arl}
                   onChange={(e) => setArl(e.target.value)}
                   autoComplete="off"
+                  disabled={!streamingEnabled}
                 />
               </div>
               {data?.arl_set && (
@@ -660,7 +702,7 @@ export function SettingsPage() {
                   type="button"
                   className="btn ghost"
                   onClick={() => logout.mutate('deezer')}
-                  disabled={logout.isPending}
+                  disabled={!streamingEnabled || logout.isPending}
                 >
                   Logout Deezer
                 </button>
@@ -680,7 +722,7 @@ export function SettingsPage() {
                   type="button"
                   className="btn secondary"
                   onClick={() => tidalStart.mutate()}
-                  disabled={tidalStart.isPending}
+                  disabled={!streamingEnabled || tidalStart.isPending}
                 >
                   {tidalStart.isPending ? 'Starting…' : 'Login with Tidal'}
                 </button>
@@ -689,7 +731,7 @@ export function SettingsPage() {
                     type="button"
                     className="btn ghost"
                     onClick={() => logout.mutate('tidal')}
-                    disabled={logout.isPending}
+                    disabled={!streamingEnabled || logout.isPending}
                   >
                     Logout Tidal
                   </button>
@@ -730,15 +772,26 @@ export function SettingsPage() {
                   value={qobuzToken}
                   onChange={(e) => setQobuzToken(e.target.value)}
                   autoComplete="off"
+                  disabled={!streamingEnabled}
                 />
               </div>
               <div className="field">
                 <label>User ID</label>
-                <input type="text" value={qobuzUserId} onChange={(e) => setQobuzUserId(e.target.value)} />
+                <input
+                  type="text"
+                  value={qobuzUserId}
+                  onChange={(e) => setQobuzUserId(e.target.value)}
+                  disabled={!streamingEnabled}
+                />
               </div>
               <div className="field">
                 <label>App ID</label>
-                <input type="text" value={qobuzAppId} onChange={(e) => setQobuzAppId(e.target.value)} />
+                <input
+                  type="text"
+                  value={qobuzAppId}
+                  onChange={(e) => setQobuzAppId(e.target.value)}
+                  disabled={!streamingEnabled}
+                />
               </div>
               <div className="field">
                 <label>App secret {data?.qobuz_app_secret_set ? '(saved)' : ''}</label>
@@ -748,6 +801,7 @@ export function SettingsPage() {
                   value={qobuzAppSecret}
                   onChange={(e) => setQobuzAppSecret(e.target.value)}
                   autoComplete="off"
+                  disabled={!streamingEnabled}
                 />
               </div>
               <div className="toolbar">
@@ -755,7 +809,7 @@ export function SettingsPage() {
                   type="button"
                   className="btn secondary"
                   onClick={() => qobuzTokenLogin.mutate()}
-                  disabled={qobuzTokenLogin.isPending || (!qobuzToken && !data?.qobuz_token_set)}
+                  disabled={!streamingEnabled || qobuzTokenLogin.isPending || (!qobuzToken && !data?.qobuz_token_set)}
                 >
                   {qobuzTokenLogin.isPending ? 'Connecting…' : 'Connect with token'}
                 </button>
@@ -764,7 +818,7 @@ export function SettingsPage() {
                     type="button"
                     className="btn ghost"
                     onClick={() => logout.mutate('qobuz')}
-                    disabled={logout.isPending}
+                    disabled={!streamingEnabled || logout.isPending}
                   >
                     Logout Qobuz
                   </button>
@@ -775,7 +829,12 @@ export function SettingsPage() {
                 <summary className="muted">Alternate: email / password</summary>
                 <div className="field" style={{ marginTop: '0.75rem' }}>
                   <label>Email</label>
-                  <input type="text" value={qobuzEmail} onChange={(e) => setQobuzEmail(e.target.value)} />
+                  <input
+                    type="text"
+                    value={qobuzEmail}
+                    onChange={(e) => setQobuzEmail(e.target.value)}
+                    disabled={!streamingEnabled}
+                  />
                 </div>
                 <div className="field">
                   <label>Password</label>
@@ -784,13 +843,14 @@ export function SettingsPage() {
                     value={qobuzPassword}
                     onChange={(e) => setQobuzPassword(e.target.value)}
                     autoComplete="off"
+                    disabled={!streamingEnabled}
                   />
                 </div>
                 <button
                   type="button"
                   className="btn ghost"
                   onClick={() => qobuzLogin.mutate()}
-                  disabled={qobuzLogin.isPending || !qobuzEmail || !qobuzPassword}
+                  disabled={!streamingEnabled || qobuzLogin.isPending || !qobuzEmail || !qobuzPassword}
                 >
                   {qobuzLogin.isPending ? 'Logging in…' : 'Login with email'}
                 </button>
@@ -1063,6 +1123,28 @@ export function SettingsPage() {
               </div>
             </div>
             <div className="field">
+              <label>Acquisition method</label>
+              <select
+                value={preferredDownloadMethod}
+                onChange={(e) =>
+                  setPreferredDownloadMethod(
+                    e.target.value as 'streaming' | 'indexer' | 'streaming_then_indexer',
+                  )
+                }
+              >
+                <option value="streaming">Streaming only (Deezer/Tidal/Qobuz)</option>
+                <option value="streaming_then_indexer">
+                  Streaming first, then let me search indexers manually if it fails
+                </option>
+                <option value="indexer">Indexers only — never auto-download from streaming</option>
+              </select>
+              <span className="muted tiny">
+                Indexer grabs (torrent/Usenet) are always manual — open "Search releases" on an
+                album to browse results and pick one yourself. Configure indexers and download
+                clients under the Indexers tab.
+              </span>
+            </div>
+            <div className="field">
               <label>Monitor interval (minutes)</label>
               <input
                 type="number"
@@ -1083,6 +1165,8 @@ export function SettingsPage() {
             </div>
           </>
         )}
+
+        {tab === 'indexers' && <AcquisitionPanels />}
 
         {tab === 'notifications' && (
           <>
@@ -1980,7 +2064,7 @@ export function SettingsPage() {
           </>
         )}
 
-        {tab !== 'tools' && tab !== 'musicbrainz' && tab !== 'backup' && (
+        {tab !== 'tools' && tab !== 'musicbrainz' && tab !== 'backup' && tab !== 'indexers' && (
           <div className="toolbar">
             <button className="btn" type="submit" disabled={save.isPending}>
               Save settings

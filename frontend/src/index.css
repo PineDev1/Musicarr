@@ -386,6 +386,13 @@ textarea:focus {
   cursor: not-allowed;
 }
 
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .btn.secondary {
   background: var(--bg-soft);
   color: var(--text);

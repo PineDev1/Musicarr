@@ -403,8 +403,8 @@ def download_album(
     job = download_queue.enqueue_album(
         db,
         album_id,
-        allow_upgrade=upgrade or album.status == "downloaded",
-            )
+        allow_upgrade=upgrade,
+    )
     return {
         "queued": bool(job),
         "job_id": job.id if job else None,

@@ -62,7 +62,7 @@ export function SetupWizardPage() {
   const [tidalUri, setTidalUri] = useState<string | null>(null)
 
   const settings = useQuery({
-    queryKey: ['settings'],
+    queryKey: ['settings', true],
     queryFn: () => api.settings(true),
   })
   const health = useQuery({

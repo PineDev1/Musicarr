@@ -26,6 +26,10 @@ def create_user(db: Session, *, username: str, password: str, display_name: str 
     name = username.strip()
     if not name:
         raise ValueError("Username required")
+    if not password:
+        # verify_password unconditionally rejects an empty password, so a
+        # user "created" with one could never actually log in.
+        raise ValueError("Password required")
     existing = db.scalar(select(AdminUser).where(AdminUser.username == name))
     if existing:
         raise ValueError("Username already exists")

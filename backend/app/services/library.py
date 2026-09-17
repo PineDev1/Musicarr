@@ -277,7 +277,18 @@ def _find_or_create_album(
             cand_loose = _norm(a.title)
             if cand_strict != cand_loose:
                 continue  # candidate title has its own edition content — don't merge
-            if cand_loose == target or target in cand_loose or cand_loose in target:
+            if cand_loose == target:
+                candidate = a
+                break
+            # Substring containment alone would match "Reputation" against
+            # "Reputation Stadium Tour" — a different release, not tag
+            # variance. Only treat it as the same album when the extra
+            # content is a handful of stray characters (punctuation/typo),
+            # not a whole extra word.
+            if (
+                (target in cand_loose or cand_loose in target)
+                and abs(len(target) - len(cand_loose)) <= 4
+            ):
                 candidate = a
                 break
     if candidate:

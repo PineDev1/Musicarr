@@ -229,7 +229,11 @@ export function Layout() {
             Source: <strong style={{ color: 'var(--text)', textTransform: 'capitalize' }}>{provider}</strong>
           </div>
           <div className="muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
-            {health.data?.provider_ok ? 'Connected' : 'Not ready'}
+            {health.data?.streaming_enabled === false
+              ? 'Streaming disabled'
+              : health.data?.provider_ok
+                ? 'Connected'
+                : 'Not ready'}
           </div>
           {auth.data?.enabled && auth.data.authenticated && (
             <button
@@ -249,7 +253,7 @@ export function Layout() {
         <div className="main-topbar">
           <GlobalSearch />
         </div>
-        {health.data && !health.data.provider_ok && (
+        {health.data && health.data.streaming_enabled !== false && !health.data.provider_ok && (
           <div className="banner danger">
             {health.data.provider_error ||
               `Configure a valid ${provider} account in Settings to download music.`}

@@ -24,6 +24,9 @@ def _queue_snapshot() -> list[dict]:
                         "queued",
                         "running",
                         "failed",
+                        "grabbed",
+                        "downloading",
+                        "importing",
                     ]
                 )
             )

@@ -65,6 +65,11 @@ class SettingsOut(BaseModel):
     low_disk_threshold_gb: int = 10
     notify_on_maintenance: bool = True
     notify_on_health_alerts: bool = True
+    preferred_download_method: str = "streaming"
+    streaming_enabled: bool = True
+    completed_download_scan_interval_seconds: int = 60
+    import_mechanism: str = "hardlink"
+    remove_completed_downloads: bool = False
     provider_ok: bool | None = None
     provider_error: str | None = None
     deezer_ok: bool | None = None
@@ -125,6 +130,11 @@ class SettingsUpdate(BaseModel):
     low_disk_threshold_gb: int | None = Field(default=None, ge=1, le=1000)
     notify_on_maintenance: bool | None = None
     notify_on_health_alerts: bool | None = None
+    preferred_download_method: Literal["streaming", "indexer", "streaming_then_indexer"] | None = None
+    streaming_enabled: bool | None = None
+    completed_download_scan_interval_seconds: int | None = Field(default=None, ge=10, le=3600)
+    import_mechanism: Literal["hardlink", "copy", "move"] | None = None
+    remove_completed_downloads: bool | None = None
 
 
 class NotifyTestRequest(BaseModel):
@@ -153,6 +163,7 @@ class HealthOut(BaseModel):
     skipped_albums: int = 0
     disk_free_bytes: int | None = None
     low_disk_warning: bool = False
+    streaming_enabled: bool = True
 
 
 class SearchArtistHit(BaseModel):
@@ -826,3 +837,153 @@ class PlayerNowPlayingOut(BaseModel):
 
 class PlayerCommandsOut(BaseModel):
     stop: bool = False
+
+
+# -- Indexers / download clients / acquisition -----------------------------
+class IndexerOut(BaseModel):
+    id: int
+    name: str
+    protocol: str
+    implementation: str
+    base_url: str
+    api_key_set: bool
+    categories: list[int]
+    enabled: bool
+    priority: int
+
+
+class IndexerCreate(BaseModel):
+    name: str
+    protocol: Literal["usenet", "torrent"] = "usenet"
+    implementation: Literal["newznab", "torznab"] = "newznab"
+    base_url: str
+    api_key: str | None = None
+    categories: list[int] | None = None
+    enabled: bool = True
+    priority: int = 25
+
+
+class IndexerUpdate(BaseModel):
+    name: str | None = None
+    protocol: Literal["usenet", "torrent"] | None = None
+    implementation: Literal["newznab", "torznab"] | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    categories: list[int] | None = None
+    enabled: bool | None = None
+    priority: int | None = None
+
+
+class DownloadClientOut(BaseModel):
+    id: int
+    name: str
+    protocol: str
+    implementation: str
+    host: str
+    port: int
+    use_ssl: bool
+    verify_ssl: bool
+    username: str
+    password_set: bool
+    api_key_set: bool
+    category: str
+    enabled: bool
+    priority: int
+    base_url: str
+
+
+class DownloadClientCreate(BaseModel):
+    name: str
+    protocol: Literal["usenet", "torrent"] = "torrent"
+    implementation: Literal["qbittorrent", "sabnzbd"] = "qbittorrent"
+    host: str = "localhost"
+    port: int = 8080
+    use_ssl: bool = False
+    verify_ssl: bool = True
+    username: str | None = None
+    password: str | None = None
+    api_key: str | None = None
+    category: str = "musicarr"
+    enabled: bool = True
+    priority: int = 1
+
+
+class DownloadClientUpdate(BaseModel):
+    name: str | None = None
+    protocol: Literal["usenet", "torrent"] | None = None
+    implementation: Literal["qbittorrent", "sabnzbd"] | None = None
+    host: str | None = None
+    port: int | None = None
+    use_ssl: bool | None = None
+    verify_ssl: bool | None = None
+    username: str | None = None
+    password: str | None = None
+    api_key: str | None = None
+    category: str | None = None
+    enabled: bool | None = None
+    priority: int | None = None
+
+
+class DownloadClientTestDraft(BaseModel):
+    client_id: int | None = None
+    implementation: Literal["qbittorrent", "sabnzbd"] = "qbittorrent"
+    host: str = "localhost"
+    port: int = 8080
+    use_ssl: bool = False
+    verify_ssl: bool = True
+    username: str | None = None
+    password: str | None = None
+    api_key: str | None = None
+
+
+class RemotePathMappingOut(BaseModel):
+    id: int
+    host: str
+    remote_path: str
+    local_path: str
+
+
+class RemotePathMappingCreate(BaseModel):
+    host: str | None = None
+    remote_path: str
+    local_path: str
+
+
+class RemotePathMappingUpdate(BaseModel):
+    host: str | None = None
+    remote_path: str | None = None
+    local_path: str | None = None
+
+
+class TestResultOut(BaseModel):
+    ok: bool
+    message: str
+
+
+class AcquisitionStatusOut(BaseModel):
+    indexers_enabled: int
+    torrent_client: bool
+    usenet_client: bool
+    path_mappings: int
+    messages: list[str]
+
+
+class ReleaseCandidateOut(BaseModel):
+    title: str
+    size: int
+    seeders: int
+    protocol: str
+    download_url: str
+    magnet_url: str
+    grab_url: str
+    indexer_id: int
+    indexer_name: str
+    score: float
+
+
+class ReleaseGrabRequest(BaseModel):
+    album_id: int
+    grab_url: str
+    protocol: Literal["usenet", "torrent"] = "torrent"
+    indexer_id: int = 0
+    title: str = ""

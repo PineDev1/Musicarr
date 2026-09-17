@@ -300,9 +300,12 @@ export function PlayerQueueProvider({
     void loadTrack(current, autoplay)
   }, [current?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const nextIndex = useCallback(() => {
+  const nextIndex = useCallback((forceAdvance = false) => {
     if (!tracks.length) return null
-    if (repeat === 'one') return index
+    // repeat==='one' should replay the current track when it ends naturally,
+    // but pressing Next/skip must still advance — otherwise the skip control
+    // becomes a no-op (same index → no state change → nothing happens).
+    if (repeat === 'one' && !forceAdvance) return index
     if (shuffle) {
       if (!orderRef.current.length) {
         orderRef.current = tracks.map((_, i) => i).filter((i) => i !== index)
@@ -316,7 +319,7 @@ export function PlayerQueueProvider({
   }, [tracks, index, shuffle, repeat])
 
   const next = useCallback(() => {
-    const n = nextIndex()
+    const n = nextIndex(true)
     if (n == null) {
       activeAudio()?.pause()
       setPlaying(false)
