@@ -33,6 +33,15 @@ def test_duplicate_username_rejected(db):
         admin_auth.create_user(db, username="riley", password="other-pw")
 
 
+def test_username_with_pipe_rejected(db):
+    """The session token is 'user_id|username|exp|nonce|sig' — a username
+    containing '|' would mint a token parse_session_token can never accept,
+    silently locking that account out on their very next request."""
+    _settings(db)
+    with pytest.raises(ValueError):
+        admin_auth.create_user(db, username="ali|ce", password="hunter22")
+
+
 def test_session_token_round_trips_for_legacy_and_admin_user(db):
     _settings(db)
     user = admin_auth.create_user(db, username="riley", password="hunter22")

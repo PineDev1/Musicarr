@@ -16,11 +16,16 @@ def _normalize(path: str) -> str:
     return text
 
 
-def map_remote_to_local(db: Session, remote_path: str) -> Path | None:
+def map_remote_to_local(db: Session, remote_path: str, host: str | None = None) -> Path | None:
     """Translate a download client path into a path Musicarr can read.
 
     Uses the longest matching remote prefix so nested mappings win over their
-    parents. Returns the original path when no mapping applies.
+    parents. When `host` is given, only mappings for that host (or with no
+    host set, treated as a wildcard) are considered — otherwise two clients
+    reporting paths under the same-looking remote prefix but needing
+    different local mounts would silently resolve to whichever mapping row
+    happens to have the longer prefix. Returns the original path when no
+    mapping applies.
     """
     if not remote_path:
         return None
@@ -28,6 +33,9 @@ def map_remote_to_local(db: Session, remote_path: str) -> Path | None:
     rows = list(db.scalars(select(RemotePathMapping)).all())
     best: tuple[int, RemotePathMapping] | None = None
     for row in rows:
+        row_host = (row.host or "").strip()
+        if host is not None and row_host and row_host != host:
+            continue
         remote = _normalize(row.remote_path or "")
         if not remote:
             continue

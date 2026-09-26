@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { api } from '../api'
 import { useToast } from '../Toast'
 
@@ -71,8 +71,14 @@ export function SetupWizardPage() {
     refetchInterval: 5000,
   })
 
+  // Only hydrate form state from the server once — re-running this on every
+  // settings refetch (e.g. the invalidateQueries after saveProvider) would
+  // silently wipe out edits the user made on a later step (like the step-3
+  // auth/player toggles) whenever an earlier step's mutation re-synced.
+  const hydratedRef = useRef(false)
   useEffect(() => {
-    if (!settings.data) return
+    if (!settings.data || hydratedRef.current) return
+    hydratedRef.current = true
     setLibraryPath(settings.data.library_path || '')
     setActiveProvider(settings.data.active_provider || 'qobuz')
     setAuthEnabled(Boolean(settings.data.auth_enabled))

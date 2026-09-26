@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import threading
 import time
@@ -23,6 +24,7 @@ from app.services.naming import (
 )
 from app.services.providers import get_provider
 from app.services.providers.base import ProviderError
+from app.services.quality import detect_file_quality, quality_rank
 from app.services.settings_service import ensure_settings, library_root
 from app.services.text_match import normalize_key
 
@@ -310,6 +312,15 @@ class DownloadQueue:
             return None
         if job.state in {"completed", "failed", "cancelled"}:
             return job
+        if job.state == "importing":
+            # The completed-download handler (a separate background thread)
+            # is actively copying files out of the client's payload right
+            # now. Aborting the client item here would delete that payload
+            # out from under the in-progress copy, and either side's final
+            # commit could then race the other's job.state write. It's too
+            # late to cancel cleanly — let the import finish (or fail on its
+            # own) instead of corrupting it.
+            raise ValueError("This download is already importing and can't be cancelled")
         if job.source == "indexer" and job.client_item_id:
             self._abort_client_item(db, job)
         job.state = "cancelled"
@@ -593,9 +604,26 @@ class DownloadQueue:
                     shutil.copy2(result.cover, target_cover)
 
             tracks = sorted(album.tracks, key=lambda t: (t.disc_no, t.track_no))
+            tracks_by_no = {t.track_no: t for t in tracks if t.track_no}
+            used_track_ids: set[int] = set()
+            placed_paths: list[Path] = []
             matched = 0
             for idx, src in enumerate(downloaded_files):
-                track = tracks[idx] if idx < len(tracks) else None
+                # Prefer matching by the track number embedded in the
+                # provider's filename ("NN - Title") over positional index —
+                # a provider that silently skips a track shifts every
+                # subsequent index, which would otherwise tag/rename the
+                # wrong file as the wrong track.
+                track = None
+                name_match = re.match(r"^0*(\d+)\s*-\s*", src.name)
+                if name_match:
+                    candidate = tracks_by_no.get(int(name_match.group(1)))
+                    if candidate and candidate.id not in used_track_ids:
+                        track = candidate
+                if track is None and idx < len(tracks) and tracks[idx].id not in used_track_ids:
+                    track = tracks[idx]
+                if track:
+                    used_track_ids.add(track.id)
                 if track:
                     filename = build_track_filename(
                         settings.track_template,
@@ -615,6 +643,7 @@ class DownloadQueue:
                     )
                 dest = dest_folder / filename
                 shutil.move(str(src), str(dest))
+                placed_paths.append(dest)
                 if track:
                     track.path = str(dest)
                     matched += 1
@@ -622,7 +651,27 @@ class DownloadQueue:
             album.path = str(dest_folder)
             if matched > 0 or downloaded_files:
                 album.status = "downloaded"
-                album.quality = target_quality.lower()
+                # Record the quality actually delivered, not just what was
+                # requested — providers can silently fall back to a lower
+                # bitrate/format for tracks that aren't available at the
+                # requested quality, which would otherwise never get flagged
+                # on the Upgrades page.
+                detected = [detect_file_quality(p) for p in placed_paths]
+                detected = [q for q in detected if q]
+                album.quality = (
+                    min(detected, key=quality_rank) if detected else target_quality.lower()
+                )
+
+            # Re-check cancellation: the move loop above can take a while for
+            # a big album, and a cancel() call from another thread during
+            # that window must not get silently overwritten back to
+            # "completed" once we reach this final commit.
+            if self._is_cancelled(job_id):
+                job.state = "cancelled"
+                job.finished_at = datetime.now(timezone.utc)
+                db.commit()
+                return
+
             job.state = "completed"
             job.progress = 100.0
             job.finished_at = datetime.now(timezone.utc)

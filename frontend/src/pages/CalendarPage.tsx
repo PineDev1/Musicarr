@@ -33,7 +33,13 @@ export function CalendarPage() {
     queryKey: ['calendar'],
     queryFn: api.calendar,
   })
-  const today = new Date().toISOString().slice(0, 10)
+  // Local calendar date, not UTC — entry.release_date is a plain local
+  // date string, and toISOString() reports the UTC day, which is off by
+  // one for hours near local midnight in either direction.
+  const now = new Date()
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+    now.getDate(),
+  ).padStart(2, '0')}`
 
   if (isLoading) return <p className="muted">Loading…</p>
   if (error) return <p className="error">{(error as Error).message}</p>

@@ -35,7 +35,7 @@ def _sign(params: dict[str, str], secret: str) -> str:
     return hashlib.md5(raw.encode("utf-8")).hexdigest()  # noqa: S324 (Last.fm's own scheme)
 
 
-def auth_url(db: Session) -> str:
+def auth_url(db: Session, user: PlayerUser) -> str:
     key, secret = _credentials(db)
     resp = requests.get(
         API_BASE,
@@ -46,10 +46,19 @@ def auth_url(db: Session) -> str:
     token = resp.json().get("token")
     if not token:
         raise LastfmError("Last.fm did not return an auth token")
+    # Record which token *this* user's flow issued, so the callback can
+    # reject a token from anyone else's flow — otherwise an attacker could
+    # authorize their own Last.fm account and send the resulting callback
+    # link to a victim, silently linking the victim's session to the
+    # attacker's Last.fm account (no state/nonce otherwise binds the two).
+    user.lastfm_pending_token = token
     return f"{AUTH_BASE}?api_key={key}&token={token}"
 
 
 def complete_auth(db: Session, user: PlayerUser, token: str) -> None:
+    if not token or token != (user.lastfm_pending_token or ""):
+        raise LastfmError("This Last.fm authorization link was not issued for your session")
+    user.lastfm_pending_token = None
     key, secret = _credentials(db)
     params = {"method": "auth.getSession", "api_key": key, "token": token}
     params["api_sig"] = _sign(params, secret)

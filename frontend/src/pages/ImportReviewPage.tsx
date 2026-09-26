@@ -24,6 +24,10 @@ export function ImportReviewPage() {
     onSuccess: (artist) => {
       toast.push(`Linked ${artist.name}`, 'ok')
       qc.invalidateQueries({ queryKey: ['import-review'] })
+      // The sidebar badge in Layout.tsx polls a separate key
+      // ('import-review-count') — without invalidating it too, the badge
+      // keeps showing the stale pre-link count for up to its 60s poll.
+      qc.invalidateQueries({ queryKey: ['import-review-count'] })
       qc.invalidateQueries({ queryKey: ['artists'] })
       qc.invalidateQueries({ queryKey: ['health'] })
     },

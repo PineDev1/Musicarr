@@ -64,22 +64,36 @@ export function AddArtistPage() {
     mutationFn: async () => {
       const selected = Object.values(picks)
       let added = 0
+      let failed = 0
+      // Keep going even if one artist fails (duplicate, provider timeout,
+      // etc.) — otherwise everything added before the failure point was
+      // silently left un-reflected in the UI, since only onSuccess
+      // invalidated the artists/queue/health queries.
       for (const hit of selected) {
-        await api.addArtist(hit.provider_id, hit.provider, {
-          include_singles: includeSingles,
-          download_missing: true,
-          monitor_mode: monitorMode,
-          download_mode: downloadMode || null,
-        })
-        added += 1
+        try {
+          await api.addArtist(hit.provider_id, hit.provider, {
+            include_singles: includeSingles,
+            download_missing: true,
+            monitor_mode: monitorMode,
+            download_mode: downloadMode || null,
+          })
+          added += 1
+        } catch {
+          failed += 1
+        }
       }
-      return added
+      return { added, failed }
     },
-    onSuccess: (added) => {
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['artists'] })
       qc.invalidateQueries({ queryKey: ['queue'] })
       qc.invalidateQueries({ queryKey: ['health'] })
-      toast.push(`Added ${added} artist(s)`, 'ok')
+    },
+    onSuccess: ({ added, failed }) => {
+      toast.push(
+        failed > 0 ? `Added ${added} artist(s), ${failed} failed` : `Added ${added} artist(s)`,
+        failed > 0 ? 'error' : 'ok',
+      )
       setBulkResults(null)
       setBulkText('')
       setPicks({})

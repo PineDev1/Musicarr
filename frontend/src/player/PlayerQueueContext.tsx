@@ -231,8 +231,9 @@ export function PlayerQueueProvider({
   const latestRef = useRef<{
     tracks: PlayerTrack[]
     nextIndex: () => number | null
+    peekNextIndex: () => number | null
     crossfadeEnabled: boolean
-  }>({ tracks: [], nextIndex: () => null, crossfadeEnabled: false })
+  }>({ tracks: [], nextIndex: () => null, peekNextIndex: () => null, crossfadeEnabled: false })
 
   const loadIntoSlot = useCallback(
     async (slot: Slot, track: PlayerTrack, autoplay: boolean, seekTo?: number | null) => {
@@ -288,6 +289,8 @@ export function PlayerQueueProvider({
   const loadAndPlay = useCallback((track: PlayerTrack) => loadTrack(track, true), [loadTrack])
 
   const current = tracks[index]
+  const currentRef = useRef(current)
+  currentRef.current = current
 
   useEffect(() => {
     if (!current) return
@@ -318,6 +321,23 @@ export function PlayerQueueProvider({
     return repeat === 'all' ? 0 : null
   }, [tracks, index, shuffle, repeat])
 
+  // Non-mutating counterpart of nextIndex(), for preload look-ahead only.
+  // nextIndex()'s shuffle branch shifts an entry off orderRef.current as a
+  // side effect — calling it just to *peek* at what's next (as
+  // maybePreloadNext used to, on every timeupdate tick during a track's
+  // last PRELOAD_LEAD_SECONDS) drained most of the shuffle order before the
+  // track even ended. This never mutates state.
+  const peekNextIndex = useCallback(() => {
+    if (!tracks.length) return null
+    if (repeat === 'one') return index
+    if (shuffle) {
+      if (!orderRef.current.length) return null
+      return orderRef.current[0]
+    }
+    if (index + 1 < tracks.length) return index + 1
+    return repeat === 'all' ? 0 : null
+  }, [tracks, index, shuffle, repeat])
+
   const next = useCallback(() => {
     const n = nextIndex(true)
     if (n == null) {
@@ -339,7 +359,7 @@ export function PlayerQueueProvider({
 
   // Keep the mount-once audio element handlers pointed at the latest state.
   useEffect(() => {
-    latestRef.current = { tracks, nextIndex, crossfadeEnabled: prefs.crossfade_enabled }
+    latestRef.current = { tracks, nextIndex, peekNextIndex, crossfadeEnabled: prefs.crossfade_enabled }
   })
 
   const clearSleep = useCallback(() => {
@@ -378,8 +398,8 @@ export function PlayerQueueProvider({
       if (!audio || !Number.isFinite(audio.duration) || audio.duration <= 0) return
       const remaining = audio.duration - audio.currentTime
       if (remaining > PRELOAD_LEAD_SECONDS) return
-      const { nextIndex: getNext, tracks: currentTracks } = latestRef.current
-      const n = getNext()
+      const { peekNextIndex: peekNext, tracks: currentTracks } = latestRef.current
+      const n = peekNext()
       if (n == null) return
       const nextTrack = currentTracks[n]
       if (!nextTrack || preloadedTrackIdRef.current === nextTrack.id) return
@@ -642,14 +662,29 @@ export function PlayerQueueProvider({
   const playTracks = useCallback(
     (list: PlayerTrack[], startIndex = 0, label?: string, startAt?: number) => {
       if (!list.length) return
+      const clampedIndex = Math.max(0, Math.min(startIndex, list.length - 1))
+      const target = list[clampedIndex]
+      const seek = startAt != null && startAt > 0 ? startAt : null
       orderRef.current = []
       preloadedTrackIdRef.current = null
-      pendingSeekRef.current = startAt != null && startAt > 0 ? startAt : null
+      if (target && currentRef.current?.id === target.id) {
+        // Same track already loaded (e.g. "Resume" on the track shown in
+        // Continue Listening) — the load effect is keyed on current?.id, so
+        // it never fires for a same-id replay and a seek left in
+        // pendingSeekRef would otherwise sit there and get silently applied
+        // to whatever *different* track loads next instead. Apply it here,
+        // directly, since we already know nothing else will.
+        pendingSeekRef.current = null
+        const audio = activeAudio()
+        if (audio && seek != null) audio.currentTime = seek
+      } else {
+        pendingSeekRef.current = seek
+      }
       setTracks(list)
-      setIndex(Math.max(0, Math.min(startIndex, list.length - 1)))
+      setIndex(clampedIndex)
       if (label !== undefined) setSourceLabel(label || null)
     },
-    [],
+    [activeAudio],
   )
 
   const playTrack = useCallback(

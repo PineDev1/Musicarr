@@ -464,18 +464,20 @@ def grab_release(payload: ReleaseGrabRequest, db: Session = Depends(get_db)):
     artist = album.artist
     artist_name = artist.name if artist else ""
 
-    # Avoid duplicate active indexer jobs for the same album.
+    # Avoid duplicate active jobs for the same album, from either source —
+    # a streaming download already in flight must not also get an indexer grab.
     active = db.scalar(
         select(DownloadJob).where(
             DownloadJob.album_id == album.id,
-            DownloadJob.source == "indexer",
-            DownloadJob.state.in_(["grabbed", "downloading", "importing"]),
+            DownloadJob.state.in_(
+                ["queued", "running", "grabbed", "downloading", "importing"]
+            ),
         )
     )
     if active:
         raise HTTPException(
             status_code=409,
-            detail="An indexer download is already in progress for this album",
+            detail="A download is already in progress for this album",
         )
 
     client = get_client(client_row)

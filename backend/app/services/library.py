@@ -160,6 +160,19 @@ def _collect_files(root: Path, *, on_progress: ProgressCb | None = None) -> list
     return out
 
 
+def _collect_files_all_roots(db: Session, *, on_progress: ProgressCb | None = None) -> list[dict]:
+    """Collect audio files across the primary library path and every
+    configured extra library root — each root is walked with its own
+    relative-path context (for guessing artist/album from folder structure),
+    then the results are concatenated."""
+    from app.services.library_roots import all_library_roots
+
+    out: list[dict] = []
+    for root in all_library_roots(db):
+        out.extend(_collect_files(root, on_progress=on_progress))
+    return out
+
+
 def _find_artist_by_name(db: Session, name: str) -> Artist | None:
     """Exact normalized name match only. Ambiguous same-name rows return None."""
     key = _norm(name)
@@ -492,11 +505,15 @@ def import_existing_library(
     Build Musicarr artists/albums/tracks from files already on disk.
     Optionally link artists to the active streaming provider when a clear name match exists.
     """
-    root = library_root(db)
+    from app.services.library_roots import all_library_roots
+
+    roots = all_library_roots(db)
+    root = roots[0]
     _emit(on_progress, phase="collecting", message="Collecting audio files…", progress_pct=2)
-    files = _collect_files(root, on_progress=on_progress)
+    files = _collect_files_all_roots(db, on_progress=on_progress)
     if not files:
-        msg = f"No audio files found under {root}"
+        where = str(root) if len(roots) == 1 else f"{len(roots)} configured library folders"
+        msg = f"No audio files found under {where}"
         add_history(db, "library_import", msg)
         return {
             "files_seen": 0,
@@ -662,9 +679,8 @@ def import_existing_library(
 
 def scan_library(db: Session, *, on_progress: ProgressCb | None = None) -> dict:
     """Match on-disk files to tracks already in the database (no new artists)."""
-    root = library_root(db)
     _emit(on_progress, phase="collecting", message="Collecting audio files…", progress_pct=2)
-    files = _collect_files(root, on_progress=on_progress)
+    files = _collect_files_all_roots(db, on_progress=on_progress)
     tracks = db.scalars(select(Track).options(joinedload(Track.album))).all()
     by_isrc = {t.isrc: t for t in tracks if t.isrc}
     by_path = {t.path: t for t in tracks if t.path}

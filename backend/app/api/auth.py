@@ -6,14 +6,20 @@ from app.models.schemas import (
     AdminUserCreate,
     AdminUserOut,
     AdminUserUpdate,
+    ApiKeyCreated,
+    ApiKeyCreateRequest,
+    ApiKeyOut,
     AppAuthStatus,
     AppLoginRequest,
     QobuzLoginRequest,
     QobuzTokenLoginRequest,
     SettingsOut,
     TidalDeviceOut,
+    TotpConfirmRequest,
+    TotpDisableRequest,
+    TotpSetupOut,
 )
-from app.services import admin_auth, app_auth
+from app.services import admin_auth, api_keys, app_auth
 from app.services.history import add_history
 from app.services.providers import get_provider
 from app.services.providers.base import ProviderError
@@ -50,6 +56,8 @@ def app_login(payload: AppLoginRequest, response: Response, db: Session = Depend
     else:
         admin_user = admin_auth.authenticate(db, username, payload.password)
         if admin_user:
+            if not admin_auth.verify_totp_for_login(admin_user, payload.totp_code):
+                raise HTTPException(status_code=401, detail="totp_required")
             token = app_auth.create_session_token(db, admin_user.username, user_id=admin_user.id)
             add_history(db, "app_login", f"Signed in as {admin_user.username}")
     if not token:
@@ -106,6 +114,71 @@ def update_admin_user(user_id: int, payload: AdminUserUpdate, db: Session = Depe
 def delete_admin_user(user_id: int, db: Session = Depends(get_db)):
     try:
         admin_auth.delete_user(db, user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+def _current_admin_user_id(request: Request, db: Session) -> int:
+    token = request.cookies.get(app_auth.COOKIE_NAME)
+    user_id = app_auth.current_admin_user_id(db, token)
+    if not user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Two-factor login is only available for a named admin account "
+            "(Settings → Security → Admin users), not the legacy admin/password login.",
+        )
+    return user_id
+
+
+@router.post("/totp/setup", response_model=TotpSetupOut)
+def totp_setup(request: Request, db: Session = Depends(get_db)):
+    user_id = _current_admin_user_id(request, db)
+    secret, url = admin_auth.start_totp_setup(db, user_id)
+    return TotpSetupOut(secret=secret, otpauth_url=url)
+
+
+@router.post("/totp/confirm")
+def totp_confirm(payload: TotpConfirmRequest, request: Request, db: Session = Depends(get_db)):
+    user_id = _current_admin_user_id(request, db)
+    try:
+        admin_auth.confirm_totp(db, user_id, payload.code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    add_history(db, "totp_enabled", "Two-factor authentication enabled")
+    return {"ok": True}
+
+
+@router.post("/totp/disable")
+def totp_disable(payload: TotpDisableRequest, request: Request, db: Session = Depends(get_db)):
+    user_id = _current_admin_user_id(request, db)
+    try:
+        admin_auth.disable_totp(db, user_id, payload.code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    add_history(db, "totp_disabled", "Two-factor authentication disabled")
+    return {"ok": True}
+
+
+@router.get("/api-keys", response_model=list[ApiKeyOut])
+def list_api_keys(db: Session = Depends(get_db)):
+    return [api_keys.api_key_out(k) for k in api_keys.list_keys(db)]
+
+
+@router.post("/api-keys", response_model=ApiKeyCreated)
+def create_api_key(payload: ApiKeyCreateRequest, db: Session = Depends(get_db)):
+    try:
+        raw, row = api_keys.create_key(db, name=payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    add_history(db, "api_key_created", f"Created API key '{row.name}'")
+    return ApiKeyCreated(key=raw, info=api_keys.api_key_out(row))
+
+
+@router.delete("/api-keys/{key_id}")
+def delete_api_key(key_id: int, db: Session = Depends(get_db)):
+    try:
+        api_keys.revoke_key(db, key_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"ok": True}

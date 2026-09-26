@@ -22,12 +22,13 @@ from app.api import (
     musicbrainz_catalog,
     ops,
     player,
+    push,
     search,
     settings,
     stats,
 )
 from app.core.database import SessionLocal, ensure_dirs, init_db
-from app.services import app_auth, player_auth, player_presence
+from app.services import api_keys, app_auth, player_auth, player_presence
 from app.services.completed_download_handler import completed_download_handler
 from app.services.cors_origins import LOCAL_CORS_ORIGINS, origin_is_allowed
 from app.services.download_queue import download_queue
@@ -157,6 +158,12 @@ async def app_login_gate(request: Request, call_next):
         if not app_auth.auth_enabled(db):
             # Auth off: most APIs are open, but player admin handlers still 401 via _require_admin.
             return await call_next(request)
+        # An API key (Sonarr/Radarr-style external automation) is checked
+        # independently of the session cookie, so a script can call the API
+        # without ever going through the login form.
+        api_key = request.headers.get("x-api-key")
+        if api_key and api_keys.verify_key(db, api_key):
+            return await call_next(request)
         token = request.cookies.get(app_auth.COOKIE_NAME)
         if app_auth.parse_session_token(db, token):
             return await call_next(request)
@@ -194,6 +201,7 @@ app.include_router(stats.router, prefix="/api")
 app.include_router(calendar.router, prefix="/api")
 app.include_router(maintenance.router, prefix="/api")
 app.include_router(acquisition.router, prefix="/api")
+app.include_router(push.router, prefix="/api")
 
 
 @app.get("/api")

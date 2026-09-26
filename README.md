@@ -163,6 +163,42 @@ With HTTPS mode on, Musicarr sets `Secure` session cookies so form login works t
 
 ---
 
+## Install on Unraid
+
+Musicarr isn't in Community Applications (yet), but the prebuilt image works on Unraid the same
+way any other container does — add it manually from the **Docker** tab:
+
+1. **Docker** tab → **Add Container**.
+2. Fill in:
+
+   | Field | Value |
+   |---|---|
+   | Name | `musicarr` |
+   | Repository | `ghcr.io/pinedev1/musicarr:latest` |
+   | Network Type | `Bridge` |
+   | WebUI | `http://[IP]:[PORT:8787]` |
+
+3. Add two **Path** mappings:
+
+   | Container Path | Host Path | Access |
+   |---|---|---|
+   | `/config` | `/mnt/user/appdata/musicarr` | Read/Write |
+   | `/music`  | wherever your library should live (e.g. `/mnt/user/Music`) | Read/Write |
+
+4. Add one **Port** mapping: container `8787` → host `8787` (or any free host port).
+5. Apply, then open `http://<unraid-ip>:8787` — the setup wizard walks you through the rest.
+   Set the **library path** in the wizard to `/music` (the container path from step 3).
+
+**Updating:** click the container's icon → **Check for Updates** (or re-pull the `latest` tag).
+Since Musicarr is a single SQLite-backed process, keep this at **one container instance** — don't
+run a second one against the same `/config` folder.
+
+Prefer XML? Save this as a User Template (**Docker → Add Container → Template: (blank)**, then
+paste into the container's edit screen and save as a template), or start from the file the
+project ships for exactly this purpose: [`unraid-template.xml`](unraid-template.xml).
+
+---
+
 ## Music player
 
 Optional listening UI at **`/player`** — completely separate from the admin library manager.

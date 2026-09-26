@@ -8,7 +8,7 @@ from app.models import Track
 from app.models.schemas import MaintenanceResolveRequest, MaintenanceScanOut
 from app.services import dedupe
 from app.services.history import add_history
-from app.services.settings_service import library_root
+from app.services.library_roots import all_library_roots
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
 
@@ -42,12 +42,10 @@ def resolve(payload: MaintenanceResolveRequest, db: Session = Depends(get_db)):
         return {"ok": True}
 
     if payload.delete_file_path is not None:
-        root = library_root(db)
         target = Path(payload.delete_file_path).resolve()
-        try:
-            target.relative_to(root)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Path is outside the library folder")
+        roots = all_library_roots(db)
+        if not any(target == r or r in target.parents for r in roots):
+            raise HTTPException(status_code=400, detail="Path is outside the library folders")
         if target.exists() and target.is_file():
             target.unlink(missing_ok=True)
         add_history(db, "maintenance", f"Deleted orphan file {target}")

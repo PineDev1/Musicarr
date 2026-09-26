@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -170,8 +171,18 @@ class DeezerProvider:
             Downloader(dz, download_obj, deemix_settings, listener).start()
 
         audio_exts = {".flac", ".mp3", ".m4a", ".ogg", ".opus", ".wav"}
+
+        def _track_sort_key(path: Path) -> tuple[int, str]:
+            # Filenames are "%tracknumber% - %title%" with no zero-padding,
+            # so a plain string sort puts "10 - ..." before "2 - ..." for any
+            # album with 10+ tracks. Sort by the numeric track prefix
+            # instead; fall back to the filename for anything unparsable.
+            match = re.match(r"^(\d+)\s*-\s*", path.name)
+            return (int(match.group(1)) if match else 1 << 30, path.name)
+
         files = sorted(
-            p for p in staging_dir.rglob("*") if p.is_file() and p.suffix.lower() in audio_exts
+            (p for p in staging_dir.rglob("*") if p.is_file() and p.suffix.lower() in audio_exts),
+            key=_track_sort_key,
         )
         cover = next(
             (

@@ -408,8 +408,9 @@ def search_release_group_for_artist(
     aid = (artist_mbid or "").strip()
     if not clean or not aid:
         return None
+    escaped_title = search_title.replace('"', '\\"')
     queries = [
-        f'releasegroup:"{search_title}" AND arid:{aid}',
+        f'releasegroup:"{escaped_title}" AND arid:{aid}',
         f"releasegroup:{search_title} AND arid:{aid}",
     ]
     rows: list[dict] = []
@@ -453,8 +454,17 @@ def search_release_group_for_artist(
         credit_mbids = {c.mbid for c in rg.credits}
         cand = normalize_title(rg.title)
         ratio = SequenceMatcher(None, clean, cand).ratio()
-        if cand == clean or clean in cand or cand in clean:
+        length_delta = abs(len(clean) - len(cand))
+        if cand == clean:
             ratio = 1.0
+        elif (clean in cand or cand in clean) and length_delta <= 4:
+            # Containment alone would treat "Reputation" as a perfect match
+            # for "Reputation Stadium Tour" (a different release) — only
+            # trust it for a handful of stray characters, same guard as
+            # mb_local.py's search_release_group_for_artist.
+            ratio = 1.0
+        elif length_delta > 4:
+            ratio = min(ratio, 0.5)
         if rg.credits and aid not in credit_mbids:
             # This release-group has known credits and our artist isn't one
             # of them — never a valid match, regardless of title similarity
@@ -657,10 +667,16 @@ def match_release(
         if not cand:
             continue
         ratio = SequenceMatcher(None, want, cand).ratio()
+        length_delta = abs(len(want) - len(cand))
         if want == cand:
             ratio = 1.0
-        elif want in cand or cand in want:
+        elif (want in cand or cand in want) and length_delta <= 4:
+            # Containment alone would treat "Reputation" as a match for
+            # "Reputation Stadium Tour" — only trust it for a handful of
+            # stray characters, same guard as mb_local.py's matcher.
             ratio = max(ratio, 0.9)
+        elif length_delta > 4:
+            ratio = min(ratio, 0.5)
         # Prefer the release-group whose edition wording (Deluxe/Live/Remaster/...)
         # actually matches the query, instead of treating every edition as
         # interchangeable once the noise-stripped titles tie.
@@ -699,10 +715,13 @@ def match_provider_album(rg: ReleaseGroup, provider_albums: list[Any]) -> Any | 
         if not title:
             continue
         ratio = SequenceMatcher(None, want, title).ratio()
+        length_delta = abs(len(want) - len(title))
         if want == title:
             ratio = 1.0
-        elif want in title or title in want:
+        elif (want in title or title in want) and length_delta <= 4:
             ratio = max(ratio, 0.9)
+        elif length_delta > 4:
+            ratio = min(ratio, 0.5)
         if want_strict and normalize_title_strict(raw_title) == want_strict:
             ratio += 0.1
         year = _year_prefix(getattr(alb, "release_date", None))

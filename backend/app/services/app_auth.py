@@ -95,6 +95,21 @@ def parse_session_token(db: Session, token: str | None) -> str | None:
     return username
 
 
+def current_admin_user_id(db: Session, token: str | None) -> int | None:
+    """Return the AdminUser.id encoded in a valid session token, or None for
+    the legacy single-account login (user_id=0) or an invalid/expired token."""
+    if not parse_session_token(db, token):
+        return None
+    if not token or token.count("|") != 4:
+        return None
+    user_id_s = token.split("|", 1)[0]
+    try:
+        user_id = int(user_id_s)
+    except ValueError:
+        return None
+    return user_id or None
+
+
 def auth_enabled(db: Session) -> bool:
     return bool(get_setting_cached(db, "auth_enabled", False))
 

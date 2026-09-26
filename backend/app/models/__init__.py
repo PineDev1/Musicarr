@@ -104,6 +104,10 @@ class AppSettings(Base):
     # hardlink | copy | move — how a finished indexer download is placed into the library
     import_mechanism: Mapped[str] = mapped_column(String(16), default="hardlink")
     remove_completed_downloads: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Web push (browser notifications) — one VAPID keypair per instance,
+    # generated lazily on first use; subscriptions live in PushSubscription.
+    vapid_public_key: Mapped[str] = mapped_column(Text, default="")
+    vapid_private_key: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -339,6 +343,53 @@ class AdminUser(Base):
     display_name: Mapped[str] = mapped_column(String(256), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # TOTP two-factor (optional, per admin account)
+    totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class ApiKey(Base):
+    """Bearer key for external automation (Sonarr/Radarr-style), checked via
+    the X-Api-Key header as an alternative to the admin session cookie.
+    Only a salted hash is stored — the raw key is shown once, at creation."""
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    key_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    key_prefix: Mapped[str] = mapped_column(String(16), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class LibraryRoot(Base):
+    """An additional folder to scan/import/dedupe alongside the primary
+    library path (AppSettings.library_path). New downloads and reorganize
+    always target the primary path — this is for pointing Musicarr at
+    existing music that already lives elsewhere (a second drive, an old
+    library folder) so it gets picked up by scan/import/dedupe too."""
+
+    __tablename__ = "library_roots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    path: Mapped[str] = mapped_column(String(2048), unique=True)
+    label: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PushSubscription(Base):
+    """A browser's Web Push subscription (per admin session, not per user —
+    this app has no per-admin identity requirement for alerts)."""
+
+    __tablename__ = "push_subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    endpoint: Mapped[str] = mapped_column(Text, unique=True)
+    p256dh: Mapped[str] = mapped_column(String(256), default="")
+    auth: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class PlayerUser(Base):
@@ -374,6 +425,11 @@ class PlayerUser(Base):
     continue_position: Mapped[float] = mapped_column(Float, default=0.0)
     lastfm_username: Mapped[str | None] = mapped_column(String(128), nullable=True)
     lastfm_session_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The Last.fm auth token this user's own /lastfm/start most recently
+    # issued — the callback only accepts a token that matches this, so an
+    # attacker can't send another user a link authorizing the attacker's own
+    # Last.fm account and have it silently bind to the victim's session.
+    lastfm_pending_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     playlists: Mapped[list["PlayerPlaylist"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

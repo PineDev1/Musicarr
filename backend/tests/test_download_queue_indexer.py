@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from app.models import Album, AppSettings, DownloadClient, DownloadJob
 from app.services.artists import _legacy_id
 from app.services.download_queue import DownloadQueue, resolve_download_method
@@ -159,3 +161,33 @@ def test_cancel_streaming_job_does_not_touch_download_clients(db):
         result = queue.cancel(db, job.id)
     get_client.assert_not_called()
     assert result.state == "cancelled"
+
+
+def test_cancel_refuses_a_job_that_is_already_importing(db):
+    """A job in "importing" is being actively copied by the completed-download
+    handler's background thread right now. Aborting the client item here
+    would delete the payload out from under that in-progress copy, and
+    either side's final commit could race the other's job.state write."""
+    album = _album(db)
+    client_row = DownloadClient(
+        name="qbt", protocol="torrent", implementation="qbittorrent", host="localhost", port=8080
+    )
+    db.add(client_row)
+    db.commit()
+    db.refresh(client_row)
+
+    job = DownloadJob(
+        target_type="album", target_id=album.id, album_id=album.id,
+        state="importing", source="indexer", client_id=client_row.id, client_item_id="hash1",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    queue = DownloadQueue()
+    with patch("app.services.download_clients.get_client") as get_client:
+        with pytest.raises(ValueError):
+            queue.cancel(db, job.id)
+    get_client.assert_not_called()
+    db.refresh(job)
+    assert job.state == "importing"

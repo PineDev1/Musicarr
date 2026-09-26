@@ -999,11 +999,13 @@ def lastfm_status(request: Request, db: Session = Depends(get_db)):
 def lastfm_start(request: Request, db: Session = Depends(get_db)):
     from app.services import lastfm
 
-    _current_player_user(request, db)
+    user = _current_player_user(request, db)
     try:
-        return {"auth_url": lastfm.auth_url(db)}
+        url = lastfm.auth_url(db, user)
     except lastfm.LastfmError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    return {"auth_url": url}
 
 
 @router.get("/lastfm/callback")
@@ -1235,6 +1237,86 @@ def library_recommended(request: Request, db: Session = Depends(get_db)):
         picks.extend(pool[: 20 - len(picks)])
     db.commit()
     return [_track_out(t) for t in picks[:20]]
+
+
+def build_radio_tracks(db: Session, seed: Artist) -> list[Track]:
+    """Shuffled track pool seeded from Last.fm's similar-artist lookup —
+    only ever plays what's already downloaded in this library, no
+    streaming. Raises lastfm.LastfmError if the lookup itself fails."""
+    import random
+
+    from app.services import lastfm
+    from app.services.artists import find_artist_by_normalized_name
+
+    hits = lastfm.similar_artists(db, seed.name, limit=15)
+
+    matched_artist_ids: list[int] = []
+    for hit in hits:
+        found = find_artist_by_normalized_name(db, hit["name"], seed.provider)
+        if found and found.id != seed.id:
+            matched_artist_ids.append(found.id)
+
+    tracks: list[Track] = []
+    if matched_artist_ids:
+        tracks = list(
+            db.scalars(
+                _downloaded_tracks_query()
+                .join(Album, Track.album_id == Album.id)
+                .where(Album.artist_id.in_(matched_artist_ids))
+            )
+            .unique()
+            .all()
+        )
+    random.shuffle(tracks)
+    tracks = tracks[:40]
+
+    # Not enough real similar-artist matches downloaded — round out with the
+    # seed artist's own other tracks rather than returning a near-empty
+    # queue (this is Last.fm's global catalog, most of which this library
+    # won't have; a radio queue of 2 tracks is a worse experience than one
+    # that leans on the artist actually clicked).
+    if len(tracks) < 10:
+        seed_tracks = list(
+            db.scalars(
+                _downloaded_tracks_query()
+                .join(Album, Track.album_id == Album.id)
+                .where(Album.artist_id == seed.id)
+            )
+            .unique()
+            .all()
+        )
+        random.shuffle(seed_tracks)
+        existing_ids = {t.id for t in tracks}
+        for t in seed_tracks:
+            if t.id not in existing_ids:
+                tracks.append(t)
+                existing_ids.add(t.id)
+            if len(tracks) >= 20:
+                break
+
+    return tracks
+
+
+@router.get("/radio/{artist_id}", response_model=list[PlayerTrackOut])
+def artist_radio(artist_id: int, request: Request, db: Session = Depends(get_db)):
+    from app.services import lastfm
+
+    _current_player_user(request, db)
+    seed = db.get(Artist, artist_id)
+    if not seed:
+        raise HTTPException(status_code=404, detail="Artist not found")
+
+    try:
+        tracks = build_radio_tracks(db, seed)
+    except lastfm.LastfmError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not tracks:
+        raise HTTPException(
+            status_code=404,
+            detail="Nothing downloaded yet for this artist or its similar artists",
+        )
+    return [_track_out(t) for t in tracks]
 
 
 @router.get("/library/albums", response_model=list[PlayerAlbumOut])

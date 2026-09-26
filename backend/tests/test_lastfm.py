@@ -14,7 +14,8 @@ def _settings_with_lastfm(db) -> AppSettings:
 
 
 def _player_user(db, **kwargs) -> PlayerUser:
-    row = PlayerUser(username="listener", **kwargs)
+    kwargs.setdefault("username", "listener")
+    row = PlayerUser(**kwargs)
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -24,12 +25,14 @@ def _player_user(db, **kwargs) -> PlayerUser:
 def test_credentials_missing_raises(db):
     db.add(AppSettings(id=1))
     db.commit()
+    user = _player_user(db)
     with pytest.raises(lastfm.LastfmError):
-        lastfm.auth_url(db)
+        lastfm.auth_url(db, user)
 
 
 def test_auth_url_uses_returned_token(db, monkeypatch):
     _settings_with_lastfm(db)
+    user = _player_user(db)
 
     class FakeResp:
         def raise_for_status(self):
@@ -40,15 +43,16 @@ def test_auth_url_uses_returned_token(db, monkeypatch):
 
     monkeypatch.setattr(lastfm.requests, "get", lambda *a, **k: FakeResp())
 
-    url = lastfm.auth_url(db)
+    url = lastfm.auth_url(db, user)
 
     assert "tok-abc" in url
     assert "key123" in url
+    assert user.lastfm_pending_token == "tok-abc"
 
 
 def test_complete_auth_stores_session_key(db, monkeypatch):
     _settings_with_lastfm(db)
-    user = _player_user(db)
+    user = _player_user(db, lastfm_pending_token="tok-abc")
 
     class FakeResp:
         def raise_for_status(self):
@@ -63,6 +67,44 @@ def test_complete_auth_stores_session_key(db, monkeypatch):
 
     assert user.lastfm_session_key == "sess-key"
     assert user.lastfm_username == "lastfm_user"
+    assert user.lastfm_pending_token is None
+
+
+def test_complete_auth_rejects_token_not_issued_for_this_user(db, monkeypatch):
+    """CSRF/account-linking regression: an attacker could authorize their own
+    Last.fm account via their own /lastfm/start, then send the resulting
+    callback link to a victim. Without binding the token to whoever's flow
+    issued it, the victim's session would silently link to the attacker's
+    Last.fm account."""
+    _settings_with_lastfm(db)
+    victim = _player_user(db, username="victim", lastfm_pending_token="victims-own-token")
+
+    called = {"n": 0}
+
+    def _fake_get(*a, **k):
+        called["n"] += 1
+        raise AssertionError("should never call Last.fm with an unbound token")
+
+    monkeypatch.setattr(lastfm.requests, "get", _fake_get)
+
+    with pytest.raises(lastfm.LastfmError):
+        lastfm.complete_auth(db, victim, "attackers-own-token")
+
+    assert called["n"] == 0
+    assert victim.lastfm_session_key is None
+
+
+def test_complete_auth_rejects_when_no_flow_was_started(db, monkeypatch):
+    _settings_with_lastfm(db)
+    user = _player_user(db)
+
+    def _fake_get(*a, **k):
+        raise AssertionError("should never call Last.fm with no pending flow")
+
+    monkeypatch.setattr(lastfm.requests, "get", _fake_get)
+
+    with pytest.raises(lastfm.LastfmError):
+        lastfm.complete_auth(db, user, "some-token")
 
 
 def test_scrobble_noop_without_session_key(db, monkeypatch):

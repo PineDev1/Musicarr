@@ -123,6 +123,8 @@ def migrate_schema(engine_: Engine | None = None) -> None:
         "low_disk_threshold_gb": "INTEGER DEFAULT 10",
         "notify_on_maintenance": "BOOLEAN DEFAULT 1",
         "notify_on_health_alerts": "BOOLEAN DEFAULT 1",
+        "vapid_public_key": "TEXT DEFAULT ''",
+        "vapid_private_key": "TEXT DEFAULT ''",
     }
     existing = existing_columns("app_settings")
     for name, definition in settings_cols.items():
@@ -234,6 +236,7 @@ def migrate_schema(engine_: Engine | None = None) -> None:
         "continue_position": "REAL DEFAULT 0",
         "lastfm_username": "VARCHAR(128)",
         "lastfm_session_key": "VARCHAR(64)",
+        "lastfm_pending_token": "VARCHAR(64)",
     }
     existing_pu = existing_columns("player_users")
     for name, definition in player_user_cols.items():
@@ -246,6 +249,13 @@ def migrate_schema(engine_: Engine | None = None) -> None:
             add_column("player_playlists", "is_smart BOOLEAN DEFAULT 0")
         if "criteria_json" not in pl_cols:
             add_column("player_playlists", "criteria_json TEXT")
+
+    admin_user_cols = existing_columns("admin_users")
+    if admin_user_cols:
+        if "totp_secret" not in admin_user_cols:
+            add_column("admin_users", "totp_secret VARCHAR(64)")
+        if "totp_enabled" not in admin_user_cols:
+            add_column("admin_users", "totp_enabled BOOLEAN DEFAULT 0")
 
     track_cols = existing_columns("tracks")
     if track_cols:
