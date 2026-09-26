@@ -105,6 +105,21 @@ export type AdminUser = {
   display_name: string
   is_active: boolean
   created_at: string
+  totp_enabled: boolean
+}
+
+export type TotpSetup = {
+  secret: string
+  otpauth_url: string
+}
+
+export type ApiKey = {
+  id: number
+  name: string
+  key_prefix: string
+  enabled: boolean
+  created_at: string
+  last_used_at: string | null
 }
 
 export type ArtistSearchResult = {
@@ -376,10 +391,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   authStatus: () => request<AppAuthStatus>('/auth/status'),
-  appLogin: (username: string, password: string) =>
+  appLogin: (username: string, password: string, totp_code?: string) =>
     request<AppAuthStatus>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, totp_code: totp_code || undefined }),
     }),
   appLogout: () =>
     request<AppAuthStatus>('/auth/logout-session', { method: 'POST' }),
@@ -389,6 +404,18 @@ export const api = {
   updateAdminUser: (id: number, body: Record<string, unknown>) =>
     request<AdminUser>(`/auth/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteAdminUser: (id: number) => request<{ ok: boolean }>(`/auth/users/${id}`, { method: 'DELETE' }),
+  totpSetup: () => request<TotpSetup>('/auth/totp/setup', { method: 'POST' }),
+  totpConfirm: (code: string) =>
+    request<{ ok: boolean }>('/auth/totp/confirm', { method: 'POST', body: JSON.stringify({ code }) }),
+  totpDisable: (code: string) =>
+    request<{ ok: boolean }>('/auth/totp/disable', { method: 'POST', body: JSON.stringify({ code }) }),
+  apiKeys: () => request<ApiKey[]>('/auth/api-keys'),
+  createApiKey: (name: string) =>
+    request<{ key: string; info: ApiKey }>('/auth/api-keys', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  deleteApiKey: (id: number) => request<{ ok: boolean }>(`/auth/api-keys/${id}`, { method: 'DELETE' }),
   health: () => request<Health>('/health'),
   settings: (validate = false) => request<Settings>(`/settings?validate=${validate}`),
   updateSettings: (body: Record<string, unknown>) =>
@@ -715,6 +742,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  libraryRoots: () => request<LibraryRoot[]>('/settings/library-roots'),
+  createLibraryRoot: (body: { path: string; label?: string }) =>
+    request<LibraryRoot>('/settings/library-roots', { method: 'POST', body: JSON.stringify(body) }),
+  deleteLibraryRoot: (id: number) =>
+    request<{ ok: boolean }>(`/settings/library-roots/${id}`, { method: 'DELETE' }),
   pathMappings: () => request<RemotePathMapping[]>('/acquisition/path-mappings'),
   createPathMapping: (body: Record<string, unknown>) =>
     request<RemotePathMapping>('/acquisition/path-mappings', { method: 'POST', body: JSON.stringify(body) }),
@@ -787,6 +819,13 @@ export type RemotePathMapping = {
 }
 
 export type TestResult = { ok: boolean; message: string }
+
+export type LibraryRoot = {
+  id: number
+  path: string
+  label: string
+  created_at: string
+}
 
 export type ReleaseCandidate = {
   title: string

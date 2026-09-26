@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>musicarr</Name>
+  <Repository>ghcr.io/pinedev1/musicarr:latest</Repository>
+  <Registry>https://github.com/PineDev1/Musicarr/pkgs/container/musicarr</Registry>
+  <Network>bridge</Network>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+
+  <Icon>https://raw.githubusercontent.com/PineDev1/Musicarr/main/frontend/public/icon-512.png</Icon>
+
+  <WebUI>http://[IP]:[PORT:8787]</WebUI>
+
+  <Overview>Self-hosted music library manager. Point it at Deezer, Tidal, or Qobuz, follow the
+artists you care about, and it keeps your library filled in automatically using MusicBrainz as
+the release catalog. Optional torrent/Usenet indexer support, optional multi-user listening room
+at /player. Single container, single SQLite-backed process.</Overview>
+
+  <Support>https://github.com/PineDev1/Musicarr/issues</Support>
+  <Project>https://github.com/PineDev1/Musicarr</Project>
+  <TemplateURL>https://raw.githubusercontent.com/PineDev1/Musicarr/main/unraid-template.xml</TemplateURL>
+  <ReadMe>https://raw.githubusercontent.com/PineDev1/Musicarr/main/README.md</ReadMe>
+
+  <Category>MediaApp:Music</Category>
+  <ExtraSearchTerms>music library manager deezer tidal qobuz musicbrainz downloader</ExtraSearchTerms>
+
+  <Requires>Internet access for streaming-provider logins and MusicBrainz lookups. A Deezer,
+Tidal, or Qobuz account (or a torrent/Usenet indexer) to actually download anything.</Requires>
+
+  <MinVer>6.9</MinVer>
+
+  <Config Name="WebUI" Target="8787" Default="8787" Mode="tcp" Description="HTTP port for the Musicarr web UI." Type="Port" Display="always" Required="true" Mask="false"/>
+  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/musicarr" Mode="rw" Description="Settings, SQLite database, and download staging." Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Music" Target="/music" Default="/mnt/user/Music" Mode="rw" Description="Your music library. Set this same path as the library path in Musicarr's setup wizard." Type="Path" Display="always" Required="true" Mask="false"/>
+</Container>

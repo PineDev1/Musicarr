@@ -92,6 +92,12 @@ export function ExpandedNowPlaying({ onClose }: { onClose: () => void }) {
       )
     : -1
 
+  const lyricsContainerRef = useRef<HTMLDivElement | null>(null)
+  const activeLyricRef = useRef<HTMLParagraphElement | null>(null)
+  useEffect(() => {
+    activeLyricRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [activeLyricIndex])
+
   const toggleFav = useMutation({
     mutationFn: async () => {
       if (!track) return
@@ -312,10 +318,11 @@ export function ExpandedNowPlaying({ onClose }: { onClose: () => void }) {
             <div className="section-label">Lyrics</div>
             {lyricsQ.isLoading && <span className="muted tiny">Loading lyrics…</span>}
             {!lyricsQ.isLoading && syncedLines.length > 0 && (
-              <div className="lyrics-synced">
+              <div className="lyrics-synced" ref={lyricsContainerRef}>
                 {syncedLines.map((line, i) => (
                   <p
                     key={`${line.time}-${i}`}
+                    ref={i === activeLyricIndex ? activeLyricRef : undefined}
                     className={i === activeLyricIndex ? 'lyric-line active' : 'lyric-line'}
                     onClick={() => q.seek(line.time)}
                   >

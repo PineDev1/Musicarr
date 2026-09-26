@@ -6,8 +6,15 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models import Album, Artist, DownloadJob
-from app.models.schemas import HealthOut, NotifyTestRequest, SettingsOut, SettingsUpdate
-from app.services import app_auth
+from app.models.schemas import (
+    HealthOut,
+    LibraryRootCreate,
+    LibraryRootOut,
+    NotifyTestRequest,
+    SettingsOut,
+    SettingsUpdate,
+)
+from app.services import app_auth, library_roots
 from app.services.download_queue import ACTIVE_JOB_STATES
 from app.services.providers import get_provider
 from app.services.settings_service import (
@@ -150,3 +157,26 @@ def health(db: Session = Depends(get_db)):
         low_disk_warning=low_disk_warning,
         streaming_enabled=streaming_enabled,
     )
+
+
+@router.get("/settings/library-roots", response_model=list[LibraryRootOut])
+def list_library_roots(db: Session = Depends(get_db)):
+    return list(library_roots.list_extra_roots(db))
+
+
+@router.post("/settings/library-roots", response_model=LibraryRootOut)
+def create_library_root(payload: LibraryRootCreate, db: Session = Depends(get_db)):
+    try:
+        row = library_roots.add_root(db, path=payload.path, label=payload.label)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return row
+
+
+@router.delete("/settings/library-roots/{root_id}")
+def delete_library_root(root_id: int, db: Session = Depends(get_db)):
+    try:
+        library_roots.remove_root(db, root_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True}

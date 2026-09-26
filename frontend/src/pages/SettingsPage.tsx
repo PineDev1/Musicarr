@@ -5,6 +5,9 @@ import { api } from '../api'
 import { playerApi } from '../player/playerApi'
 import { useToast } from '../Toast'
 import { AcquisitionPanels } from './AcquisitionPanels'
+import { LibraryRootsPanel } from './LibraryRootsPanel'
+import { PushNotificationsPanel } from './PushPanel'
+import { ApiKeysPanel, TwoFactorPanel } from './SecurityPanels'
 
 type TabId =
   | 'sources'
@@ -865,6 +868,9 @@ export function SettingsPage() {
               <label>Library path</label>
               <input type="text" value={libraryPath} onChange={(e) => setLibraryPath(e.target.value)} />
             </div>
+
+            <LibraryRootsPanel />
+
             <div className="field">
               <label>Folder template</label>
               <input type="text" value={folderTemplate} onChange={(e) => setFolderTemplate(e.target.value)} />
@@ -1282,6 +1288,10 @@ export function SettingsPage() {
                 {notifyTest.isPending ? 'Sending…' : 'Send test notification'}
               </button>
             </div>
+
+            <hr className="settings-divider" />
+
+            <PushNotificationsPanel />
           </>
         )}
 
@@ -1520,6 +1530,14 @@ export function SettingsPage() {
                 </button>
               </div>
             )}
+
+            <hr className="settings-divider" />
+
+            <TwoFactorPanel />
+
+            <hr className="settings-divider" />
+
+            <ApiKeysPanel />
 
             <hr className="settings-divider" />
 

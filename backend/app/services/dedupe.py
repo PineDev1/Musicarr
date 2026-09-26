@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models import Album, Artist, Track
 from app.services.library import AUDIO_EXTS
-from app.services.settings_service import library_root
+from app.services.library_roots import all_library_roots
 
 
 def find_orphan_db_tracks(db: Session) -> list[dict]:
@@ -35,27 +35,30 @@ def find_orphan_db_tracks(db: Session) -> list[dict]:
 
 
 def find_orphan_files(db: Session) -> list[dict]:
-    """Audio files on disk under the library root with no matching Track.path."""
-    root = library_root(db)
+    """Audio files on disk under any configured library root with no
+    matching Track.path."""
     known_paths = {
         str(Path(p).resolve())
         for (p,) in db.execute(select(Track.path).where(Track.path.is_not(None)))
         if p
     }
     out: list[dict] = []
-    if not root.is_dir():
-        return out
-    for path in root.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in AUDIO_EXTS:
+    seen_paths: set[str] = set()
+    for root in all_library_roots(db):
+        if not root.is_dir():
             continue
-        resolved = str(path.resolve())
-        if resolved in known_paths:
-            continue
-        try:
-            size = path.stat().st_size
-        except OSError:
-            size = 0
-        out.append({"path": resolved, "size_bytes": size})
+        for path in root.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in AUDIO_EXTS:
+                continue
+            resolved = str(path.resolve())
+            if resolved in known_paths or resolved in seen_paths:
+                continue
+            seen_paths.add(resolved)
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = 0
+            out.append({"path": resolved, "size_bytes": size})
     return out
 
 
@@ -76,6 +79,16 @@ def find_duplicate_groups(db: Session) -> list[dict]:
             "artist_name": album.artist.name if album and album.artist else "",
         }
 
+    def _has_file(t: Track) -> bool:
+        return bool(t.path) and Path(t.path).exists()
+
+    def _ordered(rows: list[Track]) -> list[Track]:
+        # A row with a real file on disk must sort first: callers (the
+        # MaintenancePage UI) default the "keep" choice to the first entry in
+        # a group, so an orphaned/pathless row sorting first would pre-select
+        # deleting the only real file and keeping the orphan.
+        return sorted(rows, key=lambda t: 0 if _has_file(t) else 1)
+
     isrc_dupes = db.execute(
         select(Track.isrc, func.count())
         .where(Track.isrc.is_not(None), Track.isrc != "")
@@ -91,6 +104,7 @@ def find_duplicate_groups(db: Session) -> list[dict]:
         if len(rows) < 2:
             continue
         seen_track_ids.update(r.id for r in rows)
+        rows = _ordered(rows)
         groups.append({"reason": "isrc", "key": isrc, "tracks": [_track_dict(r) for r in rows]})
 
     slot_dupes = db.execute(
@@ -111,6 +125,7 @@ def find_duplicate_groups(db: Session) -> list[dict]:
         rows = [r for r in rows if r.id not in seen_track_ids]
         if len(rows) < 2:
             continue
+        rows = _ordered(rows)
         groups.append(
             {
                 "reason": "album_slot",

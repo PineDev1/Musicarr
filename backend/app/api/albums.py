@@ -379,6 +379,26 @@ def patch_album(album_id: int, payload: AlbumPatch, db: Session = Depends(get_db
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
     data = payload.model_dump(exclude_unset=True)
+    if "status" in data:
+        # "downloaded"/"missing" are only ever set by the download/import and
+        # MusicBrainz-resolution flows themselves — accepting them here would
+        # let a client desync album.status from the actual filesystem state,
+        # or permanently block re-queuing (status="missing" is a magic
+        # "provider has no match" marker elsewhere). This endpoint only
+        # toggles between the two states a user can legitimately choose.
+        new_status = data["status"]
+        if new_status not in {"wanted", "skipped"}:
+            raise HTTPException(
+                status_code=400,
+                detail="status can only be set to 'wanted' or 'skipped' here; "
+                "other states are managed automatically.",
+            )
+        if new_status == "skipped":
+            album.skip_reason_code = "manual"
+            album.status_reason = "Skipped manually"
+        else:
+            album.skip_reason_code = ""
+            album.status_reason = ""
     for key, value in data.items():
         setattr(album, key, value)
     db.commit()

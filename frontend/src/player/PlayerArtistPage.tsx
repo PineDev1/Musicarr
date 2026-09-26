@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { IconPlay, IconShuffle, IconUser } from './icons'
+import { useToast } from '../Toast'
+import { IconPlay, IconRadio, IconShuffle, IconUser } from './icons'
 import { playerApi, type PlayerArtistDetail } from './playerApi'
 import { usePlayerQueue } from './PlayerQueueContext'
 import { AlbumShelf, Section, SongRow } from './PlayerShelves'
@@ -38,11 +39,24 @@ export function PlayerArtistPage() {
   const { id } = useParams()
   const artistId = Number(id)
   const q = usePlayerQueue()
+  const toast = useToast()
   const { data, isLoading, error } = useQuery({
     queryKey: ['player-artist', artistId],
     queryFn: () => loadArtistDetail(artistId),
     enabled: Number.isFinite(artistId) && artistId > 0,
     retry: false,
+  })
+
+  const radio = useMutation({
+    mutationFn: () => playerApi.artistRadio(artistId),
+    onSuccess: (tracks) => {
+      if (!tracks.length) {
+        toast.push('Nothing downloaded yet for this radio', 'error')
+        return
+      }
+      q.playTracks(tracks, 0, `${data?.name || 'Artist'} Radio`)
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
   if (isLoading) return <p className="muted">Loading…</p>
@@ -85,6 +99,14 @@ export function PlayerArtistPage() {
               }}
             >
               <IconShuffle size={16} /> Shuffle
+            </button>
+            <button
+              type="button"
+              className="btn secondary"
+              disabled={radio.isPending}
+              onClick={() => radio.mutate()}
+            >
+              <IconRadio size={16} /> Radio
             </button>
           </div>
         </div>

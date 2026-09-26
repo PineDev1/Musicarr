@@ -29,7 +29,7 @@ from app.services.settings_service import ensure_settings, library_root
 
 logger = logging.getLogger("musicarr.completed")
 
-ACTIVE_STATES = ["grabbed", "downloading"]
+ACTIVE_STATES = ["grabbed", "downloading", "importing"]
 # Reject an import whose audio-file count falls below this fraction of the
 # album's expected track count — catches partial/broken uploads and
 # mislabeled singles/EPs before they're filed in as a complete album.
@@ -194,6 +194,24 @@ class CompletedDownloadHandler:
             self._fail_job(db, job, "Download client for this job no longer exists")
             return "failed"
 
+        # A job can be stranded in "importing" if the process was killed
+        # mid-import (after the client already reported completion). There's
+        # no further client status to poll for it — resume the import
+        # directly from the output path recorded before the crash, rather
+        # than leaving it stuck forever (retry() also refuses indexer jobs,
+        # so nothing else would ever revisit it).
+        if job.state == "importing":
+            if not job.output_path:
+                self._fail_job(db, job, "Import was interrupted and cannot be resumed")
+                return "failed"
+            status = ClientStatus(
+                item_id=job.client_item_id,
+                state="completed",
+                progress=1.0,
+                output_path=job.output_path,
+            )
+            return self._import_job(db, job, client_row, status)
+
         client = get_client(client_row)
         try:
             status = client.get_status(job.client_item_id)
@@ -234,7 +252,7 @@ class CompletedDownloadHandler:
         status: ClientStatus,
     ) -> str:
         settings = ensure_settings(db)
-        local = map_remote_to_local(db, status.output_path)
+        local = map_remote_to_local(db, status.output_path, host=client_row.host)
         if not local or not local.exists():
             self._fail_job(
                 db,

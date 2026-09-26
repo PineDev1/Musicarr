@@ -241,6 +241,7 @@ export const playerApi = {
   artists: () => request<PlayerArtist[]>('/artists'),
   artistDetail: (id: number) => request<PlayerArtistDetail>(`/artists/${id}`),
   artistAlbums: (id: number) => request<PlayerAlbum[]>(`/artists/${id}/albums`),
+  artistRadio: (id: number) => request<PlayerTrack[]>(`/radio/${id}`),
   album: (id: number) => request<PlayerAlbum>(`/albums/${id}`),
   search: (q: string) => request<PlayerTrack[]>(`/search?q=${encodeURIComponent(q)}`),
   searchGrouped: (q: string) =>

@@ -28,11 +28,24 @@ def export_backup(db: Session = Depends(get_db)):
 async def restore_backup(file: UploadFile):
     if backup_service.get_restore_job().state == "running":
         raise HTTPException(status_code=409, detail="A restore is already running")
-    data = await file.read()
+    # Read in chunks and bail out as soon as the cap is exceeded, instead of
+    # buffering the whole body first — an unbounded upload would otherwise
+    # grow the process's memory by the full body size before the 400 is ever
+    # returned.
+    chunks: list[bytes] = []
+    total = 0
+    chunk_size = 1024 * 1024
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=400, detail="Backup file is too large")
+        chunks.append(chunk)
+    data = b"".join(chunks)
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=400, detail="Backup file is too large")
     try:
         job = backup_service.start_restore(data)
     except RuntimeError as exc:

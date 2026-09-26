@@ -555,6 +555,7 @@ class TidalDeviceOut(BaseModel):
 class AppLoginRequest(BaseModel):
     username: str
     password: str
+    totp_code: str | None = None
 
 
 class AppAuthStatus(BaseModel):
@@ -570,6 +571,7 @@ class AdminUserOut(BaseModel):
     display_name: str = ""
     is_active: bool = True
     created_at: datetime
+    totp_enabled: bool = False
 
     class Config:
         from_attributes = True
@@ -585,6 +587,61 @@ class AdminUserUpdate(BaseModel):
     password: str | None = Field(default=None, min_length=4, max_length=256)
     display_name: str | None = None
     is_active: bool | None = None
+
+
+class TotpSetupOut(BaseModel):
+    secret: str
+    otpauth_url: str
+
+
+class TotpConfirmRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=6)
+
+
+class TotpDisableRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=6)
+
+
+class ApiKeyOut(BaseModel):
+    id: int
+    name: str
+    key_prefix: str
+    enabled: bool = True
+    created_at: datetime
+    last_used_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class ApiKeyCreated(BaseModel):
+    key: str
+    info: ApiKeyOut
+
+
+class ApiKeyCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+
+
+class PushSubscriptionIn(BaseModel):
+    endpoint: str
+    p256dh: str
+    auth: str
+
+
+class LibraryRootOut(BaseModel):
+    id: int
+    path: str
+    label: str = ""
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class LibraryRootCreate(BaseModel):
+    path: str = Field(min_length=1)
+    label: str = ""
 
 
 class PlayerUserOut(BaseModel):

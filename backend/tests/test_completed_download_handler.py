@@ -291,6 +291,56 @@ def test_poll_job_fails_when_client_reports_failed(db, tmp_path):
     assert job.state == "failed"
 
 
+def test_poll_job_resumes_a_job_stranded_in_importing_state(db, tmp_path):
+    """A crash right after the "importing" commit (before "completed") used
+    to strand the job forever: run_once's ACTIVE_STATES query excluded
+    "importing", and retry() refuses indexer jobs outright."""
+    artist, album = _album_with_tracks(db, track_count=1)
+    src_dir = tmp_path / "download"
+    src_dir.mkdir()
+    make_mp3(src_dir / "a.mp3", title="Track One", artist="Luke Combs", track="1", isrc="ISRC1")
+
+    job = _job(db, album)
+    job.state = "importing"
+    job.output_path = str(src_dir)
+    db.commit()
+    client_row = _client_row(db)
+    library_root = tmp_path / "library"
+    library_root.mkdir()
+
+    handler = CompletedDownloadHandler()
+    with patch("app.services.completed_download_handler.library_root", return_value=library_root), \
+         patch("app.services.completed_download_handler.map_remote_to_local", return_value=src_dir):
+        result = handler._poll_job(db, job)
+
+    assert result == "imported"
+    db.refresh(job)
+    db.refresh(album)
+    assert job.state == "completed"
+    assert album.status == "downloaded"
+
+
+def test_run_once_polls_importing_jobs_too(db, monkeypatch):
+    import app.services.completed_download_handler as handler_module
+
+    artist, album = _album_with_tracks(db, track_count=1)
+    job = _job(db, album)
+    job.state = "importing"
+    job.output_path = "/tmp/does-not-matter"
+    db.commit()
+
+    monkeypatch.setattr(handler_module, "SessionLocal", lambda: db)
+    monkeypatch.setattr(db, "close", lambda: None)
+
+    calls = []
+    handler = handler_module.CompletedDownloadHandler()
+    handler._poll_job = lambda db_, j: (calls.append(j.id) or "failed")  # type: ignore[method-assign]
+
+    handler.run_once()
+
+    assert job.id in calls
+
+
 def test_run_once_ignores_streaming_jobs(db, monkeypatch):
     """The completed-download handler must only ever touch source='indexer' jobs."""
     import app.services.completed_download_handler as handler_module

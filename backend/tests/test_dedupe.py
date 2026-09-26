@@ -101,3 +101,43 @@ def test_find_duplicate_groups_by_album_slot(db, tmp_path):
 
     assert len(groups) == 1
     assert groups[0]["reason"] == "album_slot"
+
+
+def test_duplicate_group_orders_row_with_real_file_first(db, tmp_path):
+    """The MaintenancePage UI defaults its "keep" radio to tracks[0] — a row
+    whose file no longer exists on disk must never sort before a row whose
+    file is real, or the UI pre-selects deleting the only real file."""
+    _settings(db, tmp_path)
+    artist = _artist(db, name="Artist", provider="qobuz", provider_id="a1")
+    album = _album(db, artist)
+    real_file = tmp_path / "song.flac"
+    real_file.write_bytes(b"fake audio bytes")
+
+    db.add_all(
+        [
+            # Orphaned row (no file on disk) inserted first, by id order —
+            # the buggy code had no ordering, so it would sort first.
+            Track(
+                provider="qobuz",
+                provider_id="t1",
+                album_id=album.id,
+                title="Song",
+                isrc="ISRC1",
+                path=str(tmp_path / "missing.flac"),
+            ),
+            Track(
+                provider="deezer",
+                provider_id="t2",
+                album_id=album.id,
+                title="Song (dup)",
+                isrc="ISRC1",
+                path=str(real_file),
+            ),
+        ]
+    )
+    db.commit()
+
+    groups = dedupe.find_duplicate_groups(db)
+
+    assert len(groups) == 1
+    assert groups[0]["tracks"][0]["path"] == str(real_file)

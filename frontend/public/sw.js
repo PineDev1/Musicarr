@@ -10,7 +10,7 @@
  * when actually offline. Hashed asset files are still safe to serve
  * cache-first, since their URL itself changes when their content does.
  */
-const CACHE = 'musicarr-player-shell-v3'
+const CACHE = 'musicarr-player-shell-v4'
 const SHELL_URL = '/player'
 
 self.addEventListener('install', (event) => {
@@ -44,7 +44,14 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url)
   if (url.pathname.startsWith('/api/')) return
 
-  const isShell = req.mode === 'navigate' || url.pathname === SHELL_URL
+  // This worker now registers for the whole origin (not just /player), so
+  // it can receive push events on admin pages too. A bare `req.mode ===
+  // 'navigate'` check here would treat *any* navigation — including the
+  // admin app's own routes — as "the player shell", cache that admin page's
+  // HTML under the SHELL_URL key, and later serve it back in place of the
+  // real player shell (or vice versa) whenever offline. Scope this to
+  // actual /player navigations only.
+  const isShell = url.pathname === SHELL_URL || (req.mode === 'navigate' && url.pathname.startsWith('/player'))
   if (isShell) {
     event.respondWith(
       fetch(req)
@@ -59,5 +66,35 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith(
     caches.match(req).then((hit) => hit || fetch(req).catch(() => caches.match(SHELL_URL))),
+  )
+})
+
+self.addEventListener('push', (event) => {
+  let payload = { title: 'Musicarr', body: '' }
+  try {
+    if (event.data) payload = { ...payload, ...event.data.json() }
+  } catch {
+    /* ignore malformed payload */
+  }
+  event.waitUntil(
+    self.registration.showNotification(payload.title || 'Musicarr', {
+      body: payload.body || '',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      data: { url: payload.url || '/' },
+    }),
+  )
+})
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const url = (event.notification.data && event.notification.data.url) || '/'
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if (client.url.includes(url) && 'focus' in client) return client.focus()
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(url)
+    }),
   )
 })

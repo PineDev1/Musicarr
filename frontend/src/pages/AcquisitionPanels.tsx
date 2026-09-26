@@ -62,6 +62,7 @@ function IndexersPanel() {
   const toggle = useMutation({
     mutationFn: (row: Indexer) => api.updateIndexer(row.id, { enabled: !row.enabled }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['indexers'] }),
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
   const remove = useMutation({
@@ -70,6 +71,7 @@ function IndexersPanel() {
       qc.invalidateQueries({ queryKey: ['indexers'] })
       qc.invalidateQueries({ queryKey: ['acquisition-status'] })
     },
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
   const test = useMutation({
@@ -205,6 +207,7 @@ function ClientsPanel() {
   const toggle = useMutation({
     mutationFn: (row: DownloadClient) => api.updateDownloadClient(row.id, { enabled: !row.enabled }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['download-clients'] }),
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
   const remove = useMutation({
@@ -213,6 +216,7 @@ function ClientsPanel() {
       qc.invalidateQueries({ queryKey: ['download-clients'] })
       qc.invalidateQueries({ queryKey: ['acquisition-status'] })
     },
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
   const test = useMutation({
@@ -331,6 +335,7 @@ function ClientsPanel() {
 
 function PathMappingsPanel() {
   const qc = useQueryClient()
+  const toast = useToast()
   const { data, isLoading } = useQuery({ queryKey: ['path-mappings'], queryFn: api.pathMappings })
   const [remotePath, setRemotePath] = useState('')
   const [localPath, setLocalPath] = useState('')
@@ -344,6 +349,7 @@ function PathMappingsPanel() {
       setRemotePath('')
       setLocalPath('')
     },
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
   const remove = useMutation({
@@ -352,6 +358,7 @@ function PathMappingsPanel() {
       qc.invalidateQueries({ queryKey: ['path-mappings'] })
       qc.invalidateQueries({ queryKey: ['acquisition-status'] })
     },
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
   return (

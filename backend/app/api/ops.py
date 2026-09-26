@@ -61,7 +61,10 @@ def get_queue(db: Session = Depends(get_db), all_jobs: bool = False):
 
 @router.post("/queue/{job_id}/cancel", response_model=DownloadJobOut)
 def cancel_job(job_id: int, db: Session = Depends(get_db)):
-    job = download_queue.cancel(db, job_id)
+    try:
+        job = download_queue.cancel(db, job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return _job_out(job)
@@ -77,7 +80,13 @@ def retry_job(job_id: int, db: Session = Depends(get_db)):
 
 @router.post("/queue/bulk-cancel")
 def bulk_cancel_jobs(payload: BulkJobIds, db: Session = Depends(get_db)):
-    cancelled = sum(1 for jid in payload.job_ids if download_queue.cancel(db, jid))
+    cancelled = 0
+    for jid in payload.job_ids:
+        try:
+            if download_queue.cancel(db, jid):
+                cancelled += 1
+        except ValueError:
+            continue
     return {"cancelled": cancelled}
 
 

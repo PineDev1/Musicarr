@@ -130,6 +130,13 @@ def test_player_auth_create_user_rejects_empty_password(db):
         player_auth.create_user(db, username="newplayer", password="")
 
 
+def test_player_auth_create_user_rejects_pipe_in_username(db):
+    from app.services import player_auth
+
+    with pytest.raises(ValueError):
+        player_auth.create_user(db, username="ali|ce", password="hunter22")
+
+
 # -- api/artists.py: refresh_artist must surface errors when nothing synced
 
 

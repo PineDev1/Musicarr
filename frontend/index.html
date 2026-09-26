@@ -15,7 +15,11 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
-      if ('serviceWorker' in navigator && location.pathname.startsWith('/player')) {
+      // Registered site-wide (not just under /player) so the admin app can
+      // also receive Web Push notifications — sw.js's fetch handler only
+      // treats an actual /player navigation as "the shell", so this is safe
+      // for admin pages too.
+      if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('/sw.js').catch(() => {})
         })

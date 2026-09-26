@@ -44,6 +44,20 @@ def _post_form(url: str, fields: dict[str, str]) -> None:
         resp.read()
 
 
+def _kind_allowed(kind: str, settings) -> bool:
+    if kind == "complete" and not getattr(settings, "notify_on_complete", True):
+        return False
+    if kind in {"failure", "auth"} and not getattr(settings, "notify_on_failure", True):
+        return False
+    if kind == "library" and not getattr(settings, "notify_on_library_events", False):
+        return False
+    if kind == "maintenance" and not getattr(settings, "notify_on_maintenance", True):
+        return False
+    if kind == "health" and not getattr(settings, "notify_on_health_alerts", True):
+        return False
+    return True
+
+
 def send_notification(
     db: Session,
     title: str,
@@ -55,20 +69,23 @@ def send_notification(
     token: str | None = None,
 ) -> None:
     settings = ensure_settings(db)
+    if not _kind_allowed(kind, settings):
+        return
+
+    # Web push is independent of the webhook URL below — it should still
+    # fire even when no webhook is configured, since it's a separate
+    # delivery channel (browser notifications) with its own subscriptions.
+    try:
+        from app.services.push import send_push
+
+        send_push(db, title, message)
+    except Exception:  # noqa: BLE001
+        logger.warning("Web push notify failed", exc_info=True)
+
     # Overrides let a caller (e.g. "send test notification") try unsaved form
     # values instead of only what's already persisted.
     url = (webhook_url if webhook_url is not None else getattr(settings, "notify_webhook_url", None) or "").strip()
     if not url:
-        return
-    if kind == "complete" and not getattr(settings, "notify_on_complete", True):
-        return
-    if kind in {"failure", "auth"} and not getattr(settings, "notify_on_failure", True):
-        return
-    if kind == "library" and not getattr(settings, "notify_on_library_events", False):
-        return
-    if kind == "maintenance" and not getattr(settings, "notify_on_maintenance", True):
-        return
-    if kind == "health" and not getattr(settings, "notify_on_health_alerts", True):
         return
     channel = (channel if channel is not None else getattr(settings, "notify_channel", None) or "custom").strip().lower() or "custom"
     token = (token if token is not None else getattr(settings, "notify_token", None) or "").strip()

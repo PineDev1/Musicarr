@@ -144,6 +144,12 @@ def create_user(
     name = username.strip()
     if not name:
         raise ValueError("Username required")
+    if "|" in name:
+        # The session token is "user_id|username|exp|nonce|sig" and
+        # parse_session_token rejects anything but exactly 4 pipes — a
+        # username containing '|' would mint tokens that can never parse,
+        # silently locking that account out on their very next request.
+        raise ValueError("Username cannot contain '|'")
     if not password:
         # verify_password unconditionally rejects an empty password, so a
         # user "created" with one could never actually log in.
