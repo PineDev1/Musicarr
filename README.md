@@ -332,7 +332,7 @@ v2.0 moves Musicarr from a download manager toward a **library OS**.
 | Milestone | Focus |
 |-----------|--------|
 | **2.0a** | Metadata brain (MusicBrainz / ISRC-first) + stronger rematch/import review |
-| **2.0b** | Multi-root library paths + tag/cover writeback |
+| **2.0b** | Multi-root library paths *(multi-root shipped in v1.10)* + tag/cover writeback |
 | **2.0c** | Provider fallback for grab/upgrade *(shipped early in v1.7)* |
 | **2.0d** | Release calendar / discover, denser UI |
 
