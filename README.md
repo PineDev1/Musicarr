@@ -221,12 +221,53 @@ way any other container does — add it manually from the **Docker** tab:
 5. Apply, then open `http://<unraid-ip>:8787` — the setup wizard walks you through the rest.
    Set the **library path** in the wizard to `/music` (the container path from step 3).
 
-**Download client in a different container?** (qBittorrent, SABnzbd, etc. running as their own
-Unraid Docker apps) Add an **extra Variable** — `MUSICARR_REMOTE_PATH_MAPPINGS`, same JSON format
-as the [Remote path mappings](#7-remote-path-mappings-download-client-in-another-container) section
-above — so Musicarr can translate that container's reported paths into its own `/config`/`/music`
-mounts. It's already in [`unraid-template.xml`](unraid-template.xml) as an advanced/optional field
-if you're using the template.
+### Download client in a different container (qBittorrent, SABnzbd, etc.)
+
+Most Unraid setups run the download client as its own separate Docker app (a Community
+Applications install of qBittorrent, SABnzbd, etc.), not inside Musicarr's container. That
+client reports finished-download paths using **its own** container's mounts, which usually
+don't match Musicarr's — Musicarr can't read the file and the import silently fails.
+
+**Option A — avoid the problem entirely (recommended for Unraid).** Give both containers the
+*same* container-side path for the shared download folder, backed by the same host folder. For
+example, if qBittorrent already maps a host folder to `/downloads` inside its container, add that
+**same host folder** to Musicarr as an extra Path mapping to `/downloads` too (Container Path
+`/downloads`, Host Path — whatever qBittorrent's own Path mapping uses, e.g.
+`/mnt/user/downloads`). With identical container paths on both sides, there's nothing to
+translate and you can skip Option B entirely. Then point the download client at that shared
+folder under **Musicarr → Settings → Downloads → Download clients**.
+
+**Option B — Remote path mappings**, if you can't or don't want to add a matching path mapping
+(e.g. a Community Applications template that's awkward to edit, or the client runs on a different
+machine entirely):
+
+1. Open the download client's own container/app settings and note the **exact path** it reports
+   for finished downloads (its "Downloads" or "Completed" folder setting, in *its* container's
+   terms — e.g. `/downloads`).
+2. On Musicarr's container in Unraid's **Docker** tab, click **Edit**, then **Add another Path,
+   Port, Variable, Label or Device** → choose **Variable**.
+3. Fill in:
+
+   | Field | Value |
+   |---|---|
+   | Name | `Remote Path Mappings` (any label) |
+   | Key | `MUSICARR_REMOTE_PATH_MAPPINGS` |
+   | Value | `[{"host": "qbittorrent", "remote_path": "/downloads", "local_path": "/config/downloads"}]` |
+
+   Replace `"qbittorrent"` with the exact value you put (or will put) in the **Host** field when
+   adding this download client under Musicarr's **Settings → Downloads → Download clients** —
+   not its display name (or use `""` to match any client, regardless of host). Replace the first
+   `"/downloads"` with the path from step 1, and the second (`local_path`) with wherever that same
+   host folder is mounted **inside Musicarr's own container** (add it as a Path mapping on
+   Musicarr's container first if it isn't mounted at all — Musicarr needs to be able to read the
+   files, not just know the path).
+4. **Apply**. Musicarr picks this up on container start and creates the mapping automatically —
+   no need to also add it by hand under Settings → Downloads.
+
+Either way, this is the exact same Remote Path Mappings mechanism Sonarr/Radarr/Lidarr use — see
+the [Remote path mappings](#7-remote-path-mappings-download-client-in-another-container) section
+above for the full explanation, or [`unraid-template.xml`](unraid-template.xml) for this same
+Variable predefined as an optional/advanced field if you start from the template.
 
 **Updating:** click the container's icon → **Check for Updates** (or re-pull the `latest` tag).
 Since Musicarr is a single SQLite-backed process, keep this at **one container instance** — don't
