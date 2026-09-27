@@ -87,6 +87,8 @@ struct SongsListView: View {
 struct PlaylistsListView: View {
     @State private var playlists: [Playlist] = []
     @State private var isLoading = true
+    @State private var showCreate = false
+    @State private var newName = ""
 
     var body: some View {
         List(playlists) { playlist in
@@ -104,12 +106,38 @@ struct PlaylistsListView: View {
         .scrollContentBackground(.hidden)
         .background(Theme.background.ignoresSafeArea())
         .navigationTitle("Playlists")
-        .overlay { if isLoading { ProgressView() } }
-        .task {
-            async let builtins = try? PlayerAPI.builtins()
-            async let mine = try? PlayerAPI.playlists()
-            playlists = (await builtins ?? []) + (await mine ?? [])
-            isLoading = false
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showCreate = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+            }
         }
+        .alert("New Playlist", isPresented: $showCreate) {
+            TextField("Name", text: $newName)
+            Button("Cancel", role: .cancel) { newName = "" }
+            Button("Create") {
+                Task { await create() }
+            }
+        }
+        .overlay { if isLoading { ProgressView() } }
+        .task { await load() }
+    }
+
+    private func load() async {
+        async let builtins = try? PlayerAPI.builtins()
+        async let mine = try? PlayerAPI.playlists()
+        playlists = (await builtins ?? []) + (await mine ?? [])
+        isLoading = false
+    }
+
+    private func create() async {
+        let name = newName.trimmingCharacters(in: .whitespaces)
+        newName = ""
+        guard !name.isEmpty else { return }
+        _ = try? await PlayerAPI.createPlaylist(name: name)
+        await load()
     }
 }

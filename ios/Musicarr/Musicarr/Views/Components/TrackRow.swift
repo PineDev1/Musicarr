@@ -61,6 +61,7 @@ struct TrackRow: View {
         .onTapGesture {
             playback.play(tracks: queue, startIndex: queue.firstIndex(of: track) ?? 0, sourceLabel: sourceLabel)
         }
+        .trackActions(track: track)
         .padding(.vertical, 6)
     }
 }

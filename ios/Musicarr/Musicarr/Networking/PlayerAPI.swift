@@ -65,6 +65,55 @@ enum PlayerAPI {
         }
     }
 
+    struct CreatePlaylistBody: Encodable {
+        var name: String
+        var is_smart: Bool = false
+    }
+
+    static func createPlaylist(name: String) async throws -> Playlist {
+        try await APIClient.shared.request("/playlists", method: "POST", body: CreatePlaylistBody(name: name))
+    }
+
+    static func deletePlaylist(id: Int) async throws {
+        let _: EmptyResponse = try await APIClient.shared.request("/playlists/\(id)", method: "DELETE")
+    }
+
+    struct AddTracksBody: Encodable {
+        var track_ids: [Int]
+    }
+
+    static func addToPlaylist(id: Int, trackIDs: [Int]) async throws -> Playlist {
+        try await APIClient.shared.request("/playlists/\(id)/tracks", method: "POST", body: AddTracksBody(track_ids: trackIDs))
+    }
+
+    static func removeFromPlaylist(id: Int, trackID: Int) async throws {
+        let _: EmptyResponse = try await APIClient.shared.request("/playlists/\(id)/tracks/\(trackID)", method: "DELETE")
+    }
+
+    struct CreateShareBody: Encodable {
+        var track_id: Int
+    }
+
+    static func createShare(trackID: Int) async throws -> ShareLinkInfo {
+        try await APIClient.shared.request("/shares", method: "POST", body: CreateShareBody(track_id: trackID))
+    }
+
+    static func lastfmStatus() async throws -> LastfmStatus {
+        try await APIClient.shared.request("/lastfm/status")
+    }
+
+    static func lastfmStart() async throws -> LastfmAuthURL {
+        try await APIClient.shared.request("/lastfm/start")
+    }
+
+    static func lastfmCallback(token: String) async throws -> LastfmCallbackResult {
+        try await APIClient.shared.request("/lastfm/callback", query: ["token": token])
+    }
+
+    static func lastfmDisconnect() async throws {
+        let _: EmptyResponse = try await APIClient.shared.request("/lastfm", method: "DELETE")
+    }
+
     static func continueListening() async throws -> ContinueListening {
         try await APIClient.shared.request("/library/continue")
     }

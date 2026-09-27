@@ -4,6 +4,10 @@ import MediaPlayer
 import UIKit
 import WidgetKit
 
+enum RepeatMode {
+    case off, all, one
+}
+
 @MainActor
 final class PlaybackEngine: NSObject, ObservableObject {
     @Published private(set) var queue: [Track] = []
@@ -12,6 +16,12 @@ final class PlaybackEngine: NSObject, ObservableObject {
     @Published private(set) var currentTime: Double = 0
     @Published private(set) var duration: Double = 0
     @Published var sourceLabel: String = ""
+    @Published private(set) var shuffleEnabled = false
+    @Published var repeatMode: RepeatMode = .off
+    @Published var sleepDeadline: Date?
+
+    private var originalQueue: [Track] = []
+    private var sleepTimer: Timer?
 
     var currentTrack: Track? {
         guard let currentIndex, queue.indices.contains(currentIndex) else { return nil }
@@ -110,6 +120,8 @@ final class PlaybackEngine: NSObject, ObservableObject {
         guard tracks.indices.contains(startIndex) else { return }
         self.queue = tracks
         self.sourceLabel = sourceLabel
+        self.shuffleEnabled = false
+        self.originalQueue = []
         loadAndPlay(index: startIndex)
     }
 
@@ -124,6 +136,84 @@ final class PlaybackEngine: NSObject, ObservableObject {
 
     func addToEnd(_ track: Track) {
         queue.append(track)
+    }
+
+    func removeFromQueue(at index: Int) {
+        guard queue.indices.contains(index), index != currentIndex else { return }
+        queue.remove(at: index)
+        if let currentIndex, index < currentIndex {
+            self.currentIndex = currentIndex - 1
+        }
+    }
+
+    func moveInQueue(from source: IndexSet, to destination: Int) {
+        guard let current = currentTrack else {
+            queue.move(fromOffsets: source, toOffset: destination)
+            return
+        }
+        queue.move(fromOffsets: source, toOffset: destination)
+        currentIndex = queue.firstIndex(of: current)
+    }
+
+    func toggleShuffle() {
+        guard let current = currentTrack else {
+            shuffleEnabled.toggle()
+            return
+        }
+        if shuffleEnabled {
+            // Turning off: restore original order, keeping playback on the
+            // same track rather than jumping the user's place in the queue.
+            queue = originalQueue
+            currentIndex = queue.firstIndex(of: current)
+            shuffleEnabled = false
+        } else {
+            originalQueue = queue
+            var rest = queue
+            rest.removeAll { $0.id == current.id }
+            rest.shuffle()
+            queue = [current] + rest
+            currentIndex = 0
+            shuffleEnabled = true
+        }
+    }
+
+    func cycleRepeatMode() {
+        switch repeatMode {
+        case .off: repeatMode = .all
+        case .all: repeatMode = .one
+        case .one: repeatMode = .off
+        }
+    }
+
+    // MARK: - Sleep timer
+
+    func startSleepTimer(minutes: Double) {
+        sleepTimer?.invalidate()
+        let deadline = Date().addingTimeInterval(minutes * 60)
+        sleepDeadline = deadline
+        sleepTimer = Timer.scheduledTimer(withTimeInterval: minutes * 60, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.fireSleepTimer() }
+        }
+    }
+
+    /// "End of song" — no fixed deadline, just pause when the current track
+    /// finishes; handled directly in the end-of-track observer.
+    func sleepAtEndOfSong() {
+        sleepTimer?.invalidate()
+        sleepTimer = nil
+        sleepDeadline = .distantFuture
+    }
+
+    func cancelSleepTimer() {
+        sleepTimer?.invalidate()
+        sleepTimer = nil
+        sleepDeadline = nil
+    }
+
+    private func fireSleepTimer() {
+        if isPlaying { togglePlayPause() }
+        sleepDeadline = nil
+        sleepTimer = nil
     }
 
     private func loadAndPlay(index: Int) {
@@ -162,8 +252,31 @@ final class PlaybackEngine: NSObject, ObservableObject {
     }
 
     func next() {
-        guard let currentIndex, queue.indices.contains(currentIndex + 1) else { return }
-        loadAndPlay(index: currentIndex + 1)
+        guard let currentIndex else { return }
+        if queue.indices.contains(currentIndex + 1) {
+            loadAndPlay(index: currentIndex + 1)
+        } else if repeatMode == .all, !queue.isEmpty {
+            loadAndPlay(index: 0)
+        }
+    }
+
+    /// Distinct from `next()`: called when a track finishes on its own,
+    /// where repeat-one and the "end of song" sleep timer both apply —
+    /// neither should affect a manual tap on the skip button.
+    private func handleTrackFinished() {
+        if sleepDeadline == .distantFuture {
+            sleepDeadline = nil
+            isPlaying = false
+            player?.pause()
+            updateNowPlayingInfo()
+            publishSharedState()
+            return
+        }
+        if repeatMode == .one, let currentIndex {
+            loadAndPlay(index: currentIndex)
+            return
+        }
+        next()
     }
 
     func previous() {
@@ -214,7 +327,7 @@ final class PlaybackEngine: NSObject, ObservableObject {
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.next() }
+            Task { @MainActor in self?.handleTrackFinished() }
         }
     }
 

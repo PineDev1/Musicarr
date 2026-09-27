@@ -171,6 +171,36 @@ struct Lyrics: Codable {
     var synced: String?
 }
 
+struct ShareLinkInfo: Codable {
+    var token: String
+    var url: String
+    var trackTitle: String
+    var artistName: String
+    var coverUrl: String?
+
+    enum CodingKeys: String, CodingKey {
+        case token, url
+        case trackTitle = "track_title"
+        case artistName = "artist_name"
+        case coverUrl = "cover_url"
+    }
+}
+
+struct LastfmStatus: Codable {
+    var connected: Bool
+    var username: String?
+}
+
+struct LastfmAuthURL: Codable {
+    var authURL: String
+    enum CodingKeys: String, CodingKey { case authURL = "auth_url" }
+}
+
+struct LastfmCallbackResult: Codable {
+    var ok: Bool
+    var username: String?
+}
+
 struct APIErrorBody: Codable {
     var detail: String?
 }

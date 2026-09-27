@@ -5,7 +5,13 @@ backend the web player (`frontend/src/player/`) already talks to.
 
 - **Phase 1**: sign in, browse your library, search, play — background
   audio, lock screen / Control Center controls, AirPlay, favorites, synced
-  lyrics, matching the web player's dark + green theme.
+  lyrics (swipe up on the artwork, or tap the LYRICS pill), shuffle/repeat,
+  a queue you can view/reorder/remove from, creating and adding to
+  playlists from the app (shared with the web player — same account, same
+  server-side playlists), sharing a song, a sleep timer, Last.fm
+  connect/disconnect (scrobbling itself already happens server-side, the
+  same way it does for the web player), and your account avatar — all
+  matching the web player's dark + green theme.
 - **Phase 2**: Dynamic Island / lock-screen Live Activity for Now Playing,
   with play/pause/skip controls.
 - **Phase 3**: a Home Screen widget (small + medium) showing Now Playing,
