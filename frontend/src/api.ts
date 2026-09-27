@@ -533,6 +533,10 @@ export const api = {
       download_missing?: boolean
       monitor_mode?: 'all' | 'new' | 'none'
       download_mode?: 'auto' | 'manual' | null
+      // Required when provider === 'local' (a MusicBrainz-only add with no
+      // streaming provider) — there's no provider.get_artist() call to
+      // fetch the name from otherwise.
+      name?: string
     },
   ) =>
     request<Artist>('/artists', {
@@ -540,6 +544,7 @@ export const api = {
       body: JSON.stringify({
         provider_id,
         provider,
+        name: opts?.name,
         monitored: true,
         download_missing: opts?.download_missing ?? true,
         include_singles: opts?.include_singles ?? null,

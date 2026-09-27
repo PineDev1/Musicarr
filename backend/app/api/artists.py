@@ -210,13 +210,30 @@ def _artist_group_out(
 
 @router.get("/search", response_model=list[ArtistSearchResult])
 def search_artists(q: str = Query(..., min_length=1), limit: int = 25, db: Session = Depends(get_db)):
+    from app.services import musicbrainz
+
     try:
         provider = get_active_provider(db)
         results = provider.search_artists(q, limit=limit)
-    except ProviderError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    from app.services import musicbrainz
+    except ProviderError:
+        # No working streaming-provider session (indexer-only setup, or a
+        # provider that just isn't logged in right now) — fall back to
+        # MusicBrainz directly instead of hard-failing. No images (MB
+        # doesn't have artist artwork), but the artist can still be added
+        # and its albums grabbed via "Search releases" against an indexer.
+        hits = musicbrainz.search_artists(q, limit=limit)
+        return [
+            ArtistSearchResult(
+                provider="local",
+                provider_id=hit["mbid"],
+                name=hit["name"],
+                image_url=None,
+                nb_album=hit.get("rg_count")
+                if hit.get("rg_count") is not None
+                else musicbrainz.count_release_groups(hit["mbid"]),
+            )
+            for hit in hits
+        ]
 
     # Prefer MusicBrainz catalog counts (local when Ready) over provider album totals.
     mb_counts: dict[str, int | None] = {}
@@ -255,15 +272,34 @@ def bulk_search_artists(payload: BulkArtistSearchRequest, db: Session = Depends(
             break
     if not names:
         raise HTTPException(status_code=400, detail="Paste at least one artist name")
-    try:
-        provider = get_active_provider(db)
-    except ProviderError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     from app.services import musicbrainz
 
+    try:
+        provider = get_active_provider(db)
+    except ProviderError:
+        # No working streaming-provider session — same MusicBrainz fallback
+        # as the single-artist search endpoint (see search_artists above).
+        provider = None
+
     out: list[BulkArtistSearchResult] = []
     for name in names:
+        if provider is None:
+            hits = musicbrainz.search_artists(name, limit=5)
+            results = [
+                ArtistSearchResult(
+                    provider="local",
+                    provider_id=hit["mbid"],
+                    name=hit["name"],
+                    image_url=None,
+                    nb_album=hit.get("rg_count")
+                    if hit.get("rg_count") is not None
+                    else musicbrainz.count_release_groups(hit["mbid"]),
+                )
+                for hit in hits
+            ]
+            out.append(BulkArtistSearchResult(query=name, results=results))
+            continue
         try:
             hits = provider.search_artists(name, limit=5)
         except ProviderError as exc:
@@ -396,16 +432,36 @@ def create_artist(payload: ArtistCreate, db: Session = Depends(get_db)):
     settings = ensure_settings(db)
     active = (settings.active_provider or "deezer").lower()
     try:
-        artist = add_artist(
-            db,
-            provider_id,
-            monitored=payload.monitored,
-            download_missing=payload.download_missing,
-            provider_name=payload.provider or settings.active_provider,
-            include_singles=payload.include_singles,
-            download_mode=payload.download_mode,
-            monitor_mode=payload.monitor_mode,
-        )
+        if (payload.provider or "").lower() == "local":
+            name = (payload.name or "").strip()
+            if not name:
+                raise HTTPException(
+                    status_code=400,
+                    detail="name is required when adding an artist without a streaming provider",
+                )
+            from app.services.artists import add_local_artist_from_mbid
+
+            artist = add_local_artist_from_mbid(
+                db,
+                provider_id,
+                name,
+                monitored=payload.monitored,
+                download_mode=payload.download_mode,
+                monitor_mode=payload.monitor_mode,
+            )
+        else:
+            artist = add_artist(
+                db,
+                provider_id,
+                monitored=payload.monitored,
+                download_missing=payload.download_missing,
+                provider_name=payload.provider or settings.active_provider,
+                include_singles=payload.include_singles,
+                download_mode=payload.download_mode,
+                monitor_mode=payload.monitor_mode,
+            )
+    except HTTPException:
+        raise
     except ProviderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

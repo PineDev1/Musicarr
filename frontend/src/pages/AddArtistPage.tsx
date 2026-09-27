@@ -5,6 +5,13 @@ import { motion } from 'framer-motion'
 import { api, type ArtistSearchResult, type BulkArtistSearchResult } from '../api'
 import { useToast } from '../Toast'
 
+// "local" means the search fell back to MusicBrainz because no streaming
+// provider is logged in (e.g. an indexer-only setup) — show that plainly
+// instead of the raw provider value the API uses internally.
+function providerLabel(provider: string) {
+  return provider === 'local' ? 'MusicBrainz' : provider
+}
+
 export function AddArtistPage() {
   const [searchParams] = useSearchParams()
   const qFromUrl = searchParams.get('q') || ''
@@ -29,12 +36,13 @@ export function AddArtistPage() {
   })
 
   const add = useMutation({
-    mutationFn: (payload: { provider_id: string; provider: string }) =>
+    mutationFn: (payload: { provider_id: string; provider: string; name?: string }) =>
       api.addArtist(payload.provider_id, payload.provider, {
         include_singles: includeSingles,
         download_missing: true,
         monitor_mode: monitorMode,
         download_mode: downloadMode || null,
+        name: payload.name,
       }),
     onSuccess: (artist) => {
       qc.invalidateQueries({ queryKey: ['artists'] })
@@ -76,6 +84,7 @@ export function AddArtistPage() {
             download_missing: true,
             monitor_mode: monitorMode,
             download_mode: downloadMode || null,
+            name: hit.name,
           })
           added += 1
         } catch {
@@ -165,11 +174,19 @@ export function AddArtistPage() {
               <div className="grow">
                 <div>
                   <strong>{confirming.name}</strong>{' '}
-                  <span className="badge queued">{confirming.provider}</span>
+                  <span className="badge queued">{providerLabel(confirming.provider)}</span>
                 </div>
                 <div className="muted" style={{ marginBottom: 8 }}>
-                  {confirming.nb_album != null ? `${confirming.nb_album} releases on ${confirming.provider}` : ''}
+                  {confirming.nb_album != null
+                    ? `${confirming.nb_album} releases on ${providerLabel(confirming.provider)}`
+                    : ''}
                 </div>
+                {confirming.provider === 'local' && (
+                  <div className="muted tiny" style={{ marginBottom: 8 }}>
+                    No streaming provider is connected, so this comes straight from MusicBrainz —
+                    grab releases later via "Search releases" on each album.
+                  </div>
+                )}
                 <div className="toolbar" style={{ flexWrap: 'wrap', marginBottom: 0 }}>
                   <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     Monitor
@@ -208,7 +225,11 @@ export function AddArtistPage() {
                   className="btn"
                   disabled={add.isPending}
                   onClick={() =>
-                    add.mutate({ provider_id: confirming.provider_id, provider: confirming.provider })
+                    add.mutate({
+                      provider_id: confirming.provider_id,
+                      provider: confirming.provider,
+                      name: confirming.name,
+                    })
                   }
                 >
                   {add.isPending ? 'Adding…' : 'Confirm & Add'}
@@ -238,7 +259,7 @@ export function AddArtistPage() {
                   <div className="grow">
                     <strong>{a.name}</strong>
                     <div className="muted">
-                      <span className="badge queued">{a.provider}</span>{' '}
+                      <span className="badge queued">{providerLabel(a.provider)}</span>{' '}
                       {a.nb_album != null ? `${a.nb_album} releases` : ''}
                     </div>
                   </div>
@@ -338,7 +359,7 @@ export function AddArtistPage() {
                         <div className="grow">
                           <strong>{a.name}</strong>
                           <div className="muted">
-                            <span className="badge queued">{a.provider}</span>{' '}
+                            <span className="badge queued">{providerLabel(a.provider)}</span>{' '}
                             {a.nb_album != null ? `${a.nb_album} releases` : ''}
                           </div>
                         </div>
