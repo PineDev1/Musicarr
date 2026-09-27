@@ -17,7 +17,7 @@ from app.models import Album, Artist, DownloadClient, DownloadJob, Track
 from app.services.download_clients import DownloadClientError, get_client
 from app.services.download_clients.base import ClientStatus
 from app.services.history import add_history
-from app.services.library import AUDIO_EXTS, _norm, _read_tags
+from app.services.library import AUDIO_EXTS, _norm, _read_tags, _slug_id
 from app.services.naming import (
     artist_folder_name,
     build_album_folder,
@@ -381,28 +381,26 @@ class CompletedDownloadHandler:
         for idx, src in enumerate(files):
             tags = _read_tags(src)
             track = self._match_track(tracks, tags, src, idx, len(files), used)
-            if track is not None:
-                used.add(track.id)
-                filename = build_track_filename(
-                    settings.track_template,
-                    title=track.title,
-                    track=track.track_no or (idx + 1),
-                    disc=track.disc_no or 1,
-                    artist=artist_name,
-                    album=album.title,
-                    ext=src.suffix.lower(),
-                )
-            else:
-                title = (tags.get("title") or "").strip() or src.stem
-                filename = build_track_filename(
-                    settings.track_template,
-                    title=title,
-                    track=self._track_number(tags, src) or (idx + 1),
-                    disc=self._disc_number(tags),
-                    artist=artist_name,
-                    album=album.title,
-                    ext=src.suffix.lower(),
-                )
+            if track is None:
+                # No known tracklist to match against — an indexer-resolved
+                # album (MusicBrainz release-group hit or bare fallback) has
+                # no Track rows at all until now, so every file would
+                # otherwise land on disk with nothing in the DB pointing at
+                # it (invisible everywhere that queries Track.path, like the
+                # Player library). Create the row from the file's own tags
+                # instead of only recording a filesystem copy.
+                track = self._create_track_from_tags(db, album, tags, src, idx)
+                tracks.append(track)
+            used.add(track.id)
+            filename = build_track_filename(
+                settings.track_template,
+                title=track.title,
+                track=track.track_no or (idx + 1),
+                disc=track.disc_no or 1,
+                artist=artist_name,
+                album=album.title,
+                ext=src.suffix.lower(),
+            )
             dest = dest_folder / filename
             try:
                 _transfer(src, dest, transfer_mechanism)
@@ -410,12 +408,11 @@ class CompletedDownloadHandler:
                 self._fail_job(db, job, f"Could not import '{src.name}': {exc}")
                 return "failed"
             placed.append(dest)
-            if track is not None:
-                track.path = str(dest)
-                isrc = (tags.get("isrc") or "").strip()
-                if isrc and not track.isrc:
-                    track.isrc = isrc
-                matched += 1
+            track.path = str(dest)
+            isrc = (tags.get("isrc") or "").strip()
+            if isrc and not track.isrc:
+                track.isrc = isrc
+            matched += 1
 
         self._copy_cover(local, dest_folder)
 
@@ -501,6 +498,33 @@ class CompletedDownloadHandler:
         except (TypeError, ValueError):
             pass
         return 1
+
+    def _create_track_from_tags(
+        self, db: Session, album: Album, tags: dict, src: Path, index: int
+    ) -> Track:
+        """Build a Track row straight from a file's own tags when no known
+        tracklist entry matches it (or none exists yet) — otherwise the file
+        would be copied to disk with nothing in the DB ever pointing at it."""
+        from app.services.artists import _legacy_id, _track_provider_id_for_album
+
+        title = (tags.get("title") or "").strip() or src.stem
+        track_no = self._track_number(tags, src) or (index + 1)
+        disc_no = self._disc_number(tags)
+        raw_pid = _slug_id(f"{title}-{track_no}-{disc_no}") or f"track-{index}"
+        pid = _track_provider_id_for_album(db, album, raw_provider_id=raw_pid)
+        track = Track(
+            provider=album.provider,
+            provider_id=pid,
+            deezer_id=_legacy_id(album.provider, pid),
+            album_id=album.id,
+            title=title,
+            track_no=track_no,
+            disc_no=disc_no,
+            isrc=(tags.get("isrc") or "").strip() or None,
+        )
+        db.add(track)
+        db.flush()
+        return track
 
     def _match_track(
         self,

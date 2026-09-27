@@ -64,6 +64,8 @@ def resolve_or_create_album_for_release(db: Session, artist: Artist, release_tit
     if not title:
         raise ValueError("release_title is required")
 
+    clean_title = _clean_release_title(title, artist.name)
+
     # 1. Existing album match, including any explicitly-linked artists'
     # albums (same-person rows across providers) — not just this row's own.
     albums = list(artist.albums or [])
@@ -78,11 +80,9 @@ def resolve_or_create_album_for_release(db: Session, artist: Artist, release_tit
         )
         for a in linked:
             albums.extend(a.albums or [])
-    candidate = _best_album_match(albums, title)
+    candidate = _best_album_match(albums, clean_title) or _best_album_match(albums, title)
     if candidate:
         return candidate
-
-    clean_title = _clean_release_title(title, artist.name)
 
     # 2. MusicBrainz resolution.
     mbid = ensure_musicbrainz_identity(db, artist)
@@ -144,7 +144,17 @@ def _best_album_match(albums: list[Album], release_title: str) -> Album | None:
     shows up in the release name" check score_release already does for
     per-album search, applied here per-candidate-album.
     """
+    from app.services.artists import _norm_album_title
     from app.services.release_scoring import _match_ratio, _norm
+
+    # Exact-title check first, using the same normalizer artist-page display
+    # merging (merge_album_rows) uses — guarantees this never creates a
+    # second Album row for a title the UI would already treat as identical.
+    exact_key = _norm_album_title(release_title)
+    if exact_key:
+        exact = next((a for a in albums if _norm_album_title(a.title) == exact_key), None)
+        if exact:
+            return exact
 
     name = _norm(release_title)
     if not name:
