@@ -277,6 +277,55 @@ def test_import_job_resolves_album_when_job_has_no_album_id(db, tmp_path):
     assert resolved_album.artist_id == artist.id
 
 
+def test_import_job_creates_track_rows_for_release_with_no_known_tracklist(db, tmp_path):
+    """Regression: an album resolved via the indexer engine (MusicBrainz hit
+    or bare fallback) starts with zero Track rows — there's no streaming
+    provider id for sync_album_tracks to look up. _match_track then had
+    nothing to match against and returned None for every file, so files were
+    copied to disk but never got a Track row with `.path` set — invisible to
+    anything that queries Track.path, like the Player library view, even
+    though the job and album both reported success."""
+    artist, _album = _album_with_tracks(db, track_count=1)
+    src_dir = tmp_path / "download"
+    src_dir.mkdir()
+    make_mp3(src_dir / "a.mp3", title="A Loose Single", artist="Luke Combs", track="1")
+
+    job = DownloadJob(
+        target_type="album",
+        target_id=0,
+        album_id=None,
+        artist_name="Luke Combs",
+        album_title="",
+        state="downloading",
+        source="indexer",
+        indexer_id=1,
+        client_id=1,
+        release_title="Luke Combs - A Loose Single [FLAC]",
+        client_item_id="item-1",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    client_row = _client_row(db)
+
+    handler = CompletedDownloadHandler()
+    with patch("app.services.completed_download_handler.library_root", return_value=tmp_path / "library"), \
+         patch("app.services.completed_download_handler.map_remote_to_local", return_value=src_dir), \
+         patch("app.services.artists.ensure_musicbrainz_identity", return_value=None):
+        result = handler._import_job(
+            db, job, client_row, ClientStatus(state="completed", output_path=str(src_dir))
+        )
+
+    assert result == "imported"
+    db.refresh(job)
+    resolved_album = db.get(Album, job.album_id)
+    assert resolved_album.status == "downloaded"
+    tracks = list(resolved_album.tracks)
+    assert len(tracks) == 1
+    assert tracks[0].title == "A Loose Single"
+    assert tracks[0].path and Path(tracks[0].path).exists()
+
+
 def test_import_job_still_fails_with_no_artist_name_and_no_album(db, tmp_path):
     job = DownloadJob(
         target_type="album",

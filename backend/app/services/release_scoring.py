@@ -42,7 +42,12 @@ ALBUM_MIN_RATIO = 0.4
 
 def _norm(text: str | None) -> str:
     value = (text or "").lower()
-    value = re.sub(r"[\._\-\[\]\(\)\{\}/\\,:;!?'\"+]+", " ", value)
+    # Apostrophes/quotes are deleted outright, not turned into a separator —
+    # release names from indexers routinely drop them ("Garth's" -> "Garths"),
+    # and splitting into "garth s" would make that miss a token-ratio match
+    # that should trivially succeed.
+    value = re.sub(r"['\"]", "", value)
+    value = re.sub(r"[\._\-\[\]\(\)\{\}/\\,:;!?+]+", " ", value)
     return re.sub(r"\s+", " ", value).strip()
 
 

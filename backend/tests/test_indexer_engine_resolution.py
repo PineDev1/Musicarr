@@ -80,6 +80,26 @@ def test_resolves_to_existing_album_despite_indexer_quality_tags(db):
     assert album.id == existing.id
 
 
+def test_resolves_to_existing_album_with_apostrophe_stripped_in_release_title(db):
+    """Regression: indexer/torrent release names routinely drop apostrophes
+    ("Don't" -> "Dont") — the old normalizer turned a stripped apostrophe
+    into a token-splitting space ("don t"), so "don" (3 chars, kept) never
+    matched the release's "dont" token, scoring well under the match floor
+    and creating a duplicate album instead of reusing the existing one."""
+    _settings(db)
+    artist = _artist(db, name="Test Artist", provider="qobuz", provider_id="a1")
+    existing = Album(
+        provider="qobuz", provider_id="al1", deezer_id=_legacy_id("qobuz", "al1"),
+        artist_id=artist.id, title="Don't Stop", status="wanted",
+    )
+    db.add(existing)
+    db.commit()
+    db.refresh(artist)
+
+    album = resolve_or_create_album_for_release(db, artist, "Test Artist - Dont Stop [FLAC][WEB]")
+    assert album.id == existing.id
+
+
 def test_resolves_via_musicbrainz_when_no_existing_album_matches(db):
     """Regression: resolving via MusicBrainz (not this artist's own streaming
     provider) must land as status="wanted", not "missing" — "missing" means
