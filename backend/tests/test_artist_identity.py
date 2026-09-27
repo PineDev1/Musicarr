@@ -7,6 +7,7 @@ from app.services.artists import (
     delete_artist,
     find_linked_artists,
     list_artists_grouped,
+    name_collision_ids,
 )
 from app.services.download_queue import pick_unique_artist_search_hit
 from app.services.library import _find_artist_by_name
@@ -62,6 +63,32 @@ def test_folder_disambiguates_on_collision(db, tmp_path):
         year="2020",
     )
     assert "Nova [deezer-10]" in str(folder)
+
+
+def test_folder_does_not_disambiguate_linked_same_artist_rows(db):
+    """Regression: two rows deliberately linked as the same person (same
+    link_group_id, e.g. via merge_artists/link_artists_by_mbid) used to still
+    "collide" on name, so every download for that artist kept getting an
+    unnecessary "Name [provider-id]" folder even after linking."""
+    a = _artist(db, name="Adele", provider="deezer", provider_id="1", link_group_id="g1")
+    _artist(db, name="Adele", provider="tidal", provider_id="9", link_group_id="g1")
+    assert artist_folder_name(a, db=db) == "Adele"
+    assert name_collision_ids(db) == set()
+
+
+def test_name_collision_ids_still_flags_unlinked_same_name_rows(db):
+    a = _artist(db, name="Nova", provider="deezer", provider_id="10")
+    b = _artist(db, name="Nova", provider="tidal", provider_id="20")
+    assert name_collision_ids(db) == {a.id, b.id}
+
+
+def test_name_collision_ids_flags_a_third_unlinked_row_against_a_linked_pair(db):
+    """A linked pair still legitimately collides with an unrelated third
+    artist who merely happens to share the name."""
+    a = _artist(db, name="Adele", provider="deezer", provider_id="1", link_group_id="g1")
+    b = _artist(db, name="Adele", provider="tidal", provider_id="9", link_group_id="g1")
+    c = _artist(db, name="Adele", provider="local", provider_id="other")
+    assert name_collision_ids(db) == {a.id, b.id, c.id}
 
 
 def test_find_artist_by_name_ambiguous(db):

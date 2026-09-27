@@ -35,12 +35,21 @@ def artist_folder_name(
     if needs_disambiguation is None and db is not None:
         key = _norm_artist_name(name)
         artist_id = getattr(artist, "id", None)
+        link_group_id = getattr(artist, "link_group_id", None)
         from sqlalchemy import select
         from app.models import Artist
 
         others = db.scalars(select(Artist)).all()
+        # Rows sharing link_group_id are the same person, deliberately linked
+        # across providers (merge_artists / link_artists_by_mbid) — they must
+        # not "collide" with each other just because they share a name, or
+        # every download for that artist gets an unnecessary disambiguated
+        # "Name [provider-id]" folder even after the user linked the rows.
         needs_disambiguation = any(
-            _norm_artist_name(a.name) == key and a.id != artist_id for a in others
+            _norm_artist_name(a.name) == key
+            and a.id != artist_id
+            and not (link_group_id and getattr(a, "link_group_id", None) == link_group_id)
+            for a in others
         )
     if not needs_disambiguation:
         return name

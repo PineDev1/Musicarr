@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from app.models import Album, AppSettings, Track
@@ -64,6 +65,31 @@ def test_find_orphan_files_finds_untracked_audio(db, tmp_path):
 
     assert len(orphans) == 1
     assert orphans[0]["path"] == str(untracked.resolve())
+
+
+def test_find_orphan_files_uses_file_identity_not_just_resolved_path(db, tmp_path):
+    """Regression: comparing resolved path *strings* used to falsely flag an
+    already-tracked physical file as an orphan whenever the DB path and the
+    on-disk-walked path reach the same file through different names/links —
+    e.g. two configured library roots that both reach the same underlying
+    file. A hardlink reproduces this deterministically: two directory
+    entries, one physical file. Track.path recording one name must count
+    the other as already-tracked too, since it's the identical file."""
+    _settings(db, tmp_path)
+    artist_dir = tmp_path / "Artist"
+    artist_dir.mkdir()
+    real = artist_dir / "song.mp3"
+    real.write_bytes(b"data")
+    hardlink = artist_dir / "song-alt-name.mp3"
+    os.link(real, hardlink)
+
+    artist = _artist(db, name="Artist", provider="qobuz", provider_id="a1")
+    album = _album(db, artist)
+    track = Track(provider="qobuz", provider_id="t1", album_id=album.id, title="Song", path=str(hardlink))
+    db.add(track)
+    db.commit()
+
+    assert dedupe.find_orphan_files(db) == []
 
 
 def test_find_duplicate_groups_by_isrc(db, tmp_path):

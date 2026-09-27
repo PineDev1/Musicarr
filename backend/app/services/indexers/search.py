@@ -51,13 +51,21 @@ def search_album(
     album_title: str,
     *,
     year: str | None = None,
-) -> list[ReleaseCandidate]:
-    """Query every enabled indexer for an album, scored best-first."""
+) -> tuple[list[ReleaseCandidate], list[dict]]:
+    """Query every enabled indexer for an album, scored best-first.
+
+    Returns (results, errors) — a per-indexer failure (bad API key, network
+    error, malformed response) no longer disappears into the server log
+    only. A caller that discards `errors` gets the old behavior; callers
+    that surface them let the user tell "genuinely no results" apart from
+    "your indexer is misconfigured", which otherwise look identical.
+    """
     query = " ".join(p for p in [(artist_name or "").strip(), (album_title or "").strip()] if p)
     if not query:
-        return []
+        return [], []
 
     results: list[ReleaseCandidate] = []
+    errors: list[dict] = []
     for indexer in enabled_indexers(db):
         protocol = (indexer.protocol or "usenet").lower()
         try:
@@ -72,9 +80,19 @@ def search_album(
             )
         except IndexerError as exc:
             logger.warning("Indexer '%s' search failed: %s", indexer.name, exc)
+            errors.append(
+                {"indexer_id": indexer.id, "indexer_name": indexer.name, "message": str(exc)}
+            )
             continue
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             logger.exception("Indexer '%s' search crashed", indexer.name)
+            errors.append(
+                {
+                    "indexer_id": indexer.id,
+                    "indexer_name": indexer.name,
+                    "message": f"Unexpected error: {exc}",
+                }
+            )
             continue
 
         for candidate in found:
@@ -93,7 +111,7 @@ def search_album(
             results.append(candidate)
 
     results.sort(key=lambda c: (c.score, c.seeders, c.size), reverse=True)
-    return results
+    return results, errors
 
 
 def pick_best(

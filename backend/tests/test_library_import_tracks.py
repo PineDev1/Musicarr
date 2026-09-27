@@ -53,6 +53,61 @@ def test_upsert_track_sees_unflushed_siblings(db):
     assert rows[0].path.endswith("(copy).flac")
 
 
+def test_upsert_track_matches_existing_row_despite_path_case_change(db):
+    """Regression: on a case-insensitive filesystem (default macOS/Windows),
+    the same physical file re-encountered with different path casing — after
+    a folder-template change, a manual rename, or a rematch — used to miss
+    TrackIndex's exact-string `by_path` lookup and create a duplicate Track
+    row for the same file instead of updating the existing one."""
+    artist = _artist(db, name="Luke Combs", provider="qobuz", provider_id="luke")
+    album = Album(
+        provider="qobuz",
+        provider_id="al1",
+        deezer_id=_legacy_id("qobuz", "al1"),
+        artist_id=artist.id,
+        title="Fathers & Sons",
+        track_count=1,
+        monitored=True,
+        status="downloaded",
+    )
+    db.add(album)
+    db.commit()
+    db.refresh(album)
+
+    index = TrackIndex(db)
+    first = _upsert_track(
+        db,
+        index,
+        album,
+        title="Song One",
+        track_no=1,
+        disc_no=1,
+        isrc=None,
+        path="/Music/Luke Combs/Fathers & Sons/01 - Song One.flac",
+    )
+    db.commit()
+
+    # Deliberately give the second call metadata that WON'T match via any of
+    # the fallback heuristics (no isrc, falsy track_no so that branch is
+    # skipped, and a different title) — only the by_path lookup can identify
+    # this as the same physical file. Without the casefold fix, this used to
+    # fall through every fallback and create a brand new Track for the file.
+    same_but_recased = _upsert_track(
+        db,
+        index,
+        album,
+        title="Completely Different Title",
+        track_no=0,
+        disc_no=1,
+        isrc=None,
+        path="/MUSIC/luke combs/FATHERS & SONS/01 - Song One.flac",
+    )
+    assert same_but_recased is first
+    db.commit()
+    rows = db.scalars(select(Track).where(Track.album_id == album.id)).all()
+    assert len(rows) == 1
+
+
 def test_upsert_track_unique_pid_across_albums(db):
     artist = _artist(db, name="Artist", provider="qobuz", provider_id="art1")
     other = Album(

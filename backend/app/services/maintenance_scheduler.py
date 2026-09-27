@@ -29,6 +29,9 @@ def run_backup_job() -> dict:
     db = SessionLocal()
     try:
         settings = ensure_settings(db)
+        # Re-read each run — Settings toggles must take effect without restart.
+        if not bool(getattr(settings, "backup_schedule_enabled", True)):
+            return {"ok": True, "skipped": True}
         data, filename = export_backup(db)
         out_dir = backups_dir()
         out_path = out_dir / filename
@@ -59,6 +62,9 @@ def run_dedupe_scan_job() -> dict:
     user has cleanup to do via /maintenance."""
     db = SessionLocal()
     try:
+        settings = ensure_settings(db)
+        if not bool(getattr(settings, "dedupe_scan_schedule_enabled", True)):
+            return {"ok": True, "skipped": True}
         result = dedupe.scan(db)
         orphan_db = len(result["orphan_db_tracks"])
         orphan_files = len(result["orphan_files"])
@@ -110,21 +116,33 @@ def run_health_check_job() -> dict:
                 )
             _last_disk_ok = disk_ok
 
-        for provider_name in ("deezer", "tidal", "qobuz"):
-            try:
-                provider = get_provider(db, provider_name)
-                ok, err = provider.validate_session()
-            except Exception:  # noqa: BLE001
-                ok, err = False, "provider unavailable"
-            was_ok = _last_provider_ok.get(provider_name, True)
-            if not ok and was_ok:
-                send_notification(
-                    db,
-                    f"{provider_name.title()} authentication needs attention",
-                    err or "Session is no longer valid — reconnect in Settings.",
-                    kind="health",
-                )
-            _last_provider_ok[provider_name] = ok
+        # Only watch the active streaming provider when streaming is enabled.
+        # Unconfigured providers (no ARL/token) used to false-alarm on every boot
+        # because last-known defaulted to True.
+        if bool(getattr(settings, "streaming_enabled", True)):
+            active = (settings.active_provider or "deezer").lower()
+            configured = False
+            if active == "deezer":
+                configured = bool((settings.arl or "").strip())
+            elif active == "tidal":
+                configured = bool((settings.tidal_access_token or "").strip())
+            elif active == "qobuz":
+                configured = bool((settings.qobuz_user_auth_token or "").strip())
+            if configured:
+                try:
+                    provider = get_provider(db, active)
+                    ok, err = provider.validate_session()
+                except Exception:  # noqa: BLE001
+                    ok, err = False, "provider unavailable"
+                was_ok = _last_provider_ok.get(active)
+                if was_ok is True and not ok:
+                    send_notification(
+                        db,
+                        f"{active.title()} authentication needs attention",
+                        err or "Session is no longer valid — reconnect in Settings.",
+                        kind="health",
+                    )
+                _last_provider_ok[active] = ok
 
         return {"ok": True, "disk_free_bytes": free_bytes}
     except Exception as exc:  # noqa: BLE001
@@ -142,35 +160,27 @@ class MaintenanceScheduler:
     def start(self) -> None:
         if self._started:
             return
-        db = SessionLocal()
-        try:
-            settings = ensure_settings(db)
-            backup_on = bool(getattr(settings, "backup_schedule_enabled", True))
-            dedupe_on = bool(getattr(settings, "dedupe_scan_schedule_enabled", True))
-        finally:
-            db.close()
-
-        if backup_on:
-            self.scheduler.add_job(
-                run_backup_job,
-                "cron",
-                hour=3,
-                minute=0,
-                id="backup_nightly",
-                replace_existing=True,
-                max_instances=1,
-            )
-        if dedupe_on:
-            self.scheduler.add_job(
-                run_dedupe_scan_job,
-                "cron",
-                day_of_week="sun",
-                hour=4,
-                minute=0,
-                id="dedupe_scan_weekly",
-                replace_existing=True,
-                max_instances=1,
-            )
+        # Always register jobs; each run re-reads enable flags from settings so
+        # Settings toggles take effect without a process restart.
+        self.scheduler.add_job(
+            run_backup_job,
+            "cron",
+            hour=3,
+            minute=0,
+            id="backup_nightly",
+            replace_existing=True,
+            max_instances=1,
+        )
+        self.scheduler.add_job(
+            run_dedupe_scan_job,
+            "cron",
+            day_of_week="sun",
+            hour=4,
+            minute=0,
+            id="dedupe_scan_weekly",
+            replace_existing=True,
+            max_instances=1,
+        )
         self.scheduler.add_job(
             run_health_check_job,
             "interval",

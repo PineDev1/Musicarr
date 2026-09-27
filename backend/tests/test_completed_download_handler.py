@@ -175,6 +175,61 @@ def test_import_job_rejects_wrong_artist(db, tmp_path):
     assert album.status != "downloaded"
 
 
+def test_import_job_move_mechanism_leaves_source_intact_on_mid_loop_failure(db, tmp_path):
+    """Regression: with import_mechanism="move", a failure partway through the
+    per-track loop (disk full, permission error) used to leave whichever
+    tracks had already been transferred deleted from the source folder while
+    later ones never arrived — the job is failed, but retrying (a fresh
+    "Search releases" grab, or crash-recovery re-scanning the same output
+    path) would then see fewer source files than actually existed, tripping
+    the "no audio files"/incomplete-ratio gates on a release that was really
+    fine. Source files must stay untouched until every track has copied."""
+    from app.services.settings_service import ensure_settings
+
+    artist, album = _album_with_tracks(db, track_count=3)
+    settings = ensure_settings(db)
+    settings.import_mechanism = "move"
+    db.commit()
+
+    src_dir = tmp_path / "download"
+    src_dir.mkdir()
+    make_mp3(src_dir / "a.mp3", title="Track One", artist="Luke Combs", track="1", isrc="ISRC1")
+    make_mp3(src_dir / "b.mp3", title="Track Two", artist="Luke Combs", track="2", isrc="ISRC2")
+    make_mp3(src_dir / "c.mp3", title="Track Three", artist="Luke Combs", track="3", isrc="ISRC3")
+    original_files = sorted(src_dir.iterdir())
+    assert len(original_files) == 3
+
+    job = _job(db, album)
+    client_row = _client_row(db)
+
+    from app.services import completed_download_handler as handler_module
+
+    real_transfer = handler_module._transfer
+    calls = {"n": 0}
+
+    def flaky_transfer(src, dest, mechanism):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("simulated disk-full failure")
+        real_transfer(src, dest, mechanism)
+
+    handler = CompletedDownloadHandler()
+    with patch("app.services.completed_download_handler.library_root", return_value=tmp_path / "library"), \
+         patch("app.services.completed_download_handler.map_remote_to_local", return_value=src_dir), \
+         patch("app.services.completed_download_handler._transfer", side_effect=flaky_transfer):
+        result = handler._import_job(
+            db, job, client_row, ClientStatus(state="completed", output_path=str(src_dir))
+        )
+
+    assert result == "failed"
+    db.refresh(job)
+    assert job.state == "failed"
+    # The critical assertion: nothing was deleted from the source directory,
+    # even though the first file's transfer succeeded before the second one
+    # failed — "move" must not delete originals until the whole album lands.
+    assert sorted(src_dir.iterdir()) == original_files
+
+
 def test_import_job_rejects_incomplete_release(db, tmp_path):
     """A release missing most of its tracks must not be silently marked downloaded."""
     artist, album = _album_with_tracks(db, track_count=10)

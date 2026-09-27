@@ -62,6 +62,18 @@ def effective_quality(db: Session, artist: Artist) -> str:
     return default if default in ("flac", "320", "128") else "flac"
 
 
+def effective_auto_grab(db: Session, artist: Artist, settings=None) -> bool:
+    """Whether a newly detected album for this artist should be auto-grabbed
+    from an indexer. An artist's own auto_grab_override wins; None inherits
+    AppSettings.auto_grab_indexers_enabled (off by default)."""
+    override = getattr(artist, "auto_grab_override", None)
+    if override in ("on", "off"):
+        return override == "on"
+    if settings is None:
+        settings = ensure_settings(db)
+    return bool(getattr(settings, "auto_grab_indexers_enabled", False))
+
+
 def link_artists_by_mbid(db: Session, mbid: str) -> list[Artist]:
     """Join all artist rows that share this MusicBrainz ID under one link_group_id."""
     key = (mbid or "").strip()
@@ -162,15 +174,28 @@ def _mb_provider_id(rg_mbid: str) -> str:
 
 
 def effective_provider_album_id(provider_id: str) -> str:
-    """Strip collab:/mb:/mirror: wrappers to the underlying streaming id when present."""
+    """Strip collab:/mirror: wrappers (and collision suffixes) to the streaming/mb id.
+
+    Forms we produce elsewhere:
+      collab:{artist_id}:{raw}
+      collab:{artist_id}:{raw}:{n}          # n = 2,3,… when collab:… is already taken
+      collab:{artist_id}:mb:{uuid}
+      collab:{artist_id}:mb:{uuid}:{n}
+      mirror:{primary_id}:{raw}
+    A naive split(":", 2)[-1] turns collab:5:raw1:2 into "raw1:2" and breaks downloads.
+    """
     pid = (provider_id or "").strip()
-    if pid.startswith("collab:") and pid.count(":") >= 2:
-        return pid.split(":", 2)[-1]
-    if pid.startswith("mirror:") and pid.count(":") >= 2:
-        return pid.split(":", 2)[-1]
-    if pid.startswith("mb:"):
-        return pid
+    if pid.startswith("collab:") or pid.startswith("mirror:"):
+        parts = pid.split(":")
+        if len(parts) < 3:
+            return pid
+        rest = parts[2:]
+        # Drop trailing numeric collision suffix when present.
+        if len(rest) >= 2 and rest[-1].isdigit() and int(rest[-1]) < 10000:
+            rest = rest[:-1]
+        return ":".join(rest)
     return pid
+
 
 
 def _extract_featured_names(*titles: str, primary_name: str | None = None) -> list[str]:
@@ -1184,6 +1209,60 @@ def sync_artist_albums(
     )
 
 
+def _track_provider_id_for_album(
+    db: Session,
+    album: Album,
+    *,
+    raw_provider_id: str,
+) -> str:
+    """Pick a (provider, provider_id) that won't collide with another album's tracks."""
+    raw = str(raw_provider_id)
+    for obj in list(db.new) + list(db.dirty) + list(db.identity_map.values()):
+        if (
+            isinstance(obj, Track)
+            and obj.provider == album.provider
+            and str(obj.provider_id) == raw
+        ):
+            if obj.album_id == album.id:
+                return raw
+            break
+    else:
+        existing = db.scalar(
+            select(Track).where(
+                Track.provider == album.provider,
+                Track.provider_id == raw,
+            )
+        )
+        if existing is None or existing.album_id == album.id:
+            return raw
+
+    # Shared streaming track id across collab album rows — namespace per album.
+    candidate = f"{album.id}:{raw}"[:64]
+    n = 2
+    while True:
+        clash = False
+        for obj in list(db.new) + list(db.dirty) + list(db.identity_map.values()):
+            if (
+                isinstance(obj, Track)
+                and obj.provider == album.provider
+                and str(obj.provider_id) == candidate
+                and obj.album_id != album.id
+            ):
+                clash = True
+                break
+        if not clash:
+            row = db.scalar(
+                select(Track).where(
+                    Track.provider == album.provider,
+                    Track.provider_id == candidate,
+                )
+            )
+            if row is None or row.album_id == album.id:
+                return candidate
+        candidate = f"{album.id}:{raw}:{n}"[:64]
+        n += 1
+
+
 def sync_album_tracks(db: Session, album: Album) -> list[Track]:
     from app.services.providers import get_provider
 
@@ -1194,10 +1273,27 @@ def sync_album_tracks(db: Session, album: Album) -> list[Track]:
     provider = get_provider(db, album.provider)
     raw_tracks = provider.list_tracks(stream_pid)
     existing = {t.provider_id: t for t in album.tracks}
+    # Also match previously namespaced ids back to the raw streaming id.
+    for t in album.tracks or []:
+        pid = str(t.provider_id or "")
+        if pid.startswith(f"{album.id}:") and pid not in existing:
+            existing[pid] = t
     result: list[Track] = []
     for raw in raw_tracks:
-        if raw.provider_id in existing:
-            track = existing[raw.provider_id]
+        raw_pid = str(raw.provider_id)
+        namespaced = f"{album.id}:{raw_pid}"[:64]
+        track = existing.get(raw_pid) or existing.get(namespaced)
+        if track is None:
+            # Older collision suffixes like "{album.id}:{raw}:2"
+            track = next(
+                (
+                    t
+                    for t in (album.tracks or [])
+                    if str(t.provider_id).startswith(f"{album.id}:{raw_pid}")
+                ),
+                None,
+            )
+        if track is not None:
             track.title = raw.title or track.title
             track.track_no = raw.track_no or track.track_no
             track.disc_no = raw.disc_no or track.disc_no
@@ -1205,10 +1301,11 @@ def sync_album_tracks(db: Session, album: Album) -> list[Track]:
             track.isrc = raw.isrc or track.isrc
             result.append(track)
             continue
+        pid = _track_provider_id_for_album(db, album, raw_provider_id=raw_pid)
         track = Track(
             provider=album.provider,
-            provider_id=raw.provider_id,
-            deezer_id=_legacy_id(album.provider, raw.provider_id),
+            provider_id=pid,
+            deezer_id=_legacy_id(album.provider, pid),
             album_id=album.id,
             title=raw.title,
             track_no=raw.track_no,
@@ -1522,18 +1619,29 @@ def list_artists_grouped(db: Session) -> list[list[Artist]]:
 
 
 def name_collision_ids(db: Session) -> set[int]:
-    """Artist ids whose normalized display name is shared by another row."""
+    """Artist ids whose normalized display name is shared by another row.
+
+    Rows sharing link_group_id are the same person, deliberately linked
+    across providers — they don't count as a collision with each other, or
+    the linked rows would keep getting an unnecessary disambiguated folder
+    name even after being merged.
+    """
     artists = db.scalars(select(Artist)).all()
-    by_name: dict[str, list[int]] = {}
+    by_name: dict[str, list[Artist]] = {}
     for artist in artists:
         key = _norm_artist_name(artist.name)
         if not key:
             continue
-        by_name.setdefault(key, []).append(artist.id)
+        by_name.setdefault(key, []).append(artist)
     collided: set[int] = set()
-    for ids in by_name.values():
-        if len(ids) > 1:
-            collided.update(ids)
+    for rows in by_name.values():
+        if len(rows) <= 1:
+            continue
+        # Distinct identities sharing this name: rows with no link_group_id
+        # each count on their own; rows sharing a link_group_id count once.
+        identities = {(row.link_group_id or row.id) for row in rows}
+        if len(identities) > 1:
+            collided.update(row.id for row in rows)
     return collided
 
 

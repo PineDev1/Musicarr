@@ -68,10 +68,12 @@ export function QueuePage() {
   const cancel = useMutation({
     mutationFn: (id: number) => api.cancelJob(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['queue'] }),
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const retry = useMutation({
     mutationFn: (id: number) => api.retryJob(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['queue'] }),
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const retryFailed = useMutation({
     mutationFn: () => api.retryFailedJobs({ skipPermanent: true }),

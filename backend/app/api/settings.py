@@ -15,7 +15,7 @@ from app.models.schemas import (
     SettingsUpdate,
 )
 from app.services import app_auth, library_roots
-from app.services.download_queue import ACTIVE_JOB_STATES
+from app.services.download_queue import ACTIVE_JOB_STATES, resolve_download_method
 from app.services.providers import get_provider
 from app.services.settings_service import (
     ensure_settings,
@@ -156,6 +156,8 @@ def health(db: Session = Depends(get_db)):
         disk_free_bytes=disk_free_bytes,
         low_disk_warning=low_disk_warning,
         streaming_enabled=streaming_enabled,
+        preferred_download_method=getattr(row, "preferred_download_method", None) or "streaming",
+        resolved_acquisition_mode=resolve_download_method(row),
     )
 
 

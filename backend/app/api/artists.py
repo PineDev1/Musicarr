@@ -185,6 +185,7 @@ def _artist_group_out(
         pending_reason=getattr(primary, "pending_reason", None) or "",
         download_mode=getattr(primary, "download_mode", None),
         quality_pref=getattr(primary, "quality_pref", None),
+        auto_grab_override=getattr(primary, "auto_grab_override", None),
         musicbrainz_id=next(
             (
                 (getattr(a, "musicbrainz_id", None) or "").strip()

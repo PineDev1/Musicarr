@@ -1,6 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap');
 
-:root {
+:root,
+:root[data-theme='dark'] {
   color-scheme: dark;
   --bg: #0f1412;
   --bg-elevated: #1a221e;
@@ -20,8 +21,43 @@
   --display: 'Instrument Serif', Georgia, serif;
 }
 
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f4f7f4;
+  --bg-elevated: #ffffff;
+  --bg-soft: #e7ece7;
+  --border: #d3dcd4;
+  --text: #16211a;
+  --muted: #5a6b60;
+  --accent: #1f9a5c;
+  --accent-dim: #167a48;
+  --warn: #a6740c;
+  --danger: #b8382e;
+  --wanted: #9c7c14;
+  --downloaded: #1f9a5c;
+  --skipped: #7c8a80;
+  --radius: 10px;
+  --font: 'DM Sans', system-ui, sans-serif;
+  --display: 'Instrument Serif', Georgia, serif;
+}
+
+/* Accent presets swap only the accent colors, on top of whichever theme is
+   active — dark/light stay independent of which accent is picked. */
+:root[data-accent='blue'] {
+  --accent: #3d8bba;
+  --accent-dim: #2a6e94;
+}
+:root[data-accent='purple'] {
+  --accent: #9a6dd7;
+  --accent-dim: #7c4fc0;
+}
+:root[data-accent='amber'] {
+  --accent: #d4a017;
+  --accent-dim: #a97e0e;
+}
+
 html {
-  color-scheme: dark;
+  color-scheme: inherit;
 }
 
 * {

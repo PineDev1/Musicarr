@@ -37,6 +37,13 @@ logger = logging.getLogger("musicarr.download")
 ACTIVE_JOB_STATES = ["queued", "running", "grabbed", "downloading", "importing"]
 DOWNLOAD_METHODS = {"streaming", "indexer", "streaming_then_indexer"}
 
+# Minimum normalized-title length before a fuzzy substring match in
+# _rematch_album_to_provider is trusted. Below this, plain "is one title
+# contained in the other" is too easy to satisfy by coincidence (a 3-letter
+# EP name, "Red" vs "Red."), and can rematch a fallback-provider grab to the
+# wrong release entirely.
+FUZZY_MATCH_MIN_LEN = 8
+
 
 def resolve_download_method(settings, method: str | None = None) -> str:
     requested = (method or getattr(settings, "preferred_download_method", None) or "").lower()
@@ -202,6 +209,9 @@ class DownloadQueue:
             return None
         if album.status == "missing":
             return None
+        # Already on disk — only re-queue when the caller explicitly upgrades.
+        if album.status == "downloaded" and not allow_upgrade:
+            return None
         settings = ensure_settings(db)
         # Indexer grabs are interactive only (Search releases → pick → grab) —
         # never auto-enqueued here, whether triggered by a manual "download
@@ -323,12 +333,21 @@ class DownloadQueue:
             raise ValueError("This download is already importing and can't be cancelled")
         if job.source == "indexer" and job.client_item_id:
             self._abort_client_item(db, job)
+        was_running = job.state == "running"
         job.state = "cancelled"
         job.finished_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(job)
-        with self._lock:
-            self._cancel_ids.add(job_id)
+        if was_running:
+            # Only a job _process_job has already claimed needs this flag —
+            # it's polled mid-run via _is_cancelled() and cleared in
+            # _process_job's finally block once that run exits. A job still
+            # "queued" is never claimed at all (the worker only selects
+            # state="queued" rows, and this one just left that state), so
+            # nothing would ever discard the id — it would otherwise leak in
+            # this set for the life of the process.
+            with self._lock:
+                self._cancel_ids.add(job_id)
         return job
 
     def retry(self, db: Session, job_id: int) -> DownloadJob | None:
@@ -874,10 +893,17 @@ class DownloadQueue:
             if exact:
                 candidate = sorted(exact, key=rank)[0]
             else:
+                # Plain substring containment is only a meaningful signal once
+                # the title has enough characters that a coincidental match is
+                # unlikely — for a short title (e.g. "Red" vs "Red." or an
+                # unrelated 3-letter EP) it can match almost anything and
+                # rematch to the wrong release entirely. Below that floor,
+                # require the exact (already-normalized) match from above.
                 fuzzy = [
                     a
                     for a in albums
                     if target
+                    and len(target) > FUZZY_MATCH_MIN_LEN
                     and (target in norm(a.title) or norm(a.title) in target)
                     and not is_junk_title(a.title or "")
                 ]
@@ -894,7 +920,11 @@ class DownloadQueue:
                             h
                             for h in hits_alb
                             if norm(h.title) == target
-                            or (target and target in norm(h.title))
+                            or (
+                                target
+                                and len(target) > FUZZY_MATCH_MIN_LEN
+                                and target in norm(h.title)
+                            )
                         ),
                         None,
                     )

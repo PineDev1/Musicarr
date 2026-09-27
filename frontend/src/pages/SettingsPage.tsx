@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { api } from '../api'
+import { acquisitionModeLabel, api, resolveAcquisitionMode } from '../api'
 import { playerApi } from '../player/playerApi'
 import { useToast } from '../Toast'
 import { AcquisitionPanels } from './AcquisitionPanels'
@@ -164,6 +164,8 @@ export function SettingsPage() {
   const [lowDiskThresholdGb, setLowDiskThresholdGb] = useState(10)
   const [notifyOnMaintenance, setNotifyOnMaintenance] = useState(true)
   const [notifyOnHealthAlerts, setNotifyOnHealthAlerts] = useState(true)
+  const [autoGrabEnabled, setAutoGrabEnabled] = useState(false)
+  const [autoGrabMinScore, setAutoGrabMinScore] = useState(20)
 
   useEffect(() => {
     if (!data) return
@@ -214,6 +216,8 @@ export function SettingsPage() {
     setLowDiskThresholdGb(data.low_disk_threshold_gb ?? 10)
     setNotifyOnMaintenance(data.notify_on_maintenance ?? true)
     setNotifyOnHealthAlerts(data.notify_on_health_alerts ?? true)
+    setAutoGrabEnabled(data.auto_grab_indexers_enabled ?? false)
+    setAutoGrabMinScore(data.auto_grab_min_score ?? 20)
   }, [data])
 
   const save = useMutation({
@@ -235,6 +239,8 @@ export function SettingsPage() {
         default_download_mode: defaultDownloadMode,
         preferred_download_method: preferredDownloadMethod,
         streaming_enabled: streamingEnabled,
+        auto_grab_indexers_enabled: autoGrabEnabled,
+        auto_grab_min_score: autoGrabMinScore,
         include_albums: includeAlbums,
         include_eps: includeEps,
         include_singles: includeSingles,
@@ -1149,7 +1155,56 @@ export function SettingsPage() {
                 album to browse results and pick one yourself. Configure indexers and download
                 clients under the Indexers tab.
               </span>
+              {!streamingEnabled && preferredDownloadMethod !== 'indexer' && (
+                <div className="banner warn" style={{ marginTop: '0.5rem' }}>
+                  Streaming is disabled under Settings → Sources, so this setting is overridden —
+                  Musicarr is currently acquiring via{' '}
+                  <strong>
+                    {acquisitionModeLabel(resolveAcquisitionMode(streamingEnabled, preferredDownloadMethod))}
+                  </strong>
+                  , regardless of what's selected above.
+                </div>
+              )}
+              <p className="muted" style={{ marginTop: '0.5rem' }}>
+                Currently acquiring via:{' '}
+                <strong style={{ color: 'var(--text)' }}>
+                  {acquisitionModeLabel(resolveAcquisitionMode(streamingEnabled, preferredDownloadMethod))}
+                </strong>
+              </p>
             </div>
+            {preferredDownloadMethod !== 'streaming' && (
+              <div className="field">
+                <label>Auto-grab from indexers</label>
+                <div className="checks">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={autoGrabEnabled}
+                      onChange={(e) => setAutoGrabEnabled(e.target.checked)}
+                    />
+                    Automatically grab the top-scored indexer result for newly detected
+                    releases, instead of always waiting for a manual "Search releases" pick
+                  </label>
+                </div>
+                {autoGrabEnabled && (
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <label>Minimum score to auto-grab</label>
+                    <input
+                      type="number"
+                      min={10}
+                      max={100}
+                      value={autoGrabMinScore}
+                      onChange={(e) => setAutoGrabMinScore(Number(e.target.value))}
+                      style={{ maxWidth: 120 }}
+                    />
+                    <span className="muted tiny">
+                      Higher is stricter. Releases scoring at or below this are left for manual
+                      review. Can be overridden per artist on the artist page.
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="field">
               <label>Monitor interval (minutes)</label>
               <input

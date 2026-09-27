@@ -71,6 +71,46 @@ def test_run_dedupe_scan_job_silent_when_clean(db, monkeypatch):
     notify.assert_not_called()
 
 
+def test_health_check_skips_unconfigured_providers(db, monkeypatch, tmp_path):
+    _settings(
+        db,
+        library_path=str(tmp_path),
+        low_disk_threshold_gb=1,
+        streaming_enabled=True,
+        active_provider="deezer",
+        arl="",
+    )
+    monkeypatch.setattr(maintenance_scheduler, "SessionLocal", lambda: db)
+    db.close = lambda: None
+    maintenance_scheduler._last_disk_ok = True
+    maintenance_scheduler._last_provider_ok = {}
+
+    class FakeUsage:
+        free = 10 * (1024**3)
+
+    with (
+        patch("app.services.maintenance_scheduler.shutil.disk_usage", return_value=FakeUsage()),
+        patch("app.services.maintenance_scheduler.get_provider") as get_provider,
+        patch("app.services.maintenance_scheduler.send_notification") as notify,
+    ):
+        get_provider.return_value.validate_session.return_value = (False, "ARL not configured")
+        maintenance_scheduler.run_health_check_job()
+
+    get_provider.assert_not_called()
+    auth_calls = [c for c in notify.call_args_list if "authentication" in c.args[1].lower()]
+    assert auth_calls == []
+
+
+def test_backup_job_honors_schedule_disabled_flag(db, monkeypatch):
+    _settings(db, backup_schedule_enabled=False)
+    monkeypatch.setattr(maintenance_scheduler, "SessionLocal", lambda: db)
+    db.close = lambda: None
+    with patch("app.services.maintenance_scheduler.export_backup") as export:
+        result = maintenance_scheduler.run_backup_job()
+    assert result == {"ok": True, "skipped": True}
+    export.assert_not_called()
+
+
 def test_health_check_notifies_once_on_disk_transition(db, monkeypatch, tmp_path):
     _settings(db, library_path=str(tmp_path), low_disk_threshold_gb=999999)
     monkeypatch.setattr(maintenance_scheduler, "SessionLocal", lambda: db)

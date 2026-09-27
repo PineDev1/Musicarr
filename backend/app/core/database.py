@@ -125,6 +125,8 @@ def migrate_schema(engine_: Engine | None = None) -> None:
         "notify_on_health_alerts": "BOOLEAN DEFAULT 1",
         "vapid_public_key": "TEXT DEFAULT ''",
         "vapid_private_key": "TEXT DEFAULT ''",
+        "auto_grab_indexers_enabled": "BOOLEAN DEFAULT 0",
+        "auto_grab_min_score": "FLOAT DEFAULT 20.0",
     }
     existing = existing_columns("app_settings")
     for name, definition in settings_cols.items():
@@ -151,6 +153,8 @@ def migrate_schema(engine_: Engine | None = None) -> None:
             add_column("artists", "download_mode VARCHAR(16)")
         if "quality_pref" not in artist_cols:
             add_column("artists", "quality_pref VARCHAR(16)")
+        if "auto_grab_override" not in artist_cols:
+            add_column("artists", "auto_grab_override VARCHAR(16)")
         with eng.begin() as conn:
             conn.execute(
                 text("UPDATE artists SET status = 'active' WHERE status IS NULL OR status = ''")
@@ -315,6 +319,26 @@ def migrate_schema(engine_: Engine | None = None) -> None:
                     "WHERE state IN ('queued','running') AND album_id IS NOT NULL"
                 )
             )
+            # Same protection for manual indexer grabs (acquisition.grab_release):
+            # two near-simultaneous "Grab" clicks on the same album both used to
+            # pass the SELECT-then-INSERT dedupe check before either committed,
+            # sending the release to the download client twice. Wrapped in a
+            # try/except since, unlike the index above (present since this
+            # table's introduction), an existing install could in principle
+            # already have duplicate grabbed/downloading/importing rows for one
+            # album from before this fix — creating the index would then fail;
+            # skip it rather than block startup, the app still works, just
+            # without this extra guard until the duplicates are cleaned up.
+            try:
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_download_jobs_album_active_indexer "
+                        "ON download_jobs(album_id) "
+                        "WHERE state IN ('grabbed','downloading','importing') AND album_id IS NOT NULL"
+                    )
+                )
+            except Exception:
+                pass
 
 
 def init_db() -> None:
