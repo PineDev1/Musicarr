@@ -346,6 +346,21 @@ def _tracks_for_album(db: Session, album: Album) -> list[Track]:
     return tracks
 
 
+def _path_key(path: str) -> str:
+    """Normalize a track path for matching, not for filesystem access.
+
+    Most default setups (macOS, Windows) mount a case-insensitive
+    filesystem, so the same physical file can resolve to differently-cased
+    paths across a rename, a folder-template change, or a rematch — an
+    exact-string dict lookup would then miss the existing Track row and
+    create a duplicate for the same file. Casefolding the lookup key trades
+    a vanishingly rare false match on a genuinely case-sensitive filesystem
+    (two distinct files whose paths differ only by case) for avoiding the
+    much more common duplicate-track bug.
+    """
+    return str(path).casefold()
+
+
 class TrackIndex:
     """O(1) lookup of existing Track rows by path / (provider, provider_id).
 
@@ -360,18 +375,18 @@ class TrackIndex:
         self.by_pid: dict[tuple[str, str], Track] = {}
         for t in db.scalars(select(Track)).all():
             if t.path:
-                self.by_path[t.path] = t
+                self.by_path[_path_key(t.path)] = t
             self.by_pid[(t.provider, str(t.provider_id))] = t
 
     def add(self, track: Track) -> None:
         if track.path:
-            self.by_path[track.path] = track
+            self.by_path[_path_key(track.path)] = track
         self.by_pid[(track.provider, str(track.provider_id))] = track
 
     def rename_path(self, old_path: str | None, new_path: str, track: Track) -> None:
-        if old_path and old_path != new_path:
-            self.by_path.pop(old_path, None)
-        self.by_path[new_path] = track
+        if old_path and _path_key(old_path) != _path_key(new_path):
+            self.by_path.pop(_path_key(old_path), None)
+        self.by_path[_path_key(new_path)] = track
 
 
 def _unique_provider_track_id(
@@ -413,7 +428,7 @@ def _upsert_track(
     genre: str | None = None,
 ) -> Track:
     # Same file imported twice (or rematch): attach to existing row by path first.
-    path_key = str(path)
+    path_key = _path_key(path)
     existing = index.by_path.get(path_key)
     if existing is not None:
         # Retagged file: re-home the track if it now belongs to a different album.

@@ -19,6 +19,32 @@ export type Health = {
   disk_free_bytes: number | null
   low_disk_warning: boolean
   streaming_enabled: boolean
+  preferred_download_method: 'streaming' | 'indexer' | 'streaming_then_indexer'
+  resolved_acquisition_mode: 'streaming' | 'indexer' | 'streaming_then_indexer'
+}
+
+export function resolveAcquisitionMode(
+  streamingEnabled: boolean,
+  preferredMethod: string,
+): 'streaming' | 'indexer' | 'streaming_then_indexer' {
+  // Mirrors backend download_queue.resolve_download_method: streaming_enabled=False
+  // always wins, whatever the stored preference says.
+  if (!streamingEnabled) return 'indexer'
+  if (preferredMethod === 'indexer' || preferredMethod === 'streaming_then_indexer') {
+    return preferredMethod
+  }
+  return 'streaming'
+}
+
+export function acquisitionModeLabel(mode: string): string {
+  switch (mode) {
+    case 'indexer':
+      return 'Indexers only'
+    case 'streaming_then_indexer':
+      return 'Streaming + indexer fallback'
+    default:
+      return 'Streaming only'
+  }
 }
 
 export type Settings = {
@@ -82,6 +108,8 @@ export type Settings = {
   completed_download_scan_interval_seconds: number
   import_mechanism: 'hardlink' | 'copy' | 'move'
   remove_completed_downloads: boolean
+  auto_grab_indexers_enabled: boolean
+  auto_grab_min_score: number
   provider_ok: boolean | null
   provider_error: string | null
   deezer_ok: boolean | null
@@ -203,6 +231,7 @@ export type Artist = {
   pending_reason?: string
   download_mode?: 'auto' | 'manual' | null
   quality_pref?: 'flac' | '320' | '128' | null
+  auto_grab_override?: 'on' | 'off' | null
   musicbrainz_id?: string | null
   added_at: string
   last_synced_at: string | null
@@ -321,6 +350,13 @@ export type Stats = {
   recent_events: { event_type: string; message: string; created_at: string }[]
 }
 
+export type StatsHistory = {
+  growth: { date: string; artists_added: number; albums_downloaded: number }[]
+  download_trend: { date: string; completed: number; failed: number }[]
+  storage_by_quality: { quality: string; bytes: number }[]
+  top_genres: { genre: string; track_count: number }[]
+}
+
 export type CalendarEntry = {
   album_id: number
   title: string
@@ -329,6 +365,18 @@ export type CalendarEntry = {
   release_date: string | null
   status: string
   cover_url: string | null
+}
+
+export type DiscoveredArtist = {
+  name: string
+  match: number
+  already_in_library: number | null
+  seed_artist_name: string
+}
+
+export type Discovery = {
+  similar_artists: DiscoveredArtist[]
+  upcoming: CalendarEntry[]
 }
 
 export type OrphanDbTrack = {
@@ -620,7 +668,9 @@ export const api = {
   history: () => request<HistoryEvent[]>('/history'),
   search: (q: string) => request<SearchResults>(`/search?q=${encodeURIComponent(q)}`),
   stats: () => request<Stats>('/stats'),
+  statsHistory: () => request<StatsHistory>('/stats/history'),
   calendar: () => request<CalendarEntry[]>('/calendar'),
+  discovery: () => request<Discovery>('/discovery'),
   maintenanceScan: () => request<MaintenanceScan>('/maintenance/duplicates'),
   maintenanceResolve: (body: Record<string, unknown>) =>
     request<{ ok: boolean }>('/maintenance/resolve', {
@@ -755,7 +805,7 @@ export const api = {
   deletePathMapping: (id: number) =>
     request<{ ok: boolean }>(`/acquisition/path-mappings/${id}`, { method: 'DELETE' }),
   searchReleases: (albumId: number) =>
-    request<ReleaseCandidate[]>(`/acquisition/releases/search?album_id=${albumId}`),
+    request<ReleaseSearchResult>(`/acquisition/releases/search?album_id=${albumId}`),
   grabRelease: (body: {
     album_id: number
     grab_url: string
@@ -838,6 +888,17 @@ export type ReleaseCandidate = {
   indexer_id: number
   indexer_name: string
   score: number
+}
+
+export type IndexerSearchError = {
+  indexer_id: number
+  indexer_name: string
+  message: string
+}
+
+export type ReleaseSearchResult = {
+  results: ReleaseCandidate[]
+  errors: IndexerSearchError[]
 }
 
 export type MbCatalogJob = {

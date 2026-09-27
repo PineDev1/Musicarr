@@ -175,6 +175,7 @@ export function ArtistPage() {
     mutationFn: ({ albumId, body }: { albumId: number; body: Record<string, unknown> }) =>
       api.patchAlbum(albumId, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['artist', artistId] }),
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const downloadAlbum = useMutation({
     mutationFn: ({ albumId, upgrade }: { albumId: number; upgrade?: boolean }) =>
@@ -194,6 +195,7 @@ export function ArtistPage() {
   const cancelJob = useMutation({
     mutationFn: (jobId: number) => api.cancelJob(jobId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['queue'] }),
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const bulkDownload = useMutation({
     mutationFn: () => api.bulkDownloadAlbums([...selected]),
@@ -401,6 +403,20 @@ export function ArtistPage() {
             <option value="flac">FLAC (lossless)</option>
             <option value="320">MP3 320kbps</option>
             <option value="128">MP3 128kbps</option>
+          </select>
+        </div>
+        <div className="field" style={{ margin: 0, minWidth: 180 }}>
+          <label>Auto-grab (indexers)</label>
+          <select
+            value={data.auto_grab_override || ''}
+            onChange={(e) =>
+              patchArtist.mutate({ auto_grab_override: e.target.value || null })
+            }
+            disabled={patchArtist.isPending}
+          >
+            <option value="">Inherit default</option>
+            <option value="on">Enabled</option>
+            <option value="off">Disabled</option>
           </select>
         </div>
         <div className="field" style={{ margin: 0, minWidth: 220 }}>

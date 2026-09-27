@@ -2,7 +2,8 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
-import { api } from './api'
+import { acquisitionModeLabel, api } from './api'
+import { type AccentChoice, type ThemeChoice, getAccent, getTheme, setAccent, setTheme } from './theme'
 
 const topLinks = [
   { to: '/dashboard', label: 'Dashboard' },
@@ -21,6 +22,7 @@ const activityLinks = [
 ]
 
 const toolsLinks = [
+  { to: '/discover', label: 'Discover' },
   { to: '/calendar', label: 'Release Calendar' },
   { to: '/maintenance', label: 'Duplicate Cleanup' },
   { to: '/activity', label: 'Activity' },
@@ -106,6 +108,77 @@ function NavGroup({
       </summary>
       <NavLinks items={items} health={health} importReviewCount={importReviewCount} />
     </details>
+  )
+}
+
+const THEME_OPTIONS: { value: ThemeChoice; label: string }[] = [
+  { value: 'dark', label: 'Dark' },
+  { value: 'light', label: 'Light' },
+  { value: 'system', label: 'System' },
+]
+
+const ACCENT_OPTIONS: { value: AccentChoice; color: string; label: string }[] = [
+  { value: 'green', color: '#3dba7a', label: 'Green' },
+  { value: 'blue', color: '#3d8bba', label: 'Blue' },
+  { value: 'purple', color: '#9a6dd7', label: 'Purple' },
+  { value: 'amber', color: '#d4a017', label: 'Amber' },
+]
+
+function ThemePicker() {
+  const [theme, setThemeState] = useState<ThemeChoice>(getTheme)
+  const [accent, setAccentState] = useState<AccentChoice>(getAccent)
+
+  return (
+    <div style={{ marginTop: '0.75rem' }}>
+      <div className="muted" style={{ fontSize: '0.8rem', marginBottom: '0.35rem' }}>
+        Theme
+      </div>
+      <div style={{ display: 'flex', gap: '0.35rem', marginBottom: '0.5rem' }}>
+        {THEME_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            className="btn ghost"
+            style={{
+              flex: 1,
+              padding: '0.3rem 0',
+              fontSize: '0.75rem',
+              borderColor: theme === opt.value ? 'var(--accent)' : undefined,
+              color: theme === opt.value ? 'var(--accent)' : undefined,
+            }}
+            onClick={() => {
+              setTheme(opt.value)
+              setThemeState(opt.value)
+            }}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: '0.4rem' }}>
+        {ACCENT_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            aria-label={`${opt.label} accent`}
+            title={opt.label}
+            onClick={() => {
+              setAccent(opt.value)
+              setAccentState(opt.value)
+            }}
+            style={{
+              width: '1.25rem',
+              height: '1.25rem',
+              borderRadius: '999px',
+              background: opt.color,
+              border: accent === opt.value ? '2px solid var(--text)' : '2px solid transparent',
+              cursor: 'pointer',
+              padding: 0,
+            }}
+          />
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -226,15 +299,18 @@ export function Layout() {
         <NavLinks items={bottomLinks} health={health.data} importReviewCount={importReviewCount} />
         <div className="sidebar-meta">
           <div className="muted" style={{ fontSize: '0.85rem' }}>
-            Source: <strong style={{ color: 'var(--text)', textTransform: 'capitalize' }}>{provider}</strong>
+            Mode:{' '}
+            <strong style={{ color: 'var(--text)' }}>
+              {acquisitionModeLabel(health.data?.resolved_acquisition_mode || 'streaming')}
+            </strong>
           </div>
-          <div className="muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
-            {health.data?.streaming_enabled === false
-              ? 'Streaming disabled'
-              : health.data?.provider_ok
-                ? 'Connected'
-                : 'Not ready'}
-          </div>
+          {health.data?.resolved_acquisition_mode !== 'indexer' && (
+            <div className="muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
+              Source: <strong style={{ color: 'var(--text)', textTransform: 'capitalize' }}>{provider}</strong>
+              {' — '}
+              {health.data?.provider_ok ? 'Connected' : 'Not ready'}
+            </div>
+          )}
           {auth.data?.enabled && auth.data.authenticated && (
             <button
               type="button"
@@ -246,6 +322,7 @@ export function Layout() {
               Sign out
             </button>
           )}
+          <ThemePicker />
           <div className="pindev">Produced by Pindev</div>
         </div>
       </aside>
@@ -253,7 +330,7 @@ export function Layout() {
         <div className="main-topbar">
           <GlobalSearch />
         </div>
-        {health.data && health.data.streaming_enabled !== false && !health.data.provider_ok && (
+        {health.data && health.data.resolved_acquisition_mode !== 'indexer' && !health.data.provider_ok && (
           <div className="banner danger">
             {health.data.provider_error ||
               `Configure a valid ${provider} account in Settings to download music.`}

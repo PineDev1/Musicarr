@@ -31,9 +31,10 @@ def test_search_album_scores_and_sorts_best_first(db):
         ReleaseCandidate(title="Random Unrelated Release", size=400_000_000, seeders=5, protocol="torrent", magnet_url="magnet:?xt=3"),
     ]
     with patch("app.services.indexers.search.search_newznab", return_value=hits):
-        results = search_album(db, "Luke Combs", "Fathers & Sons", year="2024")
+        results, errors = search_album(db, "Luke Combs", "Fathers & Sons", year="2024")
 
     assert len(results) == 3
+    assert errors == []
     assert results[0].title.startswith("Luke Combs - Fathers & Sons (2024)")
     # sorted best-first
     assert results[0].score >= results[1].score >= results[2].score
@@ -44,18 +45,25 @@ def test_search_album_skips_disabled_indexer(db):
     row.enabled = False
     db.commit()
     with patch("app.services.indexers.search.search_newznab") as fake:
-        results = search_album(db, "Luke Combs", "Fathers & Sons")
+        results, errors = search_album(db, "Luke Combs", "Fathers & Sons")
     fake.assert_not_called()
     assert results == []
+    assert errors == []
 
 
 def test_search_album_continues_past_one_indexer_error(db):
-    _indexer(db)
+    row = _indexer(db)
     from app.services.indexers.base import IndexerError
 
     with patch("app.services.indexers.search.search_newznab", side_effect=IndexerError("boom")):
-        results = search_album(db, "Luke Combs", "Fathers & Sons")
+        results, errors = search_album(db, "Luke Combs", "Fathers & Sons")
     assert results == []  # doesn't raise
+    # The failure must not vanish into the server log only — the caller
+    # needs it to tell "no results" apart from "your indexer is broken".
+    assert len(errors) == 1
+    assert errors[0]["indexer_id"] == row.id
+    assert errors[0]["indexer_name"] == "Example"
+    assert "boom" in errors[0]["message"]
 
 
 def test_pick_best_requires_min_score_and_grab_url():

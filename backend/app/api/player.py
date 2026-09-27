@@ -1077,6 +1077,9 @@ async def player_ws(websocket: WebSocket):
 
     db = SessionLocal()
     try:
+        if not player_auth.player_enabled(db):
+            await websocket.close(code=4404)
+            return
         token = websocket.cookies.get(player_auth.COOKIE_NAME)
         user = player_auth.parse_session_token(db, token)
     finally:

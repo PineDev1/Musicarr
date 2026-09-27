@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../api'
+import { useToast } from '../Toast'
 
 function formatBytes(n: number) {
   if (!n) return '0 B'
@@ -16,6 +17,7 @@ function formatBytes(n: number) {
 
 export function MaintenancePage() {
   const qc = useQueryClient()
+  const toast = useToast()
   const { data, isLoading, error } = useQuery({
     queryKey: ['maintenance'],
     queryFn: api.maintenanceScan,
@@ -25,6 +27,7 @@ export function MaintenancePage() {
   const resolve = useMutation({
     mutationFn: api.maintenanceResolve,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['maintenance'] }),
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
 
   if (isLoading) return <p className="muted">Scanning library…</p>

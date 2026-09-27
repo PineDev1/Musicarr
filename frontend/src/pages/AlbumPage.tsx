@@ -215,10 +215,22 @@ export function AlbumPage() {
           </p>
           {releases.isLoading && <p className="muted">Searching indexers…</p>}
           {releases.error && <p className="error">{(releases.error as Error).message}</p>}
-          {releases.data && releases.data.length === 0 && (
+          {releases.data && releases.data.errors.length > 0 && (
+            <div className="banner danger" style={{ marginBottom: '0.75rem' }}>
+              <strong>Some indexers failed to search:</strong>
+              <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.2rem' }}>
+                {releases.data.errors.map((e) => (
+                  <li key={e.indexer_id}>
+                    {e.indexer_name}: {e.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {releases.data && releases.data.results.length === 0 && releases.data.errors.length === 0 && (
             <p className="muted">No results. Add or check your indexers under Settings → Indexers.</p>
           )}
-          {releases.data && releases.data.length > 0 && (
+          {releases.data && releases.data.results.length > 0 && (
             <table className="table">
               <thead>
                 <tr>
@@ -231,7 +243,7 @@ export function AlbumPage() {
                 </tr>
               </thead>
               <tbody>
-                {releases.data.map((r, i) => (
+                {releases.data.results.map((r, i) => (
                   <tr key={`${r.indexer_id}-${i}`}>
                     <td style={{ maxWidth: 420, wordBreak: 'break-word' }}>{r.title}</td>
                     <td className="muted">{r.indexer_name}</td>

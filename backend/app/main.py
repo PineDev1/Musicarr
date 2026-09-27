@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -16,6 +17,7 @@ from app.api import (
     auth,
     backup,
     calendar,
+    discovery,
     events,
     import_lists,
     maintenance,
@@ -199,6 +201,7 @@ app.include_router(import_lists.router, prefix="/api")
 app.include_router(search.router, prefix="/api")
 app.include_router(stats.router, prefix="/api")
 app.include_router(calendar.router, prefix="/api")
+app.include_router(discovery.router, prefix="/api")
 app.include_router(maintenance.router, prefix="/api")
 app.include_router(acquisition.router, prefix="/api")
 app.include_router(push.router, prefix="/api")
@@ -288,6 +291,13 @@ def share_landing(token: str, request: Request):
         )
         if not link or getattr(link, "revoked", False):
             raise HTTPException(status_code=404, detail="Share not found")
+        exp = getattr(link, "expires_at", None)
+        if exp is not None:
+            now = datetime.now(timezone.utc)
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp < now:
+                raise HTTPException(status_code=404, detail="Share link expired")
         track = link.track
         if not track:
             raise HTTPException(status_code=404, detail="Track not found")

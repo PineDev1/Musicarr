@@ -170,8 +170,11 @@ class CompletedDownloadHandler:
                     result = self._poll_job(db, job)
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("Completed handler failed for job %s", job.id)
+                    job_id = job.id
                     db.rollback()
-                    self._fail_job(db, job, f"Import failed: {exc}")
+                    fresh = db.get(DownloadJob, job_id)
+                    if fresh is not None:
+                        self._fail_job(db, fresh, f"Import failed: {exc}")
                     failed += 1
                     continue
                 if result == "imported":
@@ -336,6 +339,16 @@ class CompletedDownloadHandler:
         dest_folder.mkdir(parents=True, exist_ok=True)
 
         mechanism = (getattr(settings, "import_mechanism", None) or "hardlink").lower()
+        # "move" frees disk space by deleting the source once it's no longer
+        # needed, but deleting per-file *during* the loop meant a mid-loop
+        # crash (disk full, permission error) left `local` with only some
+        # files remaining — a resumed/crash-recovery import re-scanning
+        # `local` from scratch would then see fewer files than expected and
+        # could trip the "no audio files found" / incomplete-ratio gates
+        # above even though the album was actually fine. Copy every file
+        # first (source untouched all the way through the loop) and only
+        # delete the originals once the whole album has been placed.
+        transfer_mechanism = "copy" if mechanism == "move" else mechanism
         tracks = sorted(album.tracks or [], key=lambda t: (t.disc_no or 1, t.track_no or 0))
         used: set[int] = set()
         placed: list[Path] = []
@@ -368,7 +381,7 @@ class CompletedDownloadHandler:
                 )
             dest = dest_folder / filename
             try:
-                _transfer(src, dest, mechanism)
+                _transfer(src, dest, transfer_mechanism)
             except OSError as exc:
                 self._fail_job(db, job, f"Could not import '{src.name}': {exc}")
                 return "failed"
@@ -381,6 +394,17 @@ class CompletedDownloadHandler:
                 matched += 1
 
         self._copy_cover(local, dest_folder)
+
+        if mechanism == "move":
+            # Every file is safely in dest_folder now — free the source.
+            # Best-effort: a leftover source file is harmless (just wasted
+            # disk space, cleaned up on a later manual scan), unlike losing
+            # a track would be, so a failed unlink here must not fail the job.
+            for src in files:
+                try:
+                    src.unlink()
+                except OSError:
+                    logger.warning("Could not remove source file after import: %s", src)
 
         album.path = str(dest_folder)
         album.status = "downloaded"

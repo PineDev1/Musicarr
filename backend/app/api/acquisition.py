@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,8 +18,10 @@ from app.models.schemas import (
     IndexerCreate,
     IndexerOut,
     IndexerUpdate,
+    IndexerSearchErrorOut,
     ReleaseCandidateOut,
     ReleaseGrabRequest,
+    ReleaseSearchOut,
     RemotePathMappingCreate,
     RemotePathMappingOut,
     RemotePathMappingUpdate,
@@ -34,7 +35,7 @@ from app.services.download_clients import (
     pick_client,
 )
 from app.services.history import add_history
-from app.services.indexers.newznab import check_indexer_connection
+from app.services.indexers.newznab import verify_indexer_key
 from app.services.indexers.search import parse_categories
 
 router = APIRouter(prefix="/acquisition", tags=["acquisition"])
@@ -114,6 +115,8 @@ def _path_mapping_note(db: Session) -> str:
 # -- status ----------------------------------------------------------------
 @router.get("/status", response_model=AcquisitionStatusOut)
 def acquisition_status(db: Session = Depends(get_db)):
+    from concurrent.futures import ThreadPoolExecutor
+
     indexers = list(
         db.scalars(select(Indexer).where(Indexer.enabled.is_(True))).all()
     )
@@ -137,6 +140,44 @@ def acquisition_status(db: Session = Depends(get_db)):
             "No remote path mappings — mount the same download volume and map "
             "client path → Musicarr path."
         )
+
+    # A configured-but-broken indexer or client (bad API key, wrong URL,
+    # unreachable host) previously looked identical to a healthy one here —
+    # the count-only checks above passed, and the real failure only ever
+    # surfaced as an unexplained empty result on "Search releases". Actually
+    # test connectivity, in parallel so one slow/unreachable host doesn't
+    # block the whole page.
+    def _check_indexer(idx: Indexer) -> str | None:
+        ok, message = verify_indexer_key(idx.base_url, idx.api_key, idx.protocol)
+        return None if ok else f"Indexer '{idx.name}' isn't responding: {message}"
+
+    def _check_client(client_row: DownloadClient) -> str | None:
+        try:
+            client = get_client(client_row)
+        except Exception as exc:  # noqa: BLE001
+            return f"Download client '{client_row.name}' isn't responding: {exc}"
+        try:
+            ok, message = client.test()
+        except Exception as exc:  # noqa: BLE001
+            return f"Download client '{client_row.name}' isn't responding: {exc}"
+        finally:
+            closer = getattr(client, "close", None)
+            if callable(closer):
+                closer()
+        return None if ok else f"Download client '{client_row.name}' isn't responding: {message}"
+
+    checks = list(indexers) + list(clients)
+    if checks:
+        with ThreadPoolExecutor(max_workers=max(1, len(checks))) as pool:
+            futures = [
+                pool.submit(_check_indexer if isinstance(c, Indexer) else _check_client, c)
+                for c in checks
+            ]
+            for future in futures:
+                failure = future.result()
+                if failure:
+                    messages.append(failure)
+
     return AcquisitionStatusOut(
         indexers_enabled=len(indexers),
         torrent_client=torrent,
@@ -221,7 +262,12 @@ def test_indexer_connection(indexer_id: int, db: Session = Depends(get_db)):
     row = db.get(Indexer, indexer_id)
     if not row:
         raise HTTPException(status_code=404, detail="Indexer not found")
-    ok, message = check_indexer_connection(row.base_url, row.api_key, row.protocol or "usenet")
+    # verify_indexer_key actually searches (t=search) rather than just
+    # fetching capabilities (t=caps) — some indexers (confirmed against a
+    # real NZBGeek instance) return a normal caps document for *any* API
+    # key, valid or not, so a caps-only "Test connection" can say "Connected"
+    # for a key that can't actually search anything.
+    ok, message = verify_indexer_key(row.base_url, row.api_key, row.protocol or "usenet")
     return TestResultOut(ok=ok, message=message)
 
 
@@ -392,7 +438,7 @@ def delete_path_mapping(mapping_id: int, db: Session = Depends(get_db)):
 
 
 # -- manual release search / grab -----------------------------------------
-@router.get("/releases/search", response_model=list[ReleaseCandidateOut])
+@router.get("/releases/search", response_model=ReleaseSearchOut)
 def search_releases(
     album_id: int = Query(...),
     db: Session = Depends(get_db),
@@ -405,22 +451,25 @@ def search_releases(
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
     artist_name = album.artist.name if album.artist else ""
-    candidates = search_album(db, artist_name, album.title, year=album.release_date)
-    return [
-        ReleaseCandidateOut(
-            title=c.title,
-            size=c.size,
-            seeders=c.seeders,
-            protocol=c.protocol,
-            download_url=c.download_url,
-            magnet_url=c.magnet_url,
-            grab_url=c.grab_url,
-            indexer_id=c.indexer_id,
-            indexer_name=c.indexer_name,
-            score=c.score,
-        )
-        for c in candidates
-    ]
+    candidates, errors = search_album(db, artist_name, album.title, year=album.release_date)
+    return ReleaseSearchOut(
+        results=[
+            ReleaseCandidateOut(
+                title=c.title,
+                size=c.size,
+                seeders=c.seeders,
+                protocol=c.protocol,
+                download_url=c.download_url,
+                magnet_url=c.magnet_url,
+                grab_url=c.grab_url,
+                indexer_id=c.indexer_id,
+                indexer_name=c.indexer_name,
+                score=c.score,
+            )
+            for c in candidates
+        ],
+        errors=[IndexerSearchErrorOut(**e) for e in errors],
+    )
 
 
 @router.post("/releases/grab")
@@ -434,105 +483,26 @@ def grab_release(payload: ReleaseGrabRequest, db: Session = Depends(get_db)):
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    grab_url = (payload.grab_url or "").strip()
-    if not grab_url:
-        raise HTTPException(status_code=400, detail="grab_url is required")
-
-    protocol = (payload.protocol or "torrent").lower()
-    client_row = pick_client(db, protocol)
-    if not client_row:
-        label = "qBittorrent" if protocol == "torrent" else "SABnzbd"
-        raise HTTPException(
-            status_code=400,
-            detail=f"No enabled {protocol} download client. Add {label} under Settings → Download clients.",
-        )
-
-    # Preflight: confirm the client still answers.
-    try:
-        ok, message = get_client(client_row).test()
-    except DownloadClientError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Download client '{client_row.name}' failed: {exc}",
-        ) from exc
-    if not ok:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Download client '{client_row.name}' failed: {message}",
-        )
-
-    artist = album.artist
-    artist_name = artist.name if artist else ""
-
-    # Avoid duplicate active jobs for the same album, from either source —
-    # a streaming download already in flight must not also get an indexer grab.
-    active = db.scalar(
-        select(DownloadJob).where(
-            DownloadJob.album_id == album.id,
-            DownloadJob.state.in_(
-                ["queued", "running", "grabbed", "downloading", "importing"]
-            ),
-        )
-    )
-    if active:
-        raise HTTPException(
-            status_code=409,
-            detail="A download is already in progress for this album",
-        )
-
-    client = get_client(client_row)
-    try:
-        item_id = client.add_url(grab_url, client_row.category or "")
-    except DownloadClientError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    finally:
-        closer = getattr(client, "close", None)
-        if callable(closer):
-            closer()
+    from app.services.acquisition_actions import GrabError, grab_release_for_album
 
     try:
-        from app.services.artists import sync_album_tracks
+        job = grab_release_for_album(
+            db,
+            album,
+            grab_url=payload.grab_url,
+            protocol=payload.protocol,
+            title=payload.title or "",
+            indexer_id=payload.indexer_id,
+        )
+    except GrabError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
-        if not album.tracks:
-            sync_album_tracks(db, album)
-    except Exception:  # noqa: BLE001
-        pass
-
-    job = DownloadJob(
-        target_type="album",
-        target_id=album.id,
-        album_id=album.id,
-        artist_name=artist_name,
-        album_title=album.title,
-        state="grabbed",
-        source="indexer",
-        indexer_id=payload.indexer_id,
-        client_id=client_row.id,
-        release_title=(payload.title or "").strip()[:1024],
-        download_url=grab_url,
-        client_item_id=item_id,
-        progress=1.0,
-        started_at=datetime.now(timezone.utc),
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-
-    add_history(
-        db,
-        "grabbed",
-        f"Grabbed '{job.release_title or 'release'}' for {artist_name} – {album.title} "
-        f"(sent to {client_row.name})",
-    )
-    from app.services.download_queue import download_queue
-
-    download_queue.wake()
-
+    client_row = db.get(DownloadClient, job.client_id) if job.client_id else None
     return {
         "ok": True,
         "job_id": job.id,
-        "client": client_row.name,
-        "client_item_id": item_id,
+        "client": client_row.name if client_row else "",
+        "client_item_id": job.client_item_id,
     }
 
 

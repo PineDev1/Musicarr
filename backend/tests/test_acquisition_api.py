@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -99,14 +100,37 @@ def test_search_releases_returns_ranked_candidates(db):
         ReleaseCandidate(title="Luke Combs - Fathers & Sons [FLAC]", size=1, seeders=10, protocol="torrent", magnet_url="magnet:?xt=1"),
     ]
     with patch("app.services.indexers.search.search_newznab", return_value=hits):
-        results = acquisition.search_releases(album_id=album.id, db=db)
-    assert len(results) == 1
-    assert results[0].grab_url == "magnet:?xt=1"
+        out = acquisition.search_releases(album_id=album.id, db=db)
+    assert len(out.results) == 1
+    assert out.results[0].grab_url == "magnet:?xt=1"
+    assert out.errors == []
 
 
 def test_search_releases_404_for_missing_album(db):
     with pytest.raises(HTTPException):
         acquisition.search_releases(album_id=999, db=db)
+
+
+def test_search_releases_surfaces_indexer_errors(db):
+    """A bad API key (or any indexer failure) must reach the caller, not
+    just the server log — an empty `results` list is otherwise
+    indistinguishable from "nothing matched"."""
+    album = _album(db)
+    db.add(Indexer(name="NZBGeek", protocol="usenet", base_url="https://api.nzbgeek.info", api_key="bad", enabled=True))
+    db.commit()
+
+    from app.services.indexers.base import IndexerError
+
+    with patch(
+        "app.services.indexers.search.search_newznab",
+        side_effect=IndexerError("Indexer error 100: Invalid API Key"),
+    ):
+        out = acquisition.search_releases(album_id=album.id, db=db)
+
+    assert out.results == []
+    assert len(out.errors) == 1
+    assert out.errors[0].indexer_name == "NZBGeek"
+    assert "Invalid API Key" in out.errors[0].message
 
 
 def test_grab_release_creates_job_and_sends_to_client(db):
@@ -126,7 +150,7 @@ def test_grab_release_creates_job_and_sends_to_client(db):
         def close(self):
             pass
 
-    with patch("app.api.acquisition.get_client", return_value=FakeClient()), \
+    with patch("app.services.acquisition_actions.get_client", return_value=FakeClient()), \
          patch("app.services.download_queue.download_queue.wake"):
         result = acquisition.grab_release(
             ReleaseGrabRequest(album_id=album.id, grab_url="magnet:?xt=1", protocol="torrent", title="Fathers & Sons [FLAC]"),
@@ -138,6 +162,73 @@ def test_grab_release_creates_job_and_sends_to_client(db):
     assert job.source == "indexer"
     assert job.state == "grabbed"
     assert job.client_item_id == "hash123"
+
+
+def test_grab_release_holds_a_lock_across_the_client_dispatch():
+    """Regression: two near-simultaneous "Grab" clicks on the same album used
+    to both pass the active-job check and both reach the download client
+    before either committed its DownloadJob row, sending the release twice.
+    grab_release now holds _grab_lock across the whole check-dispatch-commit
+    sequence, so a second grab attempted while the first is still talking to
+    the client must find the lock held.
+
+    Uses its own StaticPool-backed engine (rather than the shared `db`
+    fixture) so the background thread's session sees the same in-memory
+    database instead of a fresh, empty one — the default SQLite pool hands
+    each thread its own :memory: connection."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.core.database import Base
+
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    db = Session()
+
+    album = _album(db)
+    client_row = DownloadClient(name="qbt", protocol="torrent", implementation="qbittorrent", host="localhost", port=8080, enabled=True)
+    db.add(client_row)
+    db.commit()
+
+    entered_add_url = threading.Event()
+    release_add_url = threading.Event()
+
+    class SlowClient:
+        def test(self):
+            return True, "ok"
+
+        def add_url(self, url, category=""):
+            entered_add_url.set()
+            release_add_url.wait(timeout=5)
+            return "hash123"
+
+        def close(self):
+            pass
+
+    with patch("app.services.acquisition_actions.get_client", return_value=SlowClient()):
+        t = threading.Thread(
+            target=acquisition.grab_release,
+            args=(ReleaseGrabRequest(album_id=album.id, grab_url="magnet:?xt=1", protocol="torrent"),),
+            kwargs={"db": db},
+        )
+        t.start()
+        try:
+            assert entered_add_url.wait(timeout=5), "first grab never reached the client"
+            from app.services import acquisition_actions
+
+            assert acquisition_actions._grab_lock.locked(), "lock must be held while dispatching to the client"
+        finally:
+            release_add_url.set()
+            t.join(timeout=5)
+    assert not t.is_alive()
+    db.close()
+    engine.dispose()
 
 
 def test_grab_release_rejects_duplicate_active_job(db):
@@ -160,7 +251,7 @@ def test_grab_release_rejects_duplicate_active_job(db):
         def close(self):
             pass
 
-    with patch("app.api.acquisition.get_client", return_value=FakeClient()):
+    with patch("app.services.acquisition_actions.get_client", return_value=FakeClient()):
         with pytest.raises(HTTPException) as exc_info:
             acquisition.grab_release(
                 ReleaseGrabRequest(album_id=album.id, grab_url="magnet:?xt=1", protocol="torrent"), db=db
@@ -190,10 +281,57 @@ def test_grab_release_surfaces_client_preflight_failure(db):
         def close(self):
             pass
 
-    with patch("app.api.acquisition.get_client", return_value=FakeClient()):
+    with patch("app.services.acquisition_actions.get_client", return_value=FakeClient()):
         with pytest.raises(HTTPException) as exc_info:
             acquisition.grab_release(
                 ReleaseGrabRequest(album_id=album.id, grab_url="magnet:?xt=1", protocol="torrent"), db=db
             )
     assert exc_info.value.status_code == 400
     assert "auth failed" in exc_info.value.detail
+
+
+def test_acquisition_status_flags_indexer_that_fails_connectivity(db):
+    """A saved-but-broken indexer (bad key, unreachable host) used to look
+    identical to a healthy one here — only the count was checked, not
+    whether it actually responds."""
+    db.add(Indexer(name="NZBGeek", protocol="usenet", base_url="https://api.nzbgeek.info", api_key="bad", enabled=True))
+    db.commit()
+
+    with patch(
+        "app.api.acquisition.verify_indexer_key",
+        return_value=(False, "Indexer error 100: Invalid API Key"),
+    ):
+        status = acquisition.acquisition_status(db=db)
+
+    assert any("NZBGeek" in m and "Invalid API Key" in m for m in status.messages)
+
+
+def test_acquisition_status_silent_when_indexer_connects(db):
+    db.add(Indexer(name="NZBGeek", protocol="usenet", base_url="https://api.nzbgeek.info", api_key="good", enabled=True))
+    db.commit()
+
+    with patch(
+        "app.api.acquisition.verify_indexer_key",
+        return_value=(True, "Connected to api.nzbgeek.info"),
+    ):
+        status = acquisition.acquisition_status(db=db)
+
+    assert not any("NZBGeek" in m for m in status.messages)
+
+
+def test_acquisition_status_flags_download_client_that_fails_connectivity(db):
+    client_row = DownloadClient(name="qbt", protocol="torrent", implementation="qbittorrent", host="localhost", port=8080, enabled=True)
+    db.add(client_row)
+    db.commit()
+
+    class FakeClient:
+        def test(self):
+            return False, "Connection refused"
+
+        def close(self):
+            pass
+
+    with patch("app.api.acquisition.get_client", return_value=FakeClient()):
+        status = acquisition.acquisition_status(db=db)
+
+    assert any("qbt" in m and "Connection refused" in m for m in status.messages)

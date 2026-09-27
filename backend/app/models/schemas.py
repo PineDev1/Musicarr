@@ -70,6 +70,8 @@ class SettingsOut(BaseModel):
     completed_download_scan_interval_seconds: int = 60
     import_mechanism: str = "hardlink"
     remove_completed_downloads: bool = False
+    auto_grab_indexers_enabled: bool = False
+    auto_grab_min_score: float = 20.0
     provider_ok: bool | None = None
     provider_error: str | None = None
     deezer_ok: bool | None = None
@@ -135,6 +137,8 @@ class SettingsUpdate(BaseModel):
     completed_download_scan_interval_seconds: int | None = Field(default=None, ge=10, le=3600)
     import_mechanism: Literal["hardlink", "copy", "move"] | None = None
     remove_completed_downloads: bool | None = None
+    auto_grab_indexers_enabled: bool | None = None
+    auto_grab_min_score: float | None = Field(default=None, ge=10.0, le=100.0)
 
 
 class NotifyTestRequest(BaseModel):
@@ -164,6 +168,8 @@ class HealthOut(BaseModel):
     disk_free_bytes: int | None = None
     low_disk_warning: bool = False
     streaming_enabled: bool = True
+    preferred_download_method: str = "streaming"
+    resolved_acquisition_mode: str = "streaming"
 
 
 class SearchArtistHit(BaseModel):
@@ -200,6 +206,35 @@ class StatsOut(BaseModel):
     recent_events: list[StatsRecentEvent] = []
 
 
+class GrowthPointOut(BaseModel):
+    date: str
+    artists_added: int
+    albums_downloaded: int
+
+
+class DownloadTrendPointOut(BaseModel):
+    date: str
+    completed: int
+    failed: int
+
+
+class StorageByQualityOut(BaseModel):
+    quality: str
+    bytes: int
+
+
+class TopGenreOut(BaseModel):
+    genre: str
+    track_count: int
+
+
+class StatsHistoryOut(BaseModel):
+    growth: list[GrowthPointOut] = []
+    download_trend: list[DownloadTrendPointOut] = []
+    storage_by_quality: list[StorageByQualityOut] = []
+    top_genres: list[TopGenreOut] = []
+
+
 class CalendarEntryOut(BaseModel):
     album_id: int
     title: str
@@ -208,6 +243,18 @@ class CalendarEntryOut(BaseModel):
     release_date: str | None = None
     status: str
     cover_url: str | None = None
+
+
+class DiscoveredArtistOut(BaseModel):
+    name: str
+    match: float = 0.0
+    already_in_library: int | None = None
+    seed_artist_name: str = ""
+
+
+class DiscoveryOut(BaseModel):
+    similar_artists: list[DiscoveredArtistOut] = []
+    upcoming: list[CalendarEntryOut] = []
 
 
 class OrphanDbTrackOut(BaseModel):
@@ -346,6 +393,7 @@ class ArtistOut(BaseModel):
     pending_reason: str = ""
     download_mode: str | None = None
     quality_pref: str | None = None
+    auto_grab_override: str | None = None
     musicbrainz_id: str | None = None
     added_at: datetime
     last_synced_at: datetime | None
@@ -381,6 +429,7 @@ class ArtistPatch(BaseModel):
     include_singles: bool | None = None
     download_mode: Literal["auto", "manual"] | None = None
     quality_pref: Bitrate | None = None
+    auto_grab_override: Literal["on", "off"] | None = None
 
 
 class BulkArtistIdsRequest(BaseModel):
@@ -1036,6 +1085,17 @@ class ReleaseCandidateOut(BaseModel):
     indexer_id: int
     indexer_name: str
     score: float
+
+
+class IndexerSearchErrorOut(BaseModel):
+    indexer_id: int
+    indexer_name: str
+    message: str
+
+
+class ReleaseSearchOut(BaseModel):
+    results: list[ReleaseCandidateOut]
+    errors: list[IndexerSearchErrorOut] = []
 
 
 class ReleaseGrabRequest(BaseModel):

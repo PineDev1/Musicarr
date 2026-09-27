@@ -46,6 +46,9 @@ export function SetupWizardPage() {
   const toast = useToast()
   const [step, setStep] = useState<Step>(1)
   const [libraryPath, setLibraryPath] = useState('')
+  const [acquisitionMode, setAcquisitionMode] = useState<'streaming' | 'indexer' | 'both'>(
+    'streaming',
+  )
   const [activeProvider, setActiveProvider] = useState('qobuz')
   const [arl, setArl] = useState('')
   const [qobuzEmail, setQobuzEmail] = useState('')
@@ -124,7 +127,20 @@ export function SetupWizardPage() {
 
   const saveProvider = useMutation({
     mutationFn: async () => {
+      if (acquisitionMode === 'indexer') {
+        // No streaming provider wanted at all — just record the mode and
+        // move on. Indexers/download clients are configured afterward in
+        // Settings → Indexers; nothing here needs credentials.
+        await api.updateSettings({
+          streaming_enabled: false,
+          preferred_download_method: 'indexer',
+        })
+        return
+      }
+
       await api.updateSettings({
+        streaming_enabled: true,
+        preferred_download_method: acquisitionMode === 'both' ? 'streaming_then_indexer' : 'streaming',
         active_provider: activeProvider,
         ...(activeProvider === 'qobuz' && qobuzAppId.trim()
           ? { qobuz_app_id: qobuzAppId.trim() }
@@ -174,6 +190,11 @@ export function SetupWizardPage() {
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['settings'] })
       await qc.invalidateQueries({ queryKey: ['health'] })
+      if (acquisitionMode === 'indexer') {
+        toast.push('Streaming disabled — add indexers under Settings → Indexers', 'ok')
+        setStep(3)
+        return
+      }
       const h = await api.health()
       if (!h.provider_ok) {
         toast.push(h.provider_error || 'Provider still not connected', 'error')
@@ -186,13 +207,18 @@ export function SetupWizardPage() {
   })
 
   const finish = useMutation({
-    mutationFn: () =>
-      api.updateSettings({
+    mutationFn: async () => {
+      await api.updateSettings({
         auth_enabled: authEnabled,
         auth_username: authUsername.trim() || 'admin',
         ...(authEnabled && authPassword ? { auth_password: authPassword } : {}),
         player_enabled: playerEnabled,
-      }),
+      })
+      // Enabling auth mid-wizard would otherwise bounce to Login with no session.
+      if (authEnabled && authPassword) {
+        await api.appLogin(authUsername.trim() || 'admin', authPassword)
+      }
+    },
     onSuccess: () => {
       markSetupDone()
       // Land on Tools so importing an existing collection is obvious.
@@ -276,18 +302,42 @@ export function SetupWizardPage() {
         {step === 2 && (
           <div>
             <label>
-              Active provider
+              How do you want to acquire music?
               <select
-                value={activeProvider}
-                onChange={(e) => setActiveProvider(e.target.value)}
+                value={acquisitionMode}
+                onChange={(e) =>
+                  setAcquisitionMode(e.target.value as 'streaming' | 'indexer' | 'both')
+                }
               >
-                <option value="qobuz">Qobuz</option>
-                <option value="deezer">Deezer</option>
-                <option value="tidal">Tidal</option>
+                <option value="streaming">A streaming service (Deezer / Tidal / Qobuz)</option>
+                <option value="both">A streaming service, plus torrent/Usenet indexers as backup</option>
+                <option value="indexer">Torrent or Usenet indexers only — no streaming service</option>
               </select>
             </label>
 
-            {activeProvider === 'deezer' && (
+            {acquisitionMode === 'indexer' && (
+              <p className="muted" style={{ fontSize: '0.85rem', marginTop: '0.75rem' }}>
+                No streaming credentials needed. Add your indexer (Prowlarr, NZBGeek, etc.) and a
+                download client (qBittorrent or SABnzbd) afterward, under{' '}
+                <strong>Settings → Indexers</strong>.
+              </p>
+            )}
+
+            {acquisitionMode !== 'indexer' && (
+              <label style={{ display: 'block', marginTop: '0.75rem' }}>
+                Active provider
+                <select
+                  value={activeProvider}
+                  onChange={(e) => setActiveProvider(e.target.value)}
+                >
+                  <option value="qobuz">Qobuz</option>
+                  <option value="deezer">Deezer</option>
+                  <option value="tidal">Tidal</option>
+                </select>
+              </label>
+            )}
+
+            {acquisitionMode !== 'indexer' && activeProvider === 'deezer' && (
               <label style={{ display: 'block', marginTop: '0.75rem' }}>
                 Deezer ARL cookie
                 <input
@@ -298,7 +348,7 @@ export function SetupWizardPage() {
               </label>
             )}
 
-            {activeProvider === 'tidal' && (
+            {acquisitionMode !== 'indexer' && activeProvider === 'tidal' && (
               <div style={{ marginTop: '0.75rem' }}>
                 {tidalCode ? (
                   <p>
@@ -315,7 +365,7 @@ export function SetupWizardPage() {
               </div>
             )}
 
-            {activeProvider === 'qobuz' && (
+            {acquisitionMode !== 'indexer' && activeProvider === 'qobuz' && (
               <div style={{ marginTop: '0.75rem', display: 'grid', gap: '0.65rem' }}>
                 <p className="muted" style={{ margin: 0, fontSize: '0.85rem' }}>
                   Same as Settings: paste <strong>token</strong>, <strong>user ID</strong>,{' '}
@@ -392,11 +442,13 @@ export function SetupWizardPage() {
               </div>
             )}
 
-            <p className="muted" style={{ fontSize: '0.85rem' }}>
-              {providerOk
-                ? 'Provider connected.'
-                : health.data?.provider_error || 'Connect a provider to continue.'}
-            </p>
+            {acquisitionMode !== 'indexer' && (
+              <p className="muted" style={{ fontSize: '0.85rem' }}>
+                {providerOk
+                  ? 'Provider connected.'
+                  : health.data?.provider_error || 'Connect a provider to continue.'}
+              </p>
+            )}
 
             <div className="toolbar" style={{ marginTop: '1rem' }}>
               <button className="btn ghost" type="button" onClick={() => setStep(1)}>
@@ -408,7 +460,11 @@ export function SetupWizardPage() {
                 disabled={saveProvider.isPending}
                 onClick={() => saveProvider.mutate()}
               >
-                {saveProvider.isPending ? 'Connecting…' : 'Connect & continue'}
+                {saveProvider.isPending
+                  ? 'Saving…'
+                  : acquisitionMode === 'indexer'
+                    ? 'Continue'
+                    : 'Connect & continue'}
               </button>
               <button className="btn ghost" type="button" onClick={skip}>
                 Skip setup

@@ -9,6 +9,7 @@ from app.services.indexers.newznab import (
     api_endpoint,
     check_indexer_connection,
     search_newznab,
+    verify_indexer_key,
 )
 
 # Realistic torznab feed (trimmed Jackett/Prowlarr-style response) with one
@@ -55,6 +56,10 @@ ERROR_XML = """<?xml version="1.0" encoding="UTF-8"?>
 
 CAPS_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <caps><server version="1.0" title="Example" /></caps>
+"""
+
+RSS_XML_EMPTY = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Example Indexer</title></channel></rss>
 """
 
 
@@ -121,3 +126,24 @@ def test_check_indexer_connection_success_and_failure():
         ok, message = check_indexer_connection("https://indexer.tld", "bad-key")
     assert ok is False
     assert "credentials" in message.lower()
+
+
+def test_verify_indexer_key_catches_a_bad_key_that_caps_would_miss():
+    """Regression: against a real NZBGeek instance, `t=caps` returns a
+    normal capabilities document for *any* apikey — valid or not — so
+    check_indexer_connection alone can report "Connected" for a key that
+    can't actually search anything. verify_indexer_key performs a real
+    t=search instead, which does reject a bad key."""
+    with patch("app.services.indexers.newznab._get", return_value=CAPS_XML):
+        # A caps-only check would pass even with a bad key.
+        ok, _ = check_indexer_connection("https://indexer.tld", "bad-key")
+    assert ok is True
+
+    with patch("app.services.indexers.newznab._get", return_value=ERROR_XML):
+        ok, message = verify_indexer_key("https://indexer.tld", "bad-key")
+    assert ok is False
+    assert "credentials" in message.lower()
+
+    with patch("app.services.indexers.newznab._get", return_value=RSS_XML_EMPTY):
+        ok, message = verify_indexer_key("https://indexer.tld", "good-key")
+    assert ok is True

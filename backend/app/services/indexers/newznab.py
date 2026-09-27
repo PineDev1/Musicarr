@@ -140,9 +140,9 @@ def _parse_items(xml_text: str, protocol: str) -> list[ReleaseCandidate]:
     return results
 
 
-def _get(url: str, params: dict[str, str]) -> str:
+def _get(url: str, params: dict[str, str], *, timeout: httpx.Timeout | None = None) -> str:
     try:
-        with httpx.Client(timeout=TIMEOUT, follow_redirects=True) as client:
+        with httpx.Client(timeout=timeout or TIMEOUT, follow_redirects=True) as client:
             resp = client.get(url, params=params, headers={"User-Agent": USER_AGENT})
             resp.raise_for_status()
             return resp.text
@@ -197,15 +197,63 @@ def search_newznab(
     return candidates
 
 
+CONNECTIVITY_CHECK_TIMEOUT = httpx.Timeout(8.0, connect=5.0)
+
+
+def verify_indexer_key(base_url: str, api_key: str, protocol: str = "usenet") -> tuple[bool, str]:
+    """Verify the API key actually works for a search, not just `t=caps`.
+
+    Discovered against a real indexer (NZBGeek): `t=caps` returns a normal
+    capabilities document for *any* apikey value, valid or not — an invalid
+    key only ever surfaces as an error on `t=search`, exactly the call
+    "Search releases" makes. A connectivity check built on `t=caps` alone
+    would show "Connected" for a key that can't actually search anything.
+    """
+    try:
+        endpoint = api_endpoint(base_url)
+        xml_text = _get(
+            endpoint,
+            {
+                "apikey": (api_key or "").strip(),
+                "t": "search",
+                "q": "test",
+                "limit": "1",
+            },
+            timeout=CONNECTIVITY_CHECK_TIMEOUT,
+        )
+        # A rejected key comes back as a normal HTTP 200 with an <error>
+        # body, not an HTTP error status — _get() alone would not catch it.
+        root = ET.fromstring(xml_text)
+        _check_error(root)
+        return True, f"Connected to {urlparse(endpoint).netloc}"
+    except IndexerError as exc:
+        return False, str(exc)
+    except ET.ParseError as exc:
+        return False, f"Indexer returned invalid XML: {exc}"
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+
+
 def check_indexer_connection(
     base_url: str,
     api_key: str,
     protocol: str = "usenet",
+    *,
+    fast: bool = False,
 ) -> tuple[bool, str]:
-    """Verify credentials via t=caps, which every newznab/torznab exposes."""
+    """Verify credentials via t=caps, which every newznab/torznab exposes.
+
+    `fast=True` uses a short timeout — for a readiness banner covering
+    several indexers, one unreachable host blocking on the full 30s search
+    timeout would make the whole page hang.
+    """
     try:
         endpoint = api_endpoint(base_url)
-        xml_text = _get(endpoint, {"t": "caps", "apikey": (api_key or "").strip()})
+        xml_text = _get(
+            endpoint,
+            {"t": "caps", "apikey": (api_key or "").strip()},
+            timeout=CONNECTIVITY_CHECK_TIMEOUT if fast else None,
+        )
         root = ET.fromstring(xml_text)
         _check_error(root)
         tag = root.tag.split("}")[-1].lower()

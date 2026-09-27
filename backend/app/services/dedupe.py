@@ -34,15 +34,45 @@ def find_orphan_db_tracks(db: Session) -> list[dict]:
     return out
 
 
+def _file_identity(path: Path) -> tuple[int, int] | None:
+    """(device, inode) — identifies the physical file regardless of which
+    symlink/library-root path was used to reach it.
+
+    A Track.path stored via one symlink (e.g. an extra library root) and the
+    same physical file walked today via a different symlink both resolve to
+    the same target, but Path.resolve() can only follow symlinks that still
+    exist and still point where they used to — if the original symlink was
+    since changed or removed, resolve() (strict=False) stops at the missing
+    component and the two sides can end up as different strings even though
+    it's the same file, misreporting an already-tracked file as an orphan.
+    st_dev/st_ino aren't affected by any of that.
+    """
+    try:
+        st = path.stat()
+        return (st.st_dev, st.st_ino)
+    except OSError:
+        return None
+
+
 def find_orphan_files(db: Session) -> list[dict]:
     """Audio files on disk under any configured library root with no
     matching Track.path."""
-    known_paths = {
-        str(Path(p).resolve())
-        for (p,) in db.execute(select(Track.path).where(Track.path.is_not(None)))
-        if p
-    }
+    known_identities: set[tuple[int, int]] = set()
+    known_paths: set[str] = set()
+    for (p,) in db.execute(select(Track.path).where(Track.path.is_not(None))):
+        if not p:
+            continue
+        identity = _file_identity(Path(p))
+        if identity is not None:
+            known_identities.add(identity)
+        else:
+            # File doesn't exist (handled separately by find_orphan_db_tracks)
+            # — fall back to the resolved string so this loop still behaves
+            # as before for that case rather than silently dropping it.
+            known_paths.add(str(Path(p).resolve()))
+
     out: list[dict] = []
+    seen_identities: set[tuple[int, int]] = set()
     seen_paths: set[str] = set()
     for root in all_library_roots(db):
         if not root.is_dir():
@@ -50,8 +80,16 @@ def find_orphan_files(db: Session) -> list[dict]:
         for path in root.rglob("*"):
             if not path.is_file() or path.suffix.lower() not in AUDIO_EXTS:
                 continue
+            identity = _file_identity(path)
             resolved = str(path.resolve())
-            if resolved in known_paths or resolved in seen_paths:
+            if identity is not None:
+                if identity in known_identities or identity in seen_identities:
+                    continue
+                seen_identities.add(identity)
+            else:
+                if resolved in known_paths or resolved in seen_paths:
+                    continue
+            if resolved in seen_paths:
                 continue
             seen_paths.add(resolved)
             try:

@@ -16,6 +16,9 @@ def _reset_library_job(tmp_path, monkeypatch):
     from app.core.database import migrate_schema
 
     migrate_schema()
+    # These tests hit the live app middleware; don't depend on the developer's
+    # local auth_enabled flag in musicarr.db.
+    monkeypatch.setattr("app.main.app_auth.auth_enabled", lambda _db: False)
     monkeypatch.setattr(
         library_jobs._store,
         "_persist_path",

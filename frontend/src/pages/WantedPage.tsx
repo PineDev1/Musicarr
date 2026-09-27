@@ -74,6 +74,7 @@ export function WantedPage() {
   const skip = useMutation({
     mutationFn: (id: number) => api.patchAlbum(id, { status: 'skipped', monitored: false }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['wanted'] }),
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const bulkDownload = useMutation({
     mutationFn: () => api.bulkDownloadAlbums([...selected]),

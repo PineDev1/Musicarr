@@ -108,6 +108,12 @@ class AppSettings(Base):
     # generated lazily on first use; subscriptions live in PushSubscription.
     vapid_public_key: Mapped[str] = mapped_column(Text, default="")
     vapid_private_key: Mapped[str] = mapped_column(Text, default="")
+    # Opt-in: automatically grab the top-scored indexer result for a newly
+    # detected album instead of requiring a manual "Search releases" pick.
+    # Off by default so an existing install never starts auto-downloading
+    # torrents/nzbs it didn't before. See services/artists.effective_auto_grab.
+    auto_grab_indexers_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_grab_min_score: Mapped[float] = mapped_column(Float, default=20.0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -143,6 +149,8 @@ class Artist(Base):
     download_mode: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
     # None = inherit AppSettings.bitrate; "flac" | "320" | "128" overrides it
     quality_pref: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
+    # None = inherit AppSettings.auto_grab_indexers_enabled; "on" | "off" overrides it
+    auto_grab_override: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
