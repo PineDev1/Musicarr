@@ -271,8 +271,14 @@ export function ArtistPage() {
     data.missing_count ??
     (data.albums || []).filter((a) => a.status === 'missing').length
   const related = data.related_artists || []
-  const mainAlbums = data.albums.filter((a) => a.skip_reason_code !== 'junk')
-  const junkAlbums = data.albums.filter((a) => a.skip_reason_code === 'junk')
+  // Skipped albums and singles clutter the main list without adding much —
+  // tuck them into the same collapsed section junk releases already use,
+  // hidden by default, so the main list only shows what's actually wanted
+  // or downloaded.
+  const isHidden = (a: (typeof data.albums)[number]) =>
+    a.skip_reason_code === 'junk' || a.status === 'skipped' || a.album_type === 'single'
+  const mainAlbums = data.albums.filter((a) => !isHidden(a))
+  const junkAlbums = data.albums.filter(isHidden)
 
   const jobForRow = (album: (typeof data.albums)[number]) => jobForAlbum(album.id, album.title)
   const selectableIds = mainAlbums
@@ -699,7 +705,7 @@ export function ArtistPage() {
 
       {junkAlbums.length > 0 && (
         <details className="junk-releases">
-          <summary>Junk releases ({junkAlbums.length})</summary>
+          <summary>Skipped, singles &amp; junk ({junkAlbums.length})</summary>
           <div className="album-list">
             {junkAlbums.map((album) => {
               const via = (album.provider || 'unknown').toLowerCase()
@@ -734,17 +740,40 @@ export function ArtistPage() {
                     )}
                   </div>
                   <div className="row-actions">
-                    <button
-                      className="btn ghost"
-                      onClick={() =>
-                        patchAlbum.mutate({
-                          albumId: album.id,
-                          body: { status: 'wanted', monitored: true },
-                        })
-                      }
-                    >
-                      Want
-                    </button>
+                    {album.status === 'skipped' ? (
+                      <button
+                        className="btn ghost"
+                        onClick={() =>
+                          patchAlbum.mutate({
+                            albumId: album.id,
+                            body: { status: 'wanted', monitored: true },
+                          })
+                        }
+                      >
+                        Want
+                      </button>
+                    ) : album.status !== 'downloaded' && album.status !== 'missing' ? (
+                      <>
+                        <button
+                          className="btn secondary"
+                          onClick={() => downloadAlbum.mutate({ albumId: album.id })}
+                          disabled={downloadAlbum.isPending}
+                        >
+                          Download
+                        </button>
+                        <button
+                          className="btn ghost"
+                          onClick={() =>
+                            patchAlbum.mutate({
+                              albumId: album.id,
+                              body: { status: 'skipped', monitored: false },
+                            })
+                          }
+                        >
+                          Skip
+                        </button>
+                      </>
+                    ) : null}
                   </div>
                 </div>
               )
