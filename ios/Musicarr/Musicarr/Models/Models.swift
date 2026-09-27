@@ -166,6 +166,11 @@ struct ContinueListening: Codable {
     }
 }
 
+struct Lyrics: Codable {
+    var plain: String?
+    var synced: String?
+}
+
 struct APIErrorBody: Codable {
     var detail: String?
 }
