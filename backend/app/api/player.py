@@ -39,6 +39,8 @@ from app.models import (
     Track,
 )
 from app.models.schemas import (
+    PlayerActivityEntryOut,
+    PlayerActivityOut,
     PlayerAlbumOut,
     PlayerArtistDetailOut,
     PlayerArtistOut,
@@ -795,6 +797,7 @@ def _prefs_out(user) -> PlayerPrefsOut:
         show_recently_added=bool(getattr(user, "show_recently_added", True)),
         default_shuffle=bool(getattr(user, "default_shuffle", False)),
         default_repeat=getattr(user, "default_repeat", None) or "off",
+        share_listening_activity=bool(getattr(user, "share_listening_activity", False)),
     )
 
 
@@ -831,6 +834,34 @@ def update_prefs(payload: PlayerPrefsUpdate, request: Request, db: Session = Dep
     db.commit()
     db.refresh(user)
     return _prefs_out(user)
+
+
+@router.get("/activity", response_model=PlayerActivityOut)
+def friend_activity(request: Request, db: Session = Depends(get_db)):
+    """Opt-in feed of what other player accounts are listening to — both
+    right now (live presence) and recently (play history). Empty for anyone
+    who hasn't opted in via /me/prefs share_listening_activity, and never
+    includes the current user's own activity."""
+    from app.services import player_activity
+
+    user = _current_player_user(request, db)
+
+    def _entry_out(d: dict) -> PlayerActivityEntryOut:
+        return PlayerActivityEntryOut(
+            user_id=d["user_id"],
+            username=d["username"],
+            avatar_url=_avatar_url(d.get("user")),
+            track_id=d["track_id"],
+            title=d.get("title") or "",
+            artist_name=d.get("artist_name") or "",
+            cover_url=d.get("cover_url"),
+            played_at=d.get("played_at"),
+        )
+
+    return PlayerActivityOut(
+        now_playing=[_entry_out(d) for d in player_activity.now_playing_friends(db, user.id)],
+        recent=[_entry_out(d) for d in player_activity.recent_friend_activity(db, user.id)],
+    )
 
 
 @router.get("/favorites", response_model=list[PlayerTrackOut])
@@ -1190,6 +1221,27 @@ def get_builtin(kind: str, request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Shuffle Mix is disabled")
     name, loader = mapping[kind]
     out = _builtin_meta(kind, name, loader())
+    db.commit()
+    return out
+
+
+@router.get("/library/mixes", response_model=list[PlayerPlaylistOut])
+def library_mixes(request: Request, db: Session = Depends(get_db)):
+    """A few named "Made For You" mixes, each seeded from an artist the
+    user actually listens to (or has favorited) plus its Last.fm-similar
+    artists — distinct per-artist mixes, not one flat recommended list."""
+    from app.services.player_mixes import made_for_you_mixes
+
+    user = _current_player_user(request, db)
+    mixes = made_for_you_mixes(db, user.id)
+    out = [
+        _builtin_meta(
+            f"mix-{artist.id}",
+            f"{artist.name} Mix",
+            [_track_out(t) for t in tracks],
+        )
+        for artist, tracks in mixes
+    ]
     db.commit()
     return out
 

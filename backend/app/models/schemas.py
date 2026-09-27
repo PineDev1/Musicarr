@@ -850,6 +850,7 @@ class PlayerPrefsOut(BaseModel):
     show_recently_added: bool = True
     default_shuffle: bool = False
     default_repeat: str = "off"
+    share_listening_activity: bool = False
 
 
 class PlayerPrefsUpdate(BaseModel):
@@ -867,6 +868,23 @@ class PlayerPrefsUpdate(BaseModel):
     show_recently_added: bool | None = None
     default_shuffle: bool | None = None
     default_repeat: str | None = None
+    share_listening_activity: bool | None = None
+
+
+class PlayerActivityEntryOut(BaseModel):
+    user_id: int
+    username: str
+    avatar_url: str | None = None
+    track_id: int
+    title: str
+    artist_name: str
+    cover_url: str | None = None
+    played_at: datetime | None = None
+
+
+class PlayerActivityOut(BaseModel):
+    now_playing: list[PlayerActivityEntryOut] = []
+    recent: list[PlayerActivityEntryOut] = []
 
 
 class PlayerArtistDetailOut(BaseModel):

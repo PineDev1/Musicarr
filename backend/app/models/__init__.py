@@ -444,6 +444,10 @@ class PlayerUser(Base):
     # attacker can't send another user a link authorizing the attacker's own
     # Last.fm account and have it silently bind to the victim's session.
     lastfm_pending_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Opt-in, off by default — sharing what you're listening to with other
+    # player accounts on this instance is a meaningfully different privacy
+    # posture than the existing admin-only now-playing monitor.
+    share_listening_activity: Mapped[bool] = mapped_column(Boolean, default=False)
 
     playlists: Mapped[list["PlayerPlaylist"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
