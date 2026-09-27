@@ -221,6 +221,13 @@ way any other container does — add it manually from the **Docker** tab:
 5. Apply, then open `http://<unraid-ip>:8787` — the setup wizard walks you through the rest.
    Set the **library path** in the wizard to `/music` (the container path from step 3).
 
+**Download client in a different container?** (qBittorrent, SABnzbd, etc. running as their own
+Unraid Docker apps) Add an **extra Variable** — `MUSICARR_REMOTE_PATH_MAPPINGS`, same JSON format
+as the [Remote path mappings](#7-remote-path-mappings-download-client-in-another-container) section
+above — so Musicarr can translate that container's reported paths into its own `/config`/`/music`
+mounts. It's already in [`unraid-template.xml`](unraid-template.xml) as an advanced/optional field
+if you're using the template.
+
 **Updating:** click the container's icon → **Check for Updates** (or re-pull the `latest` tag).
 Since Musicarr is a single SQLite-backed process, keep this at **one container instance** — don't
 run a second one against the same `/config` folder.
