@@ -10,6 +10,7 @@ import { PlayerGenreDetailPage } from './PlayerGenreDetailPage'
 import { PlayerHomePage } from './PlayerHomePage'
 import { PlayerLayout } from './PlayerLayout'
 import { PlayerLoginPage } from './PlayerLoginPage'
+import { PlayerOfflinePage } from './PlayerOfflinePage'
 import { PlayerPlaylistDetailPage } from './PlayerPlaylistDetailPage'
 import { PlayerPlaylistsPage } from './PlayerPlaylistsPage'
 import { PlayerQueueProvider } from './PlayerQueueContext'
@@ -97,6 +98,7 @@ export function PlayerApp() {
           <Route path="albums/:id" element={<PlayerAlbumPage />} />
           <Route path="songs" element={<PlayerSongsPage />} />
           <Route path="explore" element={<PlayerExplorePage />} />
+          <Route path="offline" element={<PlayerOfflinePage />} />
           <Route path="genres/:name" element={<PlayerGenreDetailPage kind="genre" />} />
           <Route path="moods/:name" element={<PlayerGenreDetailPage kind="mood" />} />
           <Route path="history" element={<PlayerHistoryPage />} />

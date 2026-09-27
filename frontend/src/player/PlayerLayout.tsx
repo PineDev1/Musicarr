@@ -5,6 +5,7 @@ import { useToast } from '../Toast'
 import {
   IconBack,
   IconClose,
+  IconDownload,
   IconForward,
   IconGrip,
   IconHeart,
@@ -36,6 +37,7 @@ const LIBRARY_LINKS = [
   { to: '/player/albums', label: 'Albums', icon: IconLibrary },
   { to: '/player/songs', label: 'Songs', icon: IconMusic },
   { to: '/player/explore', label: 'Explore', icon: IconGrip },
+  { to: '/player/offline', label: 'Offline downloads', icon: IconDownload },
 ]
 
 export function PlayerLayout({ displayName, avatarUrl, userId }: Props) {

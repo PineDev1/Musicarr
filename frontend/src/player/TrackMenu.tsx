@@ -3,6 +3,12 @@ import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useToast } from '../Toast'
 import { IconMore } from './icons'
+import {
+  downloadTrackForOffline,
+  isOfflineSupported,
+  isTrackOffline,
+  removeOfflineTrack,
+} from './offlineCache'
 import { playerApi, type PlayerTrack } from './playerApi'
 import { usePlayerQueue } from './PlayerQueueContext'
 
@@ -45,6 +51,20 @@ export function TrackMenu({ track, queue, hideNavigation, onRemove, removeLabel 
     staleTime: 15_000,
   })
   const liked = (favIds.data?.ids || []).includes(track.id)
+  const [offline, setOffline] = useState(() => isTrackOffline(track.id))
+
+  const toggleOffline = useMutation({
+    mutationFn: async () => {
+      if (offline) await removeOfflineTrack(track.id)
+      else await downloadTrackForOffline(track)
+      return !offline
+    },
+    onSuccess: (nowOffline) => {
+      setOffline(nowOffline)
+      toast.push(nowOffline ? 'Downloaded for offline listening' : 'Removed offline download', 'ok')
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
 
   const toggleFav = useMutation({
     mutationFn: async () => {
@@ -193,6 +213,16 @@ export function TrackMenu({ track, queue, hideNavigation, onRemove, removeLabel 
           <button type="button" role="menuitem" onClick={run(() => share.mutate())}>
             Share song…
           </button>
+          {isOfflineSupported() && (
+            <button
+              type="button"
+              role="menuitem"
+              disabled={toggleOffline.isPending}
+              onClick={run(() => toggleOffline.mutate())}
+            >
+              {offline ? 'Remove offline download' : 'Download for offline'}
+            </button>
+          )}
 
           {!hideNavigation && (
             <>
