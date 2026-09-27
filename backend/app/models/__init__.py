@@ -114,6 +114,12 @@ class AppSettings(Base):
     # torrents/nzbs it didn't before. See services/artists.effective_auto_grab.
     auto_grab_indexers_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_grab_min_score: Mapped[float] = mapped_column(Float, default=20.0)
+    # Periodic re-search of the whole Wanted list for artists that already
+    # have auto-grab on — a no-op otherwise, so this stays default-on without
+    # changing anything for installs that haven't opted into auto-grab.
+    # See services/indexer_engine.WantedIndexerSweep.
+    indexer_sweep_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    indexer_sweep_interval_minutes: Mapped[int] = mapped_column(Integer, default=360)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

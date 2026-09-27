@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
 import { useToast } from '../Toast'
+import { ReleaseResultsTable } from '../components/ReleaseResultsTable'
 
 function formatDuration(sec: number) {
   if (!sec) return '—'
@@ -213,69 +214,21 @@ export function AlbumPage() {
             Ranked by title/artist match, format, and seeders. Nothing here is grabbed
             automatically — pick one to send it to your configured download client.
           </p>
-          {releases.isLoading && <p className="muted">Searching indexers…</p>}
-          {releases.error && <p className="error">{(releases.error as Error).message}</p>}
-          {releases.data && releases.data.errors.length > 0 && (
-            <div className="banner danger" style={{ marginBottom: '0.75rem' }}>
-              <strong>Some indexers failed to search:</strong>
-              <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.2rem' }}>
-                {releases.data.errors.map((e) => (
-                  <li key={e.indexer_id}>
-                    {e.indexer_name}: {e.message}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {releases.data && releases.data.results.length === 0 && releases.data.errors.length === 0 && (
-            <p className="muted">No results. Add or check your indexers under Settings → Indexers.</p>
-          )}
-          {releases.data && releases.data.results.length > 0 && (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Release</th>
-                  <th>Indexer</th>
-                  <th>Size</th>
-                  <th>Seeders</th>
-                  <th>Score</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {releases.data.results.map((r, i) => (
-                  <tr key={`${r.indexer_id}-${i}`}>
-                    <td style={{ maxWidth: 420, wordBreak: 'break-word' }}>{r.title}</td>
-                    <td className="muted">{r.indexer_name}</td>
-                    <td className="muted">{r.size ? `${(r.size / (1024 * 1024)).toFixed(0)} MB` : '—'}</td>
-                    <td className="muted">{r.protocol === 'torrent' ? r.seeders : '—'}</td>
-                    <td>
-                      <span className={`badge ${r.score >= 10 ? 'queued' : 'skipped'}`}>
-                        {r.score.toFixed(1)}
-                      </span>
-                    </td>
-                    <td className="row-actions">
-                      <button
-                        type="button"
-                        className="btn ghost"
-                        disabled={grab.isPending}
-                        onClick={() =>
-                          grab.mutate({
-                            grab_url: r.grab_url,
-                            protocol: r.protocol as 'usenet' | 'torrent',
-                            indexer_id: r.indexer_id,
-                            title: r.title,
-                          })
-                        }
-                      >
-                        Grab
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+          <ReleaseResultsTable
+            results={releases.data?.results}
+            errors={releases.data?.errors}
+            isLoading={releases.isLoading}
+            error={releases.error as Error | null}
+            grabPending={grab.isPending}
+            onGrab={(r) =>
+              grab.mutate({
+                grab_url: r.grab_url,
+                protocol: r.protocol as 'usenet' | 'torrent',
+                indexer_id: r.indexer_id,
+                title: r.title,
+              })
+            }
+          />
         </div>
       )}
 

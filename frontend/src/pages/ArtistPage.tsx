@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, type DownloadJob } from '../api'
 import { useToast } from '../Toast'
+import { ReleaseResultsTable } from '../components/ReleaseResultsTable'
 
 type LiveJob = {
   id: number
@@ -25,10 +26,49 @@ export function ArtistPage() {
   const toast = useToast()
   const [liveJobs, setLiveJobs] = useState<LiveJob[]>([])
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [showIndexerSearch, setShowIndexerSearch] = useState(false)
   const { data, isLoading, error } = useQuery({
     queryKey: ['artist', artistId],
     queryFn: () => api.artist(artistId),
     enabled: Number.isFinite(artistId),
+  })
+  const health = useQuery({ queryKey: ['health'], queryFn: api.health })
+  const artistReleases = useQuery({
+    queryKey: ['artist-releases', artistId],
+    queryFn: () => api.searchReleasesForArtist(artistId),
+    enabled: showIndexerSearch && Number.isFinite(artistId),
+  })
+  const grabFromArtist = useMutation({
+    mutationFn: (release: {
+      grab_url: string
+      protocol: 'usenet' | 'torrent'
+      indexer_id: number
+      title: string
+      matched_album_id: number | null
+    }) =>
+      api.grabRelease(
+        release.matched_album_id != null
+          ? {
+              album_id: release.matched_album_id,
+              grab_url: release.grab_url,
+              protocol: release.protocol,
+              indexer_id: release.indexer_id,
+              title: release.title,
+            }
+          : {
+              artist_id: artistId,
+              grab_url: release.grab_url,
+              protocol: release.protocol,
+              indexer_id: release.indexer_id,
+              title: release.title,
+            },
+      ),
+    onSuccess: () => {
+      toast.push('Sent to download client', 'ok')
+      qc.invalidateQueries({ queryKey: ['queue'] })
+      qc.invalidateQueries({ queryKey: ['artist', artistId] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
   })
   const { data: queueJobs } = useQuery({
     queryKey: ['queue'],
@@ -457,7 +497,40 @@ export function ArtistPage() {
         >
           Remove artist
         </button>
+        {health.data && health.data.resolved_acquisition_mode !== 'streaming' && (
+          <button className="btn secondary" onClick={() => setShowIndexerSearch((v) => !v)}>
+            {showIndexerSearch ? 'Hide indexer search' : 'Search indexers for this artist'}
+          </button>
+        )}
       </div>
+
+      {showIndexerSearch && (
+        <div className="card" style={{ marginBottom: '1rem' }}>
+          <h3 style={{ margin: '0 0 0.25rem', fontSize: '1.05rem' }}>Indexer releases for {data.name}</h3>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Every indexer result for this artist, mixed across all their releases. Rows tagged
+            "New release" don't match an album Musicarr already knows about — grabbing one
+            resolves or creates the right album automatically (via MusicBrainz when possible).
+          </p>
+          <ReleaseResultsTable
+            results={artistReleases.data?.results}
+            errors={artistReleases.data?.errors}
+            isLoading={artistReleases.isLoading}
+            error={artistReleases.error as Error | null}
+            grabPending={grabFromArtist.isPending}
+            showAlbumBadge
+            onGrab={(r) =>
+              grabFromArtist.mutate({
+                grab_url: r.grab_url,
+                protocol: r.protocol as 'usenet' | 'torrent',
+                indexer_id: r.indexer_id,
+                title: r.title,
+                matched_album_id: r.matched_album_id,
+              })
+            }
+          />
+        </div>
+      )}
 
       {selectableIds.length > 0 && (
         <div className="toolbar" style={{ flexWrap: 'wrap' }}>

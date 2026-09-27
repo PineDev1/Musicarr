@@ -12,52 +12,12 @@ from app.models import Artist
 from app.services.artists import effective_auto_grab, effective_download_mode, sync_artist_albums
 from app.services.download_queue import download_queue, resolve_download_method
 from app.services.history import add_history
+from app.services.indexer_engine import try_auto_grab_release
 from app.services.providers import get_provider
 from app.services.providers.base import ProviderError
 from app.services.settings_service import ensure_settings
 
 logger = logging.getLogger("musicarr.monitor")
-
-
-def _try_auto_grab_from_indexer(db, artist: Artist, album, settings) -> bool:
-    """Auto-grab the top-scored indexer result for a newly detected album.
-
-    Opt-in (see AppSettings.auto_grab_indexers_enabled / Artist.
-    auto_grab_override, resolved by effective_auto_grab) and gated well
-    above release_scoring.REJECT_CEILING — this is the first automatic
-    (non-manual) indexer action in the app, so every outcome is logged to
-    HistoryEvent for auditability.
-    """
-    from app.services.acquisition_actions import GrabError, grab_release_for_album
-    from app.services.indexers.search import pick_best, search_album
-
-    candidates, _errors = search_album(db, artist.name, album.title, year=None)
-    min_score = float(getattr(settings, "auto_grab_min_score", 20.0) or 20.0)
-    best = pick_best(candidates, min_score=min_score)
-    if not best:
-        return False
-    try:
-        grab_release_for_album(
-            db,
-            album,
-            grab_url=best.grab_url,
-            protocol=best.protocol,
-            title=best.title,
-            indexer_id=best.indexer_id or None,
-        )
-    except GrabError as exc:
-        add_history(
-            db,
-            "auto_grab_failed",
-            f"Auto-grab failed for {artist.name} – {album.title}: {exc}",
-        )
-        return False
-    add_history(
-        db,
-        "auto_grab",
-        f"Auto-grabbed '{best.title}' (score {best.score:.1f}) for {artist.name} – {album.title}",
-    )
-    return True
 
 
 class ReleaseMonitor:
@@ -156,7 +116,7 @@ class ReleaseMonitor:
                             elif (
                                 resolve_download_method(settings) != "streaming"
                                 and effective_auto_grab(db, artist, settings)
-                                and _try_auto_grab_from_indexer(db, artist, album, settings)
+                                and try_auto_grab_release(db, artist, album, settings)
                             ):
                                 queued += 1
                             else:

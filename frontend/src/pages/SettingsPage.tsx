@@ -166,6 +166,8 @@ export function SettingsPage() {
   const [notifyOnHealthAlerts, setNotifyOnHealthAlerts] = useState(true)
   const [autoGrabEnabled, setAutoGrabEnabled] = useState(false)
   const [autoGrabMinScore, setAutoGrabMinScore] = useState(20)
+  const [indexerSweepEnabled, setIndexerSweepEnabled] = useState(true)
+  const [indexerSweepIntervalMinutes, setIndexerSweepIntervalMinutes] = useState(360)
 
   useEffect(() => {
     if (!data) return
@@ -218,6 +220,8 @@ export function SettingsPage() {
     setNotifyOnHealthAlerts(data.notify_on_health_alerts ?? true)
     setAutoGrabEnabled(data.auto_grab_indexers_enabled ?? false)
     setAutoGrabMinScore(data.auto_grab_min_score ?? 20)
+    setIndexerSweepEnabled(data.indexer_sweep_enabled ?? true)
+    setIndexerSweepIntervalMinutes(data.indexer_sweep_interval_minutes ?? 360)
   }, [data])
 
   const save = useMutation({
@@ -241,6 +245,8 @@ export function SettingsPage() {
         streaming_enabled: streamingEnabled,
         auto_grab_indexers_enabled: autoGrabEnabled,
         auto_grab_min_score: autoGrabMinScore,
+        indexer_sweep_enabled: indexerSweepEnabled,
+        indexer_sweep_interval_minutes: indexerSweepIntervalMinutes,
         include_albums: includeAlbums,
         include_eps: includeEps,
         include_singles: includeSingles,
@@ -1200,6 +1206,39 @@ export function SettingsPage() {
                     <span className="muted tiny">
                       Higher is stricter. Releases scoring at or below this are left for manual
                       review. Can be overridden per artist on the artist page.
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+            {preferredDownloadMethod !== 'streaming' && autoGrabEnabled && (
+              <div className="field">
+                <label>Periodic Wanted-list sweep</label>
+                <div className="checks">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={indexerSweepEnabled}
+                      onChange={(e) => setIndexerSweepEnabled(e.target.checked)}
+                    />
+                    Periodically re-search indexers for everything already in Wanted, not just
+                    newly detected releases — catches releases that weren't available before
+                  </label>
+                </div>
+                {indexerSweepEnabled && (
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <label>Sweep interval (minutes)</label>
+                    <input
+                      type="number"
+                      min={30}
+                      max={1440}
+                      value={indexerSweepIntervalMinutes}
+                      onChange={(e) => setIndexerSweepIntervalMinutes(Number(e.target.value))}
+                      style={{ maxWidth: 120 }}
+                    />
+                    <span className="muted tiny">
+                      Only affects artists with auto-grab enabled (above, or per-artist). Coarse
+                      on purpose — this hits every indexer once per wanted album.
                     </span>
                   </div>
                 )}

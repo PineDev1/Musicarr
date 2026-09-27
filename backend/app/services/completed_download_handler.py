@@ -275,8 +275,32 @@ class CompletedDownloadHandler:
             else None
         )
         if not album:
-            self._fail_job(db, job, "Album for this job no longer exists")
-            return "failed"
+            # job.album_id is stale/missing (an artist-level-search grab has
+            # no album yet, or the Album row was deleted after the grab) —
+            # resolve or create the right one from the artist name + release
+            # title instead of failing outright. Only artist-level-search
+            # grabs and this fallback ever reach this branch; a normal
+            # per-album grab always has a real album_id from the start.
+            if (job.artist_name or "").strip():
+                from app.services.indexer_engine import resolve_or_create_album_for_release
+                from app.services.library import _ensure_local_artist, _find_artist_by_name
+
+                artist_row = _find_artist_by_name(db, job.artist_name) or _ensure_local_artist(
+                    db, job.artist_name
+                )
+                album = resolve_or_create_album_for_release(
+                    db, artist_row, job.release_title or job.album_title
+                )
+                job.album_id = album.id
+                db.commit()
+                album = db.scalar(
+                    select(Album)
+                    .options(joinedload(Album.tracks), joinedload(Album.artist))
+                    .where(Album.id == album.id)
+                )
+            if not album:
+                self._fail_job(db, job, "Album for this job no longer exists")
+                return "failed"
 
         artist: Artist | None = album.artist
         artist_name = artist.name if artist else (job.artist_name or "Unknown Artist")
