@@ -61,6 +61,10 @@ async def lifespan(_: FastAPI):
     db = SessionLocal()
     try:
         ensure_settings(db)
+        from app.core.config import settings as app_config
+        from app.services.path_mapping import seed_remote_path_mappings_from_env
+
+        seed_remote_path_mappings_from_env(db, app_config.remote_path_mappings)
     finally:
         db.close()
     download_queue.start()

@@ -161,6 +161,38 @@ Musicarr does **not** terminate TLS itself. Put Traefik (or another reverse prox
 
 With HTTPS mode on, Musicarr sets `Secure` session cookies so form login works through Traefik.
 
+### 7. Remote path mappings (download client in another container)
+
+If qBittorrent/SABnzbd runs in a **different container (or host)** than Musicarr, it reports
+download paths in its own filesystem — e.g. it thinks a finished download is at `/downloads/Some
+Album`, but Musicarr's container has that same folder mounted at `/config/downloads`. Musicarr
+never sees the file and the import silently fails. This is the same problem Sonarr/Radarr/Lidarr
+solve with **Remote Path Mappings**, and Musicarr works the same way:
+
+1. Make sure Musicarr can actually reach the finished-download folder somehow (mount the same
+   host folder into both containers, even if it's at a different path in each).
+2. Under **Settings → Downloads → Download clients**, open **Remote path mappings** and add a row:
+   - **Host** — the download client's hostname as configured on its Download Client entry (leave
+     blank to match any host)
+   - **Remote path** — the path *the download client* reports (check its own settings/logs)
+   - **Local path** — where that same folder is mounted *inside Musicarr's container*
+3. Save. Musicarr rewrites the client's reported path using the longest matching prefix, so you
+   can add more specific nested mappings alongside a catch-all one.
+
+**Docker/compose users:** you can also seed or manage these mappings from the environment instead
+of the UI, which is handy for keeping your compose file as the single source of truth:
+
+```yaml
+environment:
+  MUSICARR_REMOTE_PATH_MAPPINGS: >-
+    [{"host": "qbittorrent", "remote_path": "/downloads", "local_path": "/config/downloads"}]
+```
+
+It's a JSON array of `{"host", "remote_path", "local_path"}` objects (`host` is optional). Applied
+on every startup: a mapping is created if it doesn't exist yet, and its `local_path` is kept in
+sync with the env value if it does — so this is the authoritative source for any mapping you
+define here, but editing/removing mappings you *didn't* define here through the UI is unaffected.
+
 ---
 
 ## Install on Unraid
@@ -275,6 +307,11 @@ hang indefinitely. Then check `docker compose logs -f musicarr` for a startup er
 Fixed as of v1.7 — update to the latest image. If it recurs, check
 `docker compose logs -f musicarr` for repeated `UNIQUE constraint failed` or
 `database is locked` errors and open an issue with the surrounding log lines.
+
+**An indexer/download-client grab finishes but never imports.**
+Almost always a path mismatch: the download client is in a different container than Musicarr and
+reports a path Musicarr can't read. See [Remote path mappings](#7-remote-path-mappings-download-client-in-another-container)
+above.
 
 ---
 

@@ -13,4 +13,9 @@ services:
       MUSICARR_MUSIC_DIR: /music
       MUSICARR_HOST: 0.0.0.0
       MUSICARR_PORT: 8787
+      # Optional — only needed if a download client (qBittorrent/SABnzbd) runs in
+      # a different container/host and reports paths Musicarr can't read as-is.
+      # See README's "Remote path mappings" section.
+      # MUSICARR_REMOTE_PATH_MAPPINGS: >-
+      #   [{"host": "qbittorrent", "remote_path": "/downloads", "local_path": "/config/downloads"}]
     restart: unless-stopped
