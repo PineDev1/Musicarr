@@ -148,6 +148,23 @@ export type PlayerPrefs = {
   show_recently_added: boolean
   default_shuffle: boolean
   default_repeat: PlayerRepeatMode
+  share_listening_activity: boolean
+}
+
+export type PlayerActivityEntry = {
+  user_id: number
+  username: string
+  avatar_url: string | null
+  track_id: number
+  title: string
+  artist_name: string
+  cover_url: string | null
+  played_at: string | null
+}
+
+export type PlayerActivity = {
+  now_playing: PlayerActivityEntry[]
+  recent: PlayerActivityEntry[]
 }
 
 export type NowPlayingRow = {
@@ -198,6 +215,7 @@ export const DEFAULT_PREFS: PlayerPrefs = {
   show_recently_added: true,
   default_shuffle: false,
   default_repeat: 'off',
+  share_listening_activity: false,
 }
 
 export const playerApi = {
@@ -225,6 +243,7 @@ export const playerApi = {
     cover_url?: string | null
   }) => request<{ ok: boolean }>('/me/playing', { method: 'POST', body: JSON.stringify(body) }),
   commands: () => request<{ stop: boolean }>('/me/commands'),
+  activity: () => request<PlayerActivity>('/activity'),
   lastfmStatus: () => request<{ connected: boolean; username: string | null }>('/lastfm/status'),
   lastfmStart: () => request<{ auth_url: string }>('/lastfm/start'),
   lastfmCallback: (token: string) =>
@@ -287,6 +306,7 @@ export const playerApi = {
     request<{ ok: boolean }>(`/favorites/${trackId}`, { method: 'DELETE' }),
   builtins: () => request<PlayerPlaylist[]>('/library/builtins'),
   builtin: (kind: string) => request<PlayerPlaylist>(`/library/builtins/${kind}`),
+  mixes: () => request<PlayerPlaylist[]>('/library/mixes'),
   playlists: () => request<PlayerPlaylist[]>('/playlists'),
   playlist: (id: number) => request<PlayerPlaylist>(`/playlists/${id}`),
   createPlaylist: (name: string, is_smart = false) =>

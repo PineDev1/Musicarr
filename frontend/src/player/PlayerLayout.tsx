@@ -461,6 +461,20 @@ export function PlayerLayout({ displayName, avatarUrl, userId }: Props) {
               Show Shuffle Mix
             </label>
 
+            <h3>Activity</h3>
+            <label className="checks">
+              <input
+                type="checkbox"
+                checked={prefs.share_listening_activity}
+                onChange={(e) => patchPref('share_listening_activity', e.target.checked)}
+              />
+              Share what I'm listening to with other accounts
+            </label>
+            <p className="muted tiny" style={{ marginTop: 0 }}>
+              Off by default. When on, other accounts on this instance can see what you're
+              playing now and recently played — you'll see theirs too, if they opt in.
+            </p>
+
             <h3>Playback</h3>
             <label className="checks">
               <input

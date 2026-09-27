@@ -1,9 +1,54 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { IconPlay, IconShuffle } from './icons'
-import { DEFAULT_PREFS, playerApi, type PlayerAlbum } from './playerApi'
+import { DEFAULT_PREFS, playerApi, type PlayerActivityEntry, type PlayerAlbum, type PlayerTrack } from './playerApi'
 import { usePlayerQueue } from './PlayerQueueContext'
 import { AlbumShelf, ArtistShelf, Section, SongShelf } from './PlayerShelves'
+
+function trackFromActivity(entry: PlayerActivityEntry): PlayerTrack {
+  return {
+    id: entry.track_id,
+    title: entry.title,
+    track_no: 0,
+    disc_no: 1,
+    duration: 0,
+    album_id: 0,
+    album_title: '',
+    artist_id: 0,
+    artist_name: entry.artist_name,
+    cover_url: entry.cover_url,
+    quality: '',
+    format: '',
+  }
+}
+
+function ActivityRow({ entry, q }: { entry: PlayerActivityEntry; q: ReturnType<typeof usePlayerQueue> }) {
+  const track = trackFromActivity(entry)
+  return (
+    <div className="am-continue" style={{ marginBottom: '0.5rem' }}>
+      {entry.avatar_url ? (
+        <img src={entry.avatar_url} alt="" style={{ borderRadius: '50%' }} />
+      ) : entry.cover_url ? (
+        <img src={entry.cover_url} alt="" />
+      ) : (
+        <div className="am-continue-ph" />
+      )}
+      <div className="am-continue-meta">
+        <strong>{entry.username}</strong>
+        <span className="muted">
+          {entry.title} — {entry.artist_name}
+        </span>
+      </div>
+      <button
+        type="button"
+        className="btn ghost"
+        onClick={() => q.playTrack(track, [track], `${entry.username}'s activity`, 0)}
+      >
+        <IconPlay size={16} />
+      </button>
+    </div>
+  )
+}
 
 /** Recently added albums are derived from the newest playable tracks. */
 function albumsFromTracks(tracks: { album_id: number; album_title: string; artist_id: number; artist_name: string; cover_url: string | null }[]) {
@@ -42,6 +87,12 @@ export function PlayerHomePage() {
     queryFn: playerApi.recommended,
     enabled: prefs.show_recommended,
   })
+  const mixes = useQuery({ queryKey: ['player-mixes'], queryFn: playerApi.mixes })
+  const activity = useQuery({
+    queryKey: ['player-activity'],
+    queryFn: playerApi.activity,
+    refetchInterval: 30_000,
+  })
   const builtins = useQuery({ queryKey: ['player-builtins'], queryFn: playerApi.builtins })
   const artists = useQuery({ queryKey: ['player-artists'], queryFn: playerApi.artists })
 
@@ -53,6 +104,7 @@ export function PlayerHomePage() {
 
   const empty =
     !continueTrack &&
+    !mixes.data?.length &&
     !recommended.data?.length &&
     !recentlyPlayed?.tracks.length &&
     !recentlyAdded?.tracks.length &&
@@ -125,6 +177,41 @@ export function PlayerHomePage() {
           </div>
         </Section>
       )}
+
+      {!!activity.data?.now_playing.length && (
+        <Section title="Listening now" subtitle="Friends who opted in to share their activity">
+          {activity.data.now_playing.map((entry) => (
+            <ActivityRow key={`${entry.user_id}-${entry.track_id}`} entry={entry} q={q} />
+          ))}
+        </Section>
+      )}
+
+      {!activity.data?.now_playing.length && !!activity.data?.recent.length && (
+        <Section title="Recently played by friends">
+          {activity.data.recent.slice(0, 5).map((entry) => (
+            <ActivityRow key={`${entry.user_id}-${entry.track_id}-${entry.played_at}`} entry={entry} q={q} />
+          ))}
+        </Section>
+      )}
+
+      {mixes.data?.map((mix) => (
+        <Section
+          key={mix.id}
+          title={mix.name}
+          subtitle="Made for you, based on what you play"
+          action={
+            <button
+              type="button"
+              className="am-section-link"
+              onClick={() => q.playTracks(mix.tracks, 0, mix.name)}
+            >
+              Play all
+            </button>
+          }
+        >
+          <SongShelf tracks={mix.tracks.slice(0, 12)} sourceLabel={mix.name} />
+        </Section>
+      ))}
 
       {prefs.show_recommended && !!recommended.data?.length && (
         <Section title="Recommended for you" subtitle="Based on what you've been playing">

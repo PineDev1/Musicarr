@@ -243,6 +243,7 @@ def migrate_schema(engine_: Engine | None = None) -> None:
         "lastfm_username": "VARCHAR(128)",
         "lastfm_session_key": "VARCHAR(64)",
         "lastfm_pending_token": "VARCHAR(64)",
+        "share_listening_activity": "BOOLEAN DEFAULT 0",
     }
     existing_pu = existing_columns("player_users")
     for name, definition in player_user_cols.items():
