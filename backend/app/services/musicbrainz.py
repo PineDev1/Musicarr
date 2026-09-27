@@ -350,6 +350,35 @@ def resolve_artist(name: str, *, fast: bool = False) -> str | None:
     return None
 
 
+def search_artists(query: str, *, limit: int = 25) -> list[dict]:
+    """Multiple candidate artist matches — the fallback artist-search path
+    for when there's no working streaming-provider session to search
+    instead (e.g. an indexer-only setup). No images (MusicBrainz doesn't
+    have artist artwork), but enough to identify and add the right artist.
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    if _prefer_local():
+        from app.services import mb_local
+
+        return mb_local.search_artists(q, limit=limit)
+    if not _allow_live():
+        return []
+
+    data = _get("/artist/", {"query": q, "limit": limit})
+    artists = data.get("artists") or []
+    return [
+        {
+            "mbid": str(row.get("id") or ""),
+            "name": row.get("name") or "",
+            "disambiguation": row.get("disambiguation") or "",
+        }
+        for row in artists
+        if row.get("id") and row.get("name")
+    ]
+
+
 def _parse_credits(row: dict[str, Any]) -> list[CreditArtist]:
     out: list[CreditArtist] = []
     credit = row.get("artist-credit") or []

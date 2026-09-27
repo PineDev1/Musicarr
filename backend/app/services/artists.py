@@ -407,7 +407,14 @@ def _upsert_mb_album(
         track_count = provider_hit.track_count or 0
         album_type = provider_hit.album_type or rg.primary_type
     else:
-        status = "missing"
+        # A "local" (no-streaming-provider) artist has no provider catalog to
+        # miss from in the first place — every MB release group is simply
+        # wanted, same as any other artist's albums, so it shows up on the
+        # Wanted page and "Search releases" can grab it via an indexer.
+        # Anything else (a real streaming provider that just doesn't carry
+        # this particular release) keeps the existing "missing" semantics.
+        is_local_only = provider_name == "local"
+        status = "wanted" if is_local_only else "missing"
         monitored = True
         pid = _mb_provider_id(rg.mbid)
         # Missing rows are per-artist via mb: uuid — still disambiguate if needed
@@ -419,7 +426,7 @@ def _upsert_mb_album(
         release_date = f"{rg.year}-01-01" if rg.year else None
         track_count = 0
         album_type = rg.primary_type
-        reason = f"{provider_name.capitalize()} doesn't have this release"
+        reason = "" if is_local_only else f"{provider_name.capitalize()} doesn't have this release"
 
     album = existing_by_mbid.get(rg.mbid) or existing_by_pid.get(pid)
     if album is None and provider_hit:
@@ -1403,6 +1410,70 @@ def add_artist(
         from app.services.download_queue import download_queue
 
         download_queue.enqueue_artist_missing(db, artist.id)
+    return artist
+
+
+def add_local_artist_from_mbid(
+    db: Session,
+    mbid: str,
+    name: str,
+    *,
+    monitored: bool = True,
+    download_mode: str | None = None,
+    monitor_mode: str | None = None,
+) -> Artist:
+    """Add an artist with no streaming-provider link at all.
+
+    The fallback add path for when there's no active/authenticated streaming
+    provider session — a torrent/Usenet-only setup, or one where the
+    provider login just isn't working right now. add_artist() always calls
+    provider.get_artist() to fetch name/image, which requires a real
+    session; this instead takes the name straight from the MusicBrainz
+    search result and skips the provider entirely. The artist's albums come
+    from MusicBrainz (via _sync_from_musicbrainz with an empty provider
+    catalog) as "wanted", same as any other artist's, so they show up on
+    the Wanted page and can be grabbed later via "Search releases" against
+    an indexer.
+    """
+    mbid = (mbid or "").strip()
+    name = (name or "").strip()
+    if not mbid:
+        raise ValueError("MusicBrainz ID is required")
+    if not name:
+        raise ValueError("Artist name is required")
+
+    existing = db.scalar(
+        select(Artist).where(Artist.provider == "local", Artist.musicbrainz_id == mbid)
+    )
+    if existing:
+        return existing
+
+    artist = Artist(
+        provider="local",
+        provider_id=mbid,
+        deezer_id=_legacy_id("local", mbid),
+        name=name,
+        image_url=None,
+        monitored=monitored,
+        musicbrainz_id=mbid,
+        download_mode=download_mode if download_mode in ("auto", "manual") else None,
+    )
+    if monitor_mode in ("all", "new", "none"):
+        artist.monitor_mode = monitor_mode
+    db.add(artist)
+    db.commit()
+    db.refresh(artist)
+    add_history(db, "artist_added", f"Added {name} (MusicBrainz only, no streaming provider)")
+
+    settings = ensure_settings(db)
+    _sync_from_musicbrainz(
+        db,
+        artist,
+        provider=None,
+        settings=settings,
+        provider_albums=[],
+    )
+    db.refresh(artist)
     return artist
 
 

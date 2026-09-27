@@ -126,15 +126,21 @@ def acquisition_status(db: Session = Depends(get_db)):
     mappings = list(db.scalars(select(RemotePathMapping)).all())
     torrent = any((c.protocol or "").lower() == "torrent" for c in clients)
     usenet = any((c.protocol or "").lower() == "usenet" for c in clients)
+    # Only warn about a missing client for a protocol the user's enabled
+    # indexers actually need — a usenet-only setup (NZBGeek + SABnzbd) is a
+    # complete setup and must not be told it's missing a torrent client just
+    # because it doesn't have one, and vice versa.
+    indexer_protocols = {(idx.protocol or "").lower() for idx in indexers}
     messages: list[str] = []
     if not indexers:
         messages.append("No enabled indexers — add one under Settings → Indexers.")
-    if not torrent and not usenet:
+    if indexers and not clients:
         messages.append("No enabled download clients — add qBittorrent or SABnzbd.")
-    elif not torrent:
-        messages.append("No torrent download client — torrent releases cannot be grabbed.")
-    elif not usenet:
-        messages.append("No Usenet download client — NZB releases cannot be grabbed.")
+    else:
+        if "torrent" in indexer_protocols and not torrent:
+            messages.append("No torrent download client — torrent releases cannot be grabbed.")
+        if "usenet" in indexer_protocols and not usenet:
+            messages.append("No Usenet download client — NZB releases cannot be grabbed.")
     if clients and not mappings:
         messages.append(
             "No remote path mappings — mount the same download volume and map "

@@ -156,6 +156,62 @@ def resolve_artist(name: str, *, fast: bool = False) -> str | None:
     return None
 
 
+def search_artists(query: str, *, limit: int = 25) -> list[dict]:
+    """Multiple candidate matches for a name, ranked best-first.
+
+    Unlike resolve_artist (single best MBID, used to attach a release-group
+    count badge to a provider search result), this is the primary result set
+    for artist search when there's no streaming provider to search instead —
+    e.g. an indexer-only setup with no Deezer/Tidal/Qobuz login. Ranks by
+    exact/alias match first, then by how many release groups each candidate
+    has (a stronger real-artist signal than this slim schema's disambiguation
+    field, which isn't populated).
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    con = _connect()
+    like = f"%{q}%"
+    rows = con.execute(
+        """
+        SELECT a.gid AS gid, a.name AS name,
+               (SELECT COUNT(*) FROM artist_rg ar WHERE ar.artist_id = a.id) AS rg_count
+        FROM artist a
+        WHERE a.name LIKE ? COLLATE NOCASE
+        UNION
+        SELECT a.gid AS gid, a.name AS name,
+               (SELECT COUNT(*) FROM artist_rg ar WHERE ar.artist_id = a.id) AS rg_count
+        FROM artist a
+        JOIN artist_alias aa ON aa.artist_id = a.id
+        WHERE aa.name LIKE ? COLLATE NOCASE
+        """,
+        (like, like),
+    ).fetchall()
+
+    qn = normalize_title(q)
+    seen: dict[str, dict] = {}
+    for row in rows:
+        gid = str(row["gid"])
+        if gid in seen:
+            continue
+        name = row["name"]
+        exact = normalize_title(name) == qn
+        score = SequenceMatcher(None, qn, normalize_title(name)).ratio()
+        seen[gid] = {
+            "mbid": gid,
+            "name": name,
+            "rg_count": row["rg_count"] or 0,
+            "_exact": exact,
+            "_score": score,
+        }
+    ranked = sorted(
+        seen.values(),
+        key=lambda r: (r["_exact"], r["_score"], r["rg_count"]),
+        reverse=True,
+    )
+    return [{"mbid": r["mbid"], "name": r["name"], "rg_count": r["rg_count"]} for r in ranked[:limit]]
+
+
 def _score_artist_rows(query: str, rows: list[sqlite3.Row]) -> tuple[str | None, float]:
     best_gid: str | None = None
     best_score = 0.0

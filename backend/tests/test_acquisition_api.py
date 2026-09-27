@@ -335,3 +335,48 @@ def test_acquisition_status_flags_download_client_that_fails_connectivity(db):
         status = acquisition.acquisition_status(db=db)
 
     assert any("qbt" in m and "Connection refused" in m for m in status.messages)
+
+
+def test_acquisition_status_usenet_only_setup_is_not_told_it_needs_torrent(db):
+    """Regression: a complete usenet-only setup (NZBGeek + SABnzbd, no
+    torrent indexer/client at all) used to unconditionally warn "No torrent
+    download client" just because no torrent client was configured —
+    whether or not the user's indexers ever needed one."""
+    db.add(Indexer(name="NZBGeek", protocol="usenet", base_url="https://api.nzbgeek.info", api_key="good", enabled=True))
+    db.add(DownloadClient(name="sab", protocol="usenet", implementation="sabnzbd", host="localhost", port=8080, enabled=True))
+    db.commit()
+
+    with patch("app.api.acquisition.verify_indexer_key", return_value=(True, "ok")), \
+         patch("app.api.acquisition.get_client") as get_client:
+        get_client.return_value.test.return_value = (True, "ok")
+        status = acquisition.acquisition_status(db=db)
+
+    assert not any("torrent" in m.lower() for m in status.messages)
+
+
+def test_acquisition_status_torrent_only_setup_is_not_told_it_needs_usenet(db):
+    db.add(Indexer(name="Torznab", protocol="torrent", base_url="https://example.tld", api_key="good", enabled=True))
+    db.add(DownloadClient(name="qbt", protocol="torrent", implementation="qbittorrent", host="localhost", port=8080, enabled=True))
+    db.commit()
+
+    with patch("app.api.acquisition.verify_indexer_key", return_value=(True, "ok")), \
+         patch("app.api.acquisition.get_client") as get_client:
+        get_client.return_value.test.return_value = (True, "ok")
+        status = acquisition.acquisition_status(db=db)
+
+    assert not any("usenet" in m.lower() for m in status.messages)
+
+
+def test_acquisition_status_still_flags_a_missing_client_for_the_protocol_in_use(db):
+    """A usenet indexer with no usenet client at all is a real gap and must
+    still be flagged."""
+    db.add(Indexer(name="NZBGeek", protocol="usenet", base_url="https://api.nzbgeek.info", api_key="good", enabled=True))
+    db.add(DownloadClient(name="qbt", protocol="torrent", implementation="qbittorrent", host="localhost", port=8080, enabled=True))
+    db.commit()
+
+    with patch("app.api.acquisition.verify_indexer_key", return_value=(True, "ok")), \
+         patch("app.api.acquisition.get_client") as get_client:
+        get_client.return_value.test.return_value = (True, "ok")
+        status = acquisition.acquisition_status(db=db)
+
+    assert any("usenet" in m.lower() for m in status.messages)

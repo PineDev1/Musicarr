@@ -415,7 +415,11 @@ class ArtistOut(BaseModel):
 class ArtistCreate(BaseModel):
     provider_id: str | None = None
     deezer_id: int | None = None
-    provider: ProviderName | None = None
+    # "local" adds without any streaming provider — provider_id is then a
+    # MusicBrainz ID and `name` is required (there's no provider.get_artist()
+    # call to fetch it from). See add_local_artist_from_mbid.
+    provider: ProviderName | Literal["local"] | None = None
+    name: str | None = None
     monitored: bool = True
     download_missing: bool = True
     include_singles: bool | None = None
