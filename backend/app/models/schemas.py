@@ -72,6 +72,8 @@ class SettingsOut(BaseModel):
     remove_completed_downloads: bool = False
     auto_grab_indexers_enabled: bool = False
     auto_grab_min_score: float = 20.0
+    indexer_sweep_enabled: bool = True
+    indexer_sweep_interval_minutes: int = 360
     provider_ok: bool | None = None
     provider_error: str | None = None
     deezer_ok: bool | None = None
@@ -139,6 +141,8 @@ class SettingsUpdate(BaseModel):
     remove_completed_downloads: bool | None = None
     auto_grab_indexers_enabled: bool | None = None
     auto_grab_min_score: float | None = Field(default=None, ge=10.0, le=100.0)
+    indexer_sweep_enabled: bool | None = None
+    indexer_sweep_interval_minutes: int | None = Field(default=None, ge=30, le=1440)
 
 
 class NotifyTestRequest(BaseModel):
@@ -1089,6 +1093,12 @@ class ReleaseCandidateOut(BaseModel):
     indexer_id: int
     indexer_name: str
     score: float
+    # Only set by the artist-level search — the album this release looks like
+    # it belongs to (by loose title match), or null for an unmatched/new
+    # release. Always null for the existing per-album search, which already
+    # knows the album.
+    matched_album_id: int | None = None
+    matched_album_title: str | None = None
 
 
 class IndexerSearchErrorOut(BaseModel):
@@ -1103,7 +1113,12 @@ class ReleaseSearchOut(BaseModel):
 
 
 class ReleaseGrabRequest(BaseModel):
-    album_id: int
+    # Exactly one of album_id / artist_id must be set. album_id behaves as
+    # before; artist_id (from the artist-level search, for an unmatched
+    # release) resolves/creates the right album first via
+    # indexer_engine.resolve_or_create_album_for_release, using `title`.
+    album_id: int | None = None
+    artist_id: int | None = None
     grab_url: str
     protocol: Literal["usenet", "torrent"] = "torrent"
     indexer_id: int = 0

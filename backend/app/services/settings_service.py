@@ -153,6 +153,8 @@ def settings_to_out(row: AppSettings, validate: bool = False) -> SettingsOut:
         remove_completed_downloads=bool(getattr(row, "remove_completed_downloads", False)),
         auto_grab_indexers_enabled=bool(getattr(row, "auto_grab_indexers_enabled", False)),
         auto_grab_min_score=float(getattr(row, "auto_grab_min_score", 20.0) or 20.0),
+        indexer_sweep_enabled=bool(getattr(row, "indexer_sweep_enabled", True)),
+        indexer_sweep_interval_minutes=int(getattr(row, "indexer_sweep_interval_minutes", 360) or 360),
     )
 
 

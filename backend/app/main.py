@@ -35,6 +35,7 @@ from app.services.completed_download_handler import completed_download_handler
 from app.services.cors_origins import LOCAL_CORS_ORIGINS, origin_is_allowed
 from app.services.download_queue import download_queue
 from app.services.import_lists import import_list_runner
+from app.services.indexer_engine import wanted_indexer_sweep
 from app.services.maintenance_scheduler import maintenance_scheduler
 from app.services.monitor import release_monitor
 from app.services.settings_service import ensure_settings
@@ -72,12 +73,14 @@ async def lifespan(_: FastAPI):
     import_list_runner.start()
     maintenance_scheduler.start()
     completed_download_handler.start()
+    wanted_indexer_sweep.start()
     yield
     download_queue.stop()
     release_monitor.stop()
     import_list_runner.stop()
     maintenance_scheduler.stop()
     completed_download_handler.stop()
+    wanted_indexer_sweep.stop()
 
 
 app = FastAPI(title="Musicarr", version="0.1.0", lifespan=lifespan)

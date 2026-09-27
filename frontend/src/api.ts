@@ -110,6 +110,8 @@ export type Settings = {
   remove_completed_downloads: boolean
   auto_grab_indexers_enabled: boolean
   auto_grab_min_score: number
+  indexer_sweep_enabled: boolean
+  indexer_sweep_interval_minutes: number
   provider_ok: boolean | null
   provider_error: string | null
   deezer_ok: boolean | null
@@ -811,8 +813,11 @@ export const api = {
     request<{ ok: boolean }>(`/acquisition/path-mappings/${id}`, { method: 'DELETE' }),
   searchReleases: (albumId: number) =>
     request<ReleaseSearchResult>(`/acquisition/releases/search?album_id=${albumId}`),
+  searchReleasesForArtist: (artistId: number) =>
+    request<ReleaseSearchResult>(`/acquisition/releases/search-artist?artist_id=${artistId}`),
   grabRelease: (body: {
-    album_id: number
+    album_id?: number
+    artist_id?: number
     grab_url: string
     protocol: 'usenet' | 'torrent'
     indexer_id?: number
@@ -893,6 +898,9 @@ export type ReleaseCandidate = {
   indexer_id: number
   indexer_name: string
   score: number
+  // Only set by the artist-level search — see searchReleasesForArtist.
+  matched_album_id: number | null
+  matched_album_title: string | null
 }
 
 export type IndexerSearchError = {

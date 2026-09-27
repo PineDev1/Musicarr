@@ -127,6 +127,8 @@ def migrate_schema(engine_: Engine | None = None) -> None:
         "vapid_private_key": "TEXT DEFAULT ''",
         "auto_grab_indexers_enabled": "BOOLEAN DEFAULT 0",
         "auto_grab_min_score": "FLOAT DEFAULT 20.0",
+        "indexer_sweep_enabled": "BOOLEAN DEFAULT 1",
+        "indexer_sweep_interval_minutes": "INTEGER DEFAULT 360",
     }
     existing = existing_columns("app_settings")
     for name, definition in settings_cols.items():

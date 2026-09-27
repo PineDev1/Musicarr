@@ -384,6 +384,7 @@ def _upsert_mb_album(
     existing_by_pid: dict[str, Album],
     collaborator_names: list[str] | None = None,
     artist_credit: str = "",
+    force_wanted: bool = False,
 ) -> Album:
     from app.services import musicbrainz
 
@@ -411,9 +412,13 @@ def _upsert_mb_album(
         # miss from in the first place — every MB release group is simply
         # wanted, same as any other artist's albums, so it shows up on the
         # Wanted page and "Search releases" can grab it via an indexer.
+        # `force_wanted` generalizes this for the indexer-resolution path
+        # (indexer_engine.resolve_or_create_album_for_release): resolving a
+        # release via an indexer says nothing about whether this artist's
+        # actual streaming provider carries it, so it isn't "missing" either.
         # Anything else (a real streaming provider that just doesn't carry
         # this particular release) keeps the existing "missing" semantics.
-        is_local_only = provider_name == "local"
+        is_local_only = provider_name == "local" or force_wanted
         status = "wanted" if is_local_only else "missing"
         monitored = True
         pid = _mb_provider_id(rg.mbid)

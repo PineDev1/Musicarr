@@ -230,6 +230,85 @@ def test_import_job_move_mechanism_leaves_source_intact_on_mid_loop_failure(db, 
     assert sorted(src_dir.iterdir()) == original_files
 
 
+def test_import_job_resolves_album_when_job_has_no_album_id(db, tmp_path):
+    """Regression: a job with no (or a stale) album_id — e.g. an
+    artist-level-search grab, which has no album until now — used to fail
+    outright with "Album for this job no longer exists" even though the
+    artist name + release title were enough to resolve or create the right
+    album, same as any other loose-release grab should."""
+    artist, _album = _album_with_tracks(db, track_count=1)
+    src_dir = tmp_path / "download"
+    src_dir.mkdir()
+    make_mp3(src_dir / "a.mp3", title="A Loose Single", artist="Luke Combs", track="1")
+
+    job = DownloadJob(
+        target_type="album",
+        target_id=0,
+        album_id=None,
+        artist_name="Luke Combs",
+        album_title="",
+        state="downloading",
+        source="indexer",
+        indexer_id=1,
+        client_id=1,
+        release_title="Luke Combs - A Loose Single [FLAC]",
+        client_item_id="item-1",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    client_row = _client_row(db)
+
+    handler = CompletedDownloadHandler()
+    with patch("app.services.completed_download_handler.library_root", return_value=tmp_path / "library"), \
+         patch("app.services.completed_download_handler.map_remote_to_local", return_value=src_dir), \
+         patch("app.services.artists.ensure_musicbrainz_identity", return_value=None):
+        result = handler._import_job(
+            db, job, client_row, ClientStatus(state="completed", output_path=str(src_dir))
+        )
+
+    assert result == "imported"
+    db.refresh(job)
+    assert job.state == "completed"
+    assert job.album_id is not None
+    resolved_album = db.get(Album, job.album_id)
+    assert resolved_album.title == "A Loose Single"
+    assert resolved_album.status == "downloaded"
+    assert resolved_album.artist_id == artist.id
+
+
+def test_import_job_still_fails_with_no_artist_name_and_no_album(db, tmp_path):
+    job = DownloadJob(
+        target_type="album",
+        target_id=0,
+        album_id=None,
+        artist_name="",
+        album_title="",
+        state="downloading",
+        source="indexer",
+        indexer_id=1,
+        client_id=1,
+        release_title="Unknown Release",
+        client_item_id="item-1",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    client_row = _client_row(db)
+    src_dir = tmp_path / "download"
+    src_dir.mkdir()
+
+    handler = CompletedDownloadHandler()
+    with patch("app.services.completed_download_handler.map_remote_to_local", return_value=src_dir):
+        result = handler._import_job(
+            db, job, client_row, ClientStatus(state="completed", output_path=str(src_dir))
+        )
+
+    assert result == "failed"
+    db.refresh(job)
+    assert "no longer exists" in (job.error or "")
+
+
 def test_import_job_rejects_incomplete_release(db, tmp_path):
     """A release missing most of its tracks must not be silently marked downloaded."""
     artist, album = _album_with_tracks(db, track_count=10)

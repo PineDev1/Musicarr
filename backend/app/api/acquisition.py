@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
-from app.models import Album, DownloadClient, DownloadJob, Indexer, RemotePathMapping
+from app.models import Album, Artist, DownloadClient, DownloadJob, Indexer, RemotePathMapping
 from app.models.schemas import (
     AcquisitionStatusOut,
     DownloadClientCreate,
@@ -478,16 +478,83 @@ def search_releases(
     )
 
 
+@router.get("/releases/search-artist", response_model=ReleaseSearchOut)
+def search_releases_for_artist(
+    artist_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Every indexer result for an artist, mixed across all their releases.
+
+    Unlike /releases/search (scoped to one already-known album), this
+    queries by artist name alone — the Lidarr-style "browse everything this
+    artist has" search. Each result is annotated with the existing album it
+    looks like it belongs to (by title match), or null for a new/unsorted
+    release the artist page can offer to grab straight from.
+    """
+    from app.services.indexer_engine import search_artist_catalog
+
+    artist = db.scalar(select(Artist).options(joinedload(Artist.albums)).where(Artist.id == artist_id))
+    if not artist:
+        raise HTTPException(status_code=404, detail="Artist not found")
+
+    annotated, errors = search_artist_catalog(db, artist)
+    return ReleaseSearchOut(
+        results=[
+            ReleaseCandidateOut(
+                title=c.title,
+                size=c.size,
+                seeders=c.seeders,
+                protocol=c.protocol,
+                download_url=c.download_url,
+                magnet_url=c.magnet_url,
+                grab_url=c.grab_url,
+                indexer_id=c.indexer_id,
+                indexer_name=c.indexer_name,
+                score=c.score,
+                matched_album_id=album.id if album else None,
+                matched_album_title=album.title if album else None,
+            )
+            for c, album in annotated
+        ],
+        errors=[IndexerSearchErrorOut(**e) for e in errors],
+    )
+
+
 @router.post("/releases/grab")
 def grab_release(payload: ReleaseGrabRequest, db: Session = Depends(get_db)):
-    """Send a user-selected release to the matching download client."""
-    album = db.scalar(
-        select(Album).options(joinedload(Album.artist), joinedload(Album.tracks)).where(
-            Album.id == payload.album_id
+    """Send a user-selected release to the matching download client.
+
+    Either album_id (the existing per-album search) or artist_id (the
+    artist-level search, for a release with no matched album yet) must be
+    set — artist_id resolves or creates the right album first.
+    """
+    if payload.album_id:
+        album = db.scalar(
+            select(Album).options(joinedload(Album.artist), joinedload(Album.tracks)).where(
+                Album.id == payload.album_id
+            )
         )
-    )
-    if not album:
-        raise HTTPException(status_code=404, detail="Album not found")
+        if not album:
+            raise HTTPException(status_code=404, detail="Album not found")
+    elif payload.artist_id:
+        from app.services.indexer_engine import resolve_or_create_album_for_release
+
+        artist = db.scalar(
+            select(Artist).options(joinedload(Artist.albums)).where(Artist.id == payload.artist_id)
+        )
+        if not artist:
+            raise HTTPException(status_code=404, detail="Artist not found")
+        try:
+            album = resolve_or_create_album_for_release(db, artist, payload.title)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        album = db.scalar(
+            select(Album).options(joinedload(Album.artist), joinedload(Album.tracks)).where(
+                Album.id == album.id
+            )
+        )
+    else:
+        raise HTTPException(status_code=400, detail="album_id or artist_id is required")
 
     from app.services.acquisition_actions import GrabError, grab_release_for_album
 
@@ -518,3 +585,13 @@ def scan_completed_downloads():
     from app.services.completed_download_handler import completed_download_handler
 
     return completed_download_handler.run_once()
+
+
+@router.post("/sweep-wanted")
+def sweep_wanted_now():
+    """Re-search indexers for the whole Wanted list now, instead of waiting
+    for the next scheduled sweep. Still respects each artist's own
+    effective_auto_grab — this triggers the sweep, it doesn't bypass it."""
+    from app.services.indexer_engine import wanted_indexer_sweep
+
+    return wanted_indexer_sweep.run_once(force=True)

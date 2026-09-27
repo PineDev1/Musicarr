@@ -6,7 +6,7 @@ from app.models import Album, AppSettings
 from app.services.acquisition_actions import GrabError
 from app.services.artists import _legacy_id
 from app.services.indexers.base import ReleaseCandidate
-from app.services.monitor import _try_auto_grab_from_indexer
+from app.services.indexer_engine import try_auto_grab_release
 from tests.conftest import _artist
 
 
@@ -49,7 +49,7 @@ def test_auto_grab_picks_top_scored_candidate_above_threshold(db):
 
     with patch("app.services.indexers.search.search_album", return_value=(candidates, [])), \
          patch("app.services.acquisition_actions.grab_release_for_album") as grab:
-        result = _try_auto_grab_from_indexer(db, artist, album, settings)
+        result = try_auto_grab_release(db, artist, album, settings)
 
     assert result is True
     grab.assert_called_once()
@@ -66,7 +66,7 @@ def test_auto_grab_refuses_when_nothing_meets_the_score_threshold(db):
 
     with patch("app.services.indexers.search.search_album", return_value=(candidates, [])), \
          patch("app.services.acquisition_actions.grab_release_for_album") as grab:
-        result = _try_auto_grab_from_indexer(db, artist, album, settings)
+        result = try_auto_grab_release(db, artist, album, settings)
 
     assert result is False
     grab.assert_not_called()
@@ -81,6 +81,6 @@ def test_auto_grab_returns_false_on_grab_error_without_raising(db):
 
     with patch("app.services.indexers.search.search_album", return_value=(candidates, [])), \
          patch("app.services.acquisition_actions.grab_release_for_album", side_effect=GrabError("no client")):
-        result = _try_auto_grab_from_indexer(db, artist, album, settings)
+        result = try_auto_grab_release(db, artist, album, settings)
 
     assert result is False
