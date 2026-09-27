@@ -167,6 +167,9 @@ export type PlayerActivity = {
   recent: PlayerActivityEntry[]
 }
 
+export type PlayerGenreSummary = { genre: string; track_count: number }
+export type PlayerMoodSummary = { mood: string; track_count: number }
+
 export type NowPlayingRow = {
   user_id: number
   username: string
@@ -307,6 +310,10 @@ export const playerApi = {
   builtins: () => request<PlayerPlaylist[]>('/library/builtins'),
   builtin: (kind: string) => request<PlayerPlaylist>(`/library/builtins/${kind}`),
   mixes: () => request<PlayerPlaylist[]>('/library/mixes'),
+  genres: () => request<PlayerGenreSummary[]>('/genres'),
+  genre: (name: string) => request<PlayerPlaylist>(`/genres/${encodeURIComponent(name)}`),
+  moods: () => request<PlayerMoodSummary[]>('/moods'),
+  mood: (name: string) => request<PlayerPlaylist>(`/moods/${encodeURIComponent(name)}`),
   playlists: () => request<PlayerPlaylist[]>('/playlists'),
   playlist: (id: number) => request<PlayerPlaylist>(`/playlists/${id}`),
   createPlaylist: (name: string, is_smart = false) =>

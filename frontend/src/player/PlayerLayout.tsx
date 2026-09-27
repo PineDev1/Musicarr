@@ -6,6 +6,7 @@ import {
   IconBack,
   IconClose,
   IconForward,
+  IconGrip,
   IconHeart,
   IconHome,
   IconLibrary,
@@ -34,6 +35,7 @@ const LIBRARY_LINKS = [
   { to: '/player/artists', label: 'Artists', icon: IconUser },
   { to: '/player/albums', label: 'Albums', icon: IconLibrary },
   { to: '/player/songs', label: 'Songs', icon: IconMusic },
+  { to: '/player/explore', label: 'Explore', icon: IconGrip },
 ]
 
 export function PlayerLayout({ displayName, avatarUrl, userId }: Props) {
