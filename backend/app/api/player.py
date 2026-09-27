@@ -43,6 +43,8 @@ from app.models.schemas import (
     PlayerActivityOut,
     PlayerAlbumOut,
     PlayerArtistDetailOut,
+    PlayerGenreOut,
+    PlayerMoodOut,
     PlayerArtistOut,
     PlayerAuthStatus,
     PlayerCastTokenOut,
@@ -1244,6 +1246,44 @@ def library_mixes(request: Request, db: Session = Depends(get_db)):
     ]
     db.commit()
     return out
+
+
+@router.get("/genres", response_model=list[PlayerGenreOut])
+def list_genres(request: Request, db: Session = Depends(get_db)):
+    _current_player_user(request, db)
+    from app.services.player_genres import genre_counts
+
+    return [PlayerGenreOut(**g) for g in genre_counts(db)]
+
+
+@router.get("/genres/{genre}", response_model=PlayerPlaylistOut)
+def get_genre(genre: str, request: Request, db: Session = Depends(get_db)):
+    _current_player_user(request, db)
+    from app.services.player_genres import tracks_for_genre
+
+    tracks = tracks_for_genre(db, genre)
+    if not tracks:
+        raise HTTPException(status_code=404, detail="No downloaded tracks in this genre")
+    return _builtin_meta(f"genre-{genre}", genre, [_track_out(t) for t in tracks])
+
+
+@router.get("/moods", response_model=list[PlayerMoodOut])
+def list_moods(request: Request, db: Session = Depends(get_db)):
+    _current_player_user(request, db)
+    from app.services.player_genres import mood_counts
+
+    return [PlayerMoodOut(**m) for m in mood_counts(db)]
+
+
+@router.get("/moods/{mood}", response_model=PlayerPlaylistOut)
+def get_mood(mood: str, request: Request, db: Session = Depends(get_db)):
+    _current_player_user(request, db)
+    from app.services.player_genres import tracks_for_mood
+
+    tracks = tracks_for_mood(db, mood)
+    if not tracks:
+        raise HTTPException(status_code=404, detail="No downloaded tracks for this mood")
+    return _builtin_meta(f"mood-{mood}", mood, [_track_out(t) for t in tracks])
 
 
 @router.get("/library/recommended", response_model=list[PlayerTrackOut])

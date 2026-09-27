@@ -887,6 +887,16 @@ class PlayerActivityOut(BaseModel):
     recent: list[PlayerActivityEntryOut] = []
 
 
+class PlayerGenreOut(BaseModel):
+    genre: str
+    track_count: int
+
+
+class PlayerMoodOut(BaseModel):
+    mood: str
+    track_count: int
+
+
 class PlayerArtistDetailOut(BaseModel):
     id: int
     name: str

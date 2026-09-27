@@ -5,6 +5,8 @@ import { PlayerAlbumPage } from './PlayerAlbumPage'
 import { PlayerAlbumsPage } from './PlayerAlbumsPage'
 import { PlayerArtistPage } from './PlayerArtistPage'
 import { PlayerArtistsPage } from './PlayerArtistsPage'
+import { PlayerExplorePage } from './PlayerExplorePage'
+import { PlayerGenreDetailPage } from './PlayerGenreDetailPage'
 import { PlayerHomePage } from './PlayerHomePage'
 import { PlayerLayout } from './PlayerLayout'
 import { PlayerLoginPage } from './PlayerLoginPage'
@@ -94,6 +96,9 @@ export function PlayerApp() {
           <Route path="albums" element={<PlayerAlbumsPage />} />
           <Route path="albums/:id" element={<PlayerAlbumPage />} />
           <Route path="songs" element={<PlayerSongsPage />} />
+          <Route path="explore" element={<PlayerExplorePage />} />
+          <Route path="genres/:name" element={<PlayerGenreDetailPage kind="genre" />} />
+          <Route path="moods/:name" element={<PlayerGenreDetailPage kind="mood" />} />
           <Route path="history" element={<PlayerHistoryPage />} />
           <Route path="stats" element={<PlayerStatsPage />} />
           <Route path="playlists" element={<PlayerPlaylistsPage />} />
