@@ -51,6 +51,7 @@ def search_album(
     album_title: str,
     *,
     year: str | None = None,
+    query_override: str | None = None,
 ) -> tuple[list[ReleaseCandidate], list[dict]]:
     """Query every enabled indexer for an album, scored best-first.
 
@@ -59,8 +60,16 @@ def search_album(
     only. A caller that discards `errors` gets the old behavior; callers
     that surface them let the user tell "genuinely no results" apart from
     "your indexer is misconfigured", which otherwise look identical.
+
+    `query_override` replaces the free-text search term sent to indexers
+    (the automatic artist+album search misses sometimes — a manual search
+    box lets the user try their own wording instead) — scoring still ranks
+    results against the real artist/album so a manual search still shows how
+    good a match each hit actually is, just widens what indexers return.
     """
-    query = " ".join(p for p in [(artist_name or "").strip(), (album_title or "").strip()] if p)
+    query = (query_override or "").strip() or " ".join(
+        p for p in [(artist_name or "").strip(), (album_title or "").strip()] if p
+    )
     if not query:
         return [], []
 

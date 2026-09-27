@@ -40,6 +40,27 @@ def test_search_album_scores_and_sorts_best_first(db):
     assert results[0].score >= results[1].score >= results[2].score
 
 
+def test_search_album_query_override_replaces_search_text_but_not_scoring(db):
+    """Regression: a manual search box lets the user try their own search
+    text when the automatic artist+album query misses — it must replace what
+    gets sent to the indexer, but candidates still score against the real
+    artist/album so the manual search still shows a genuine match quality."""
+    _indexer(db)
+    hits = [
+        ReleaseCandidate(title="Luke Combs - Fathers & Sons (2024) [FLAC]", size=400_000_000, seeders=20, protocol="torrent", magnet_url="magnet:?xt=1"),
+    ]
+    with patch("app.services.indexers.search.search_newznab", return_value=hits) as fake:
+        results, errors = search_album(
+            db, "Luke Combs", "Fathers & Sons", query_override="totally different search text"
+        )
+
+    assert errors == []
+    sent_query = fake.call_args.args[2]
+    assert sent_query == "totally different search text"
+    # Scoring is still against the real artist/album, not the override text.
+    assert results[0].score > 50
+
+
 def test_search_album_skips_disabled_indexer(db):
     row = _indexer(db)
     row.enabled = False

@@ -447,6 +447,7 @@ def delete_path_mapping(mapping_id: int, db: Session = Depends(get_db)):
 @router.get("/releases/search", response_model=ReleaseSearchOut)
 def search_releases(
     album_id: int = Query(...),
+    query: str | None = None,
     db: Session = Depends(get_db),
 ):
     from app.services.indexers.search import search_album
@@ -457,7 +458,9 @@ def search_releases(
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
     artist_name = album.artist.name if album.artist else ""
-    candidates, errors = search_album(db, artist_name, album.title, year=album.release_date)
+    candidates, errors = search_album(
+        db, artist_name, album.title, year=album.release_date, query_override=query
+    )
     return ReleaseSearchOut(
         results=[
             ReleaseCandidateOut(
