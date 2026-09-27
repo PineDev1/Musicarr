@@ -4,12 +4,15 @@ import SwiftUI
 struct MusicarrApp: App {
     @StateObject private var session = SessionStore()
     @StateObject private var playback = PlaybackEngine()
+    @StateObject private var favorites = FavoritesStore()
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(session)
                 .environmentObject(playback)
+                .environmentObject(favorites)
+                .task { await favorites.load() }
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
         }

@@ -2,9 +2,11 @@ import SwiftUI
 
 struct NowPlayingView: View {
     @EnvironmentObject var playback: PlaybackEngine
+    @EnvironmentObject var favorites: FavoritesStore
     @Environment(\.dismiss) private var dismiss
     @State private var isScrubbing = false
     @State private var scrubTime: Double = 0
+    @State private var showLyrics = false
 
     var body: some View {
         ZStack {
@@ -16,22 +18,54 @@ struct NowPlayingView: View {
                     .padding(.top, 8)
 
                 if let track = playback.currentTrack {
-                    Text(playback.sourceLabel.isEmpty ? "Now Playing" : playback.sourceLabel)
-                        .font(.caption.smallCaps())
-                        .foregroundStyle(Theme.muted)
+                    HStack {
+                        AirPlayButton()
+                            .frame(width: 32, height: 32)
+                        Spacer()
+                        Text(playback.sourceLabel.isEmpty ? "Now Playing" : playback.sourceLabel)
+                            .font(.caption.smallCaps())
+                            .foregroundStyle(Theme.muted)
+                        Spacer()
+                        Button {
+                            favorites.toggle(track)
+                        } label: {
+                            Image(systemName: favorites.isFavorite(track.id) ? "heart.fill" : "heart")
+                                .foregroundStyle(favorites.isFavorite(track.id) ? Theme.accent : Theme.text)
+                                .frame(width: 32, height: 32)
+                        }
+                    }
+                    .padding(.horizontal, 24)
 
-                    RemoteArt(path: track.coverUrl, cornerRadius: 16)
-                        .frame(width: 280, height: 280)
-                        .shadow(color: .black.opacity(0.4), radius: 20, y: 10)
+                    if showLyrics {
+                        LyricsView(trackID: track.id, currentTime: playback.currentTime)
+                            .frame(height: 280)
+                    } else {
+                        RemoteArt(path: track.coverUrl, cornerRadius: 16)
+                            .frame(width: 280, height: 280)
+                            .shadow(color: .black.opacity(0.4), radius: 20, y: 10)
+                    }
 
                     VStack(spacing: 4) {
                         Text(track.title)
                             .font(.title2.bold())
                             .foregroundStyle(Theme.text)
                             .multilineTextAlignment(.center)
-                        Text(track.artistName)
-                            .font(.body)
-                            .foregroundStyle(Theme.muted)
+                        HStack(spacing: 8) {
+                            Text(track.artistName)
+                                .font(.body)
+                                .foregroundStyle(Theme.muted)
+                            Button {
+                                withAnimation { showLyrics.toggle() }
+                            } label: {
+                                Text("LYRICS")
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(showLyrics ? Theme.accent : Theme.muted)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Theme.backgroundSoft)
+                                    .clipShape(Capsule())
+                            }
+                        }
                     }
                     .padding(.horizontal, 32)
 

@@ -77,6 +77,10 @@ enum PlayerAPI {
         try await APIClient.shared.request("/search", query: ["q": q, "grouped": "1"])
     }
 
+    static func lyrics(trackID: Int) async throws -> Lyrics {
+        try await APIClient.shared.request("/tracks/\(trackID)/lyrics")
+    }
+
     static func favoriteIDs() async throws -> FavoriteIDs {
         try await APIClient.shared.request("/favorites/ids")
     }

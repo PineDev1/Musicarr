@@ -2,6 +2,7 @@ import AVFoundation
 import Combine
 import MediaPlayer
 import UIKit
+import WidgetKit
 
 @MainActor
 final class PlaybackEngine: NSObject, ObservableObject {
@@ -21,12 +22,80 @@ final class PlaybackEngine: NSObject, ObservableObject {
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
     private var artworkCache: [Int: MPMediaItemArtwork] = [:]
+    private var artworkDataCache: [Int: Data] = [:]
     private var lastReportedSecond: Int = -1
+    private let liveActivity = LiveActivityManager()
 
     override init() {
         super.init()
         configureAudioSession()
         configureRemoteCommands()
+        configureSignalObservers()
+    }
+
+    // MARK: - Widget / Live Activity signal bridge
+
+    private func configureSignalObservers() {
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        let observer = Unmanaged.passUnretained(self).toOpaque()
+
+        // A CFNotificationCallback must be a plain (non-capturing) C
+        // function, so the fired notification's own `name` — the callback's
+        // third parameter — is how this tells the three signals apart,
+        // rather than three separate capturing closures (which Swift can't
+        // convert to a C function pointer at all).
+        let callback: CFNotificationCallback = { _, observer, name, _, _ in
+            guard let observer, let name else { return }
+            let engine = Unmanaged<PlaybackEngine>.fromOpaque(observer).takeUnretainedValue()
+            Task { @MainActor in engine.handleSignal(name.rawValue as String) }
+        }
+        CFNotificationCenterAddObserver(center, observer, callback, PlaybackSignal.playPause as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, observer, callback, PlaybackSignal.next as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, observer, callback, PlaybackSignal.previous as CFString, nil, .deliverImmediately)
+    }
+
+    private func handleSignal(_ name: String) {
+        switch name {
+        case PlaybackSignal.playPause: togglePlayPause()
+        case PlaybackSignal.next: next()
+        case PlaybackSignal.previous: previous()
+        default: break
+        }
+    }
+
+    // MARK: - Shared snapshot (widget + Live Activity)
+
+    private func publishSharedState() {
+        guard let track = currentTrack else {
+            NowPlayingSnapshot.clear()
+            WidgetCenter.shared.reloadTimelines(ofKind: "NowPlayingWidget")
+            liveActivity.end()
+            return
+        }
+        let hasArtwork = artworkDataCache[track.id] != nil
+        if let data = artworkDataCache[track.id], let url = AppGroup.artworkURL {
+            try? data.write(to: url)
+        }
+        NowPlayingSnapshot(
+            trackID: track.id,
+            title: track.title,
+            artistName: track.artistName,
+            albumTitle: track.albumTitle,
+            isPlaying: isPlaying,
+            currentTime: currentTime,
+            duration: duration,
+            referenceDate: Date(),
+            hasArtwork: hasArtwork
+        ).save()
+        WidgetCenter.shared.reloadTimelines(ofKind: "NowPlayingWidget")
+        liveActivity.update(
+            title: track.title,
+            artistName: track.artistName,
+            isPlaying: isPlaying,
+            currentTime: currentTime,
+            duration: duration,
+            hasArtwork: hasArtwork
+        )
     }
 
     private func configureAudioSession() {
@@ -74,6 +143,7 @@ final class PlaybackEngine: NSObject, ObservableObject {
         duration = Double(track.duration)
         updateNowPlayingInfo()
         loadArtworkIfNeeded(for: track)
+        publishSharedState()
         Task { try? await PlayerAPI.reportPlaying(trackID: track.id, position: 0, playing: true, title: track.title, artistName: track.artistName, coverURL: track.coverUrl) }
     }
 
@@ -88,6 +158,7 @@ final class PlaybackEngine: NSObject, ObservableObject {
         }
         updateNowPlayingInfo()
         reportCurrentState()
+        publishSharedState()
     }
 
     func next() {
@@ -125,16 +196,19 @@ final class PlaybackEngine: NSObject, ObservableObject {
 
     private func addObservers(item: AVPlayerItem) {
         timeObserver = player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 1), queue: .main) { [weak self] time in
-            guard let self else { return }
-            self.currentTime = time.seconds.isFinite ? time.seconds : 0
-            if let duration = item.duration.seconds.isFinite ? item.duration.seconds : nil, duration > 0 {
-                self.duration = duration
-            }
-            self.updateNowPlayingElapsed()
-            let second = Int(self.currentTime)
-            if second != self.lastReportedSecond, second % 15 == 0 {
-                self.lastReportedSecond = second
-                self.reportCurrentState()
+            Task { @MainActor in
+                guard let self else { return }
+                self.currentTime = time.seconds.isFinite ? time.seconds : 0
+                if let duration = item.duration.seconds.isFinite ? item.duration.seconds : nil, duration > 0 {
+                    self.duration = duration
+                }
+                self.updateNowPlayingElapsed()
+                let second = Int(self.currentTime)
+                if second != self.lastReportedSecond, second % 15 == 0 {
+                    self.lastReportedSecond = second
+                    self.reportCurrentState()
+                    self.publishSharedState()
+                }
             }
         }
         endObserver = NotificationCenter.default.addObserver(
@@ -214,11 +288,17 @@ final class PlaybackEngine: NSObject, ObservableObject {
         guard artworkCache[track.id] == nil, let url = APIClient.shared.absoluteMediaURL(track.coverUrl) else { return }
         Task {
             guard let (data, _) = try? await URLSession.shared.data(from: url), let image = UIImage(data: data) else { return }
+            // Re-encode as JPEG for the shared App Group file the widget and
+            // Live Activity read — the original might be PNG/WebP and this
+            // keeps the shared file small and universally decodable.
+            let jpeg = image.jpegData(compressionQuality: 0.85)
             let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
             await MainActor.run {
                 self.artworkCache[track.id] = artwork
+                if let jpeg { self.artworkDataCache[track.id] = jpeg }
                 if self.currentTrack?.id == track.id {
                     self.updateNowPlayingInfo()
+                    self.publishSharedState()
                 }
             }
         }

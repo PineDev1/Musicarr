@@ -14,6 +14,12 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: Musicarr
+      - path: Shared
+    entitlements:
+      path: Musicarr/Musicarr.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.musicarr.player
     info:
       path: Generated/Info.plist
       properties:
@@ -23,6 +29,7 @@ targets:
           - audio
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        NSSupportsLiveActivities: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UISupportedInterfaceOrientations~ipad:
@@ -40,3 +47,36 @@ targets:
         GENERATE_INFOPLIST_FILE: false
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    dependencies:
+      - target: MusicarrWidgets
+        embed: true
+        codeSign: true
+
+  MusicarrWidgets:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: MusicarrWidgets
+      - path: Shared
+    entitlements:
+      path: MusicarrWidgets/MusicarrWidgets.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.musicarr.player
+    info:
+      path: Generated/MusicarrWidgetsInfo.plist
+      properties:
+        CFBundleDisplayName: Musicarr Widgets
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.musicarr.player.widgets
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: false
+        SKIP_INSTALL: true
