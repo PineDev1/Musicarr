@@ -811,8 +811,12 @@ export const api = {
     request<RemotePathMapping>(`/acquisition/path-mappings/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deletePathMapping: (id: number) =>
     request<{ ok: boolean }>(`/acquisition/path-mappings/${id}`, { method: 'DELETE' }),
-  searchReleases: (albumId: number) =>
-    request<ReleaseSearchResult>(`/acquisition/releases/search?album_id=${albumId}`),
+  searchReleases: (albumId: number, query?: string) =>
+    request<ReleaseSearchResult>(
+      `/acquisition/releases/search?album_id=${albumId}${
+        query ? `&query=${encodeURIComponent(query)}` : ''
+      }`,
+    ),
   searchReleasesForArtist: (artistId: number) =>
     request<ReleaseSearchResult>(`/acquisition/releases/search-artist?artist_id=${artistId}`),
   grabRelease: (body: {

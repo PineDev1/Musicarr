@@ -21,6 +21,8 @@ export function AlbumPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [bulkGenre, setBulkGenre] = useState('')
   const [showReleases, setShowReleases] = useState(false)
+  const [manualQuery, setManualQuery] = useState('')
+  const [activeQuery, setActiveQuery] = useState('')
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['album', albumId],
@@ -56,8 +58,8 @@ export function AlbumPage() {
   })
 
   const releases = useQuery({
-    queryKey: ['releases', albumId],
-    queryFn: () => api.searchReleases(albumId),
+    queryKey: ['releases', albumId, activeQuery],
+    queryFn: () => api.searchReleases(albumId, activeQuery || undefined),
     enabled: showReleases,
   })
 
@@ -214,6 +216,37 @@ export function AlbumPage() {
             Ranked by title/artist match, format, and seeders. Nothing here is grabbed
             automatically — pick one to send it to your configured download client.
           </p>
+          <form
+            className="toolbar"
+            style={{ marginBottom: '0.75rem' }}
+            onSubmit={(e) => {
+              e.preventDefault()
+              setActiveQuery(manualQuery.trim())
+            }}
+          >
+            <input
+              type="text"
+              placeholder={`Manual search (default: "${data.artist_name || ''} ${data.title}")`}
+              value={manualQuery}
+              onChange={(e) => setManualQuery(e.target.value)}
+              style={{ flex: 1, minWidth: 220 }}
+            />
+            <button type="submit" className="btn secondary" disabled={releases.isLoading}>
+              Search
+            </button>
+            {activeQuery && (
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => {
+                  setManualQuery('')
+                  setActiveQuery('')
+                }}
+              >
+                Reset to default
+              </button>
+            )}
+          </form>
           <ReleaseResultsTable
             results={releases.data?.results}
             errors={releases.data?.errors}
