@@ -493,9 +493,48 @@ class PlayerPlaylistTrack(Base):
         ForeignKey("tracks.id", ondelete="CASCADE"), index=True
     )
     position: Mapped[int] = mapped_column(Integer, default=0)
+    added_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("player_users.id", ondelete="SET NULL"), nullable=True
+    )
 
     playlist: Mapped["PlayerPlaylist"] = relationship(back_populates="tracks")
     track: Mapped["Track"] = relationship()
+
+
+class PlayerPlaylistMember(Base):
+    """A non-owner account allowed to add/remove tracks on someone's playlist."""
+
+    __tablename__ = "player_playlist_members"
+    __table_args__ = (
+        UniqueConstraint("playlist_id", "user_id", name="uq_playlist_member"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    playlist_id: Mapped[int] = mapped_column(
+        ForeignKey("player_playlists.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("player_users.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped["PlayerUser"] = relationship()
+
+
+class PlayerFollow(Base):
+    __tablename__ = "player_follows"
+    __table_args__ = (
+        UniqueConstraint("follower_id", "followee_id", name="uq_player_follow"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    follower_id: Mapped[int] = mapped_column(
+        ForeignKey("player_users.id", ondelete="CASCADE"), index=True
+    )
+    followee_id: Mapped[int] = mapped_column(
+        ForeignKey("player_users.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class PlayerFavorite(Base):

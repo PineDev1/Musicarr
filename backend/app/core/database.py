@@ -257,6 +257,10 @@ def migrate_schema(engine_: Engine | None = None) -> None:
         if "criteria_json" not in pl_cols:
             add_column("player_playlists", "criteria_json TEXT")
 
+    plt_cols = existing_columns("player_playlist_tracks")
+    if plt_cols and "added_by_user_id" not in plt_cols:
+        add_column("player_playlist_tracks", "added_by_user_id INTEGER")
+
     admin_user_cols = existing_columns("admin_users")
     if admin_user_cols:
         if "totp_secret" not in admin_user_cols:

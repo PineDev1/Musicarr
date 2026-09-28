@@ -753,6 +753,7 @@ class PlayerTrackOut(BaseModel):
     quality: str = ""
     format: str = ""
     genre: str = ""
+    added_by_name: str | None = None
 
 
 class PlayerLyricsOut(BaseModel):
@@ -792,8 +793,19 @@ class PlayerSmartCriteria(BaseModel):
     limit: int = Field(default=50, ge=1, le=500)
 
 
+class PlayerCollaboratorOut(BaseModel):
+    user_id: int
+    username: str
+    display_name: str = ""
+    avatar_url: str | None = None
+
+
 class PlayerPlaylistOut(BaseModel):
     id: int | str
+    owner_id: int | None = None
+    owner_name: str | None = None
+    is_owner: bool = True
+    collaborators: list[PlayerCollaboratorOut] = []
     name: str
     track_count: int = 0
     created_at: datetime | None = None
