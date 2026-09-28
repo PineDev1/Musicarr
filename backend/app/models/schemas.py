@@ -398,6 +398,7 @@ class ArtistOut(BaseModel):
     download_mode: str | None = None
     quality_pref: str | None = None
     auto_grab_override: str | None = None
+    tags: list[str] = []
     musicbrainz_id: str | None = None
     added_at: datetime
     last_synced_at: datetime | None
@@ -438,6 +439,7 @@ class ArtistPatch(BaseModel):
     download_mode: Literal["auto", "manual"] | None = None
     quality_pref: Bitrate | None = None
     auto_grab_override: Literal["on", "off"] | None = None
+    tags: list[str] | None = None
 
 
 class BulkArtistIdsRequest(BaseModel):
@@ -1139,6 +1141,7 @@ class ReleaseCandidateOut(BaseModel):
     # knows the album.
     matched_album_id: int | None = None
     matched_album_title: str | None = None
+    blocklisted: bool = False
 
 
 class IndexerSearchErrorOut(BaseModel):
@@ -1163,3 +1166,21 @@ class ReleaseGrabRequest(BaseModel):
     protocol: Literal["usenet", "torrent"] = "torrent"
     indexer_id: int = 0
     title: str = ""
+
+
+class BlocklistEntryOut(BaseModel):
+    id: int
+    release_title: str
+    artist_name: str = ""
+    album_title: str = ""
+    reason: str = ""
+    created_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class BlocklistAdd(BaseModel):
+    job_id: int | None = None
+    release_title: str | None = None
+    reason: str = ""

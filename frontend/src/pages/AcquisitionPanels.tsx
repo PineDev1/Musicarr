@@ -25,6 +25,7 @@ export function AcquisitionPanels() {
       <IndexersPanel />
       <ClientsPanel />
       <PathMappingsPanel />
+      <BlocklistPanel />
     </>
   )
 }
@@ -413,6 +414,75 @@ function PathMappingsPanel() {
                 <td className="row-actions">
                   <button type="button" className="btn ghost danger" onClick={() => remove.mutate(row.id)}>
                     Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+
+function BlocklistPanel() {
+  const qc = useQueryClient()
+  const toast = useToast()
+  const { data } = useQuery({ queryKey: ['blocklist'], queryFn: api.blocklist })
+  const refresh = () => qc.invalidateQueries({ queryKey: ['blocklist'] })
+  const remove = useMutation({
+    mutationFn: (id: number) => api.unblocklist(id),
+    onSuccess: refresh,
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  const clear = useMutation({
+    mutationFn: api.clearBlocklist,
+    onSuccess: (r) => {
+      toast.push(`Removed ${r.removed} entr${r.removed === 1 ? 'y' : 'ies'}`, 'ok')
+      refresh()
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  return (
+    <div className="card" style={{ marginTop: '1rem' }}>
+      <div className="page-header">
+        <div>
+          <h3 style={{ margin: 0 }}>Blocklist</h3>
+          <p className="muted tiny" style={{ margin: 0 }}>
+            Releases that failed to import or that you rejected. Auto-grab never picks these again.
+            Manual grabs still work.
+          </p>
+        </div>
+        {!!data?.length && (
+          <button className="btn ghost danger" onClick={() => clear.mutate()}>
+            Clear all
+          </button>
+        )}
+      </div>
+      {!data?.length && <p className="muted">Nothing blocklisted.</p>}
+      {!!data?.length && (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Release</th>
+              <th>For</th>
+              <th>Reason</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {data.map((e) => (
+              <tr key={e.id}>
+                <td style={{ wordBreak: 'break-word' }}>{e.release_title}</td>
+                <td className="muted">
+                  {e.artist_name}
+                  {e.album_title ? ` – ${e.album_title}` : ''}
+                </td>
+                <td className="muted">{e.reason}</td>
+                <td className="row-actions">
+                  <button className="btn ghost" onClick={() => remove.mutate(e.id)}>
+                    Remove
                   </button>
                 </td>
               </tr>

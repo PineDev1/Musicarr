@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { api } from '../api'
 
 function formatWhen(iso: string) {
@@ -9,9 +10,10 @@ function formatWhen(iso: string) {
 }
 
 export function ActivityPage() {
+  const [view, setView] = useState<'activity' | 'audit'>('activity')
   const { data, isLoading, error, isFetching, refetch } = useQuery({
-    queryKey: ['history'],
-    queryFn: api.history,
+    queryKey: ['history', view],
+    queryFn: () => api.history(view),
     refetchInterval: 5000,
     retry: 1,
   })
@@ -21,11 +23,31 @@ export function ActivityPage() {
       <div className="page-header">
         <div>
           <h1>Activity</h1>
-          <p>Recent library and download events.</p>
+          <p>
+            {view === 'audit'
+              ? 'Settings changes, sign-ins (including failed attempts), user and key changes, artist removals.'
+              : 'Recent library and download events.'}
+          </p>
         </div>
-        <button type="button" className="btn secondary" onClick={() => refetch()} disabled={isFetching}>
-          Refresh
-        </button>
+        <div className="toolbar">
+          <button
+            type="button"
+            className={`btn ${view === 'activity' ? '' : 'secondary'}`}
+            onClick={() => setView('activity')}
+          >
+            Activity
+          </button>
+          <button
+            type="button"
+            className={`btn ${view === 'audit' ? '' : 'secondary'}`}
+            onClick={() => setView('audit')}
+          >
+            Audit log
+          </button>
+          <button type="button" className="btn secondary" onClick={() => refetch()} disabled={isFetching}>
+            Refresh
+          </button>
+        </div>
       </div>
       {isLoading && <p className="muted">Loading…</p>}
       {error && (

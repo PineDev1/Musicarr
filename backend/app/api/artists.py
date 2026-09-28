@@ -16,6 +16,8 @@ from app.models.schemas import (
 )
 from app.services.artists import (
     add_artist,
+    clean_tags,
+    parse_tags,
     approve_pending_artist,
     bulk_approve_pending_artists,
     bulk_reject_pending_artists,
@@ -186,6 +188,7 @@ def _artist_group_out(
         download_mode=getattr(primary, "download_mode", None),
         quality_pref=getattr(primary, "quality_pref", None),
         auto_grab_override=getattr(primary, "auto_grab_override", None),
+        tags=parse_tags(getattr(primary, "tags_json", None)),
         musicbrainz_id=next(
             (
                 (getattr(a, "musicbrainz_id", None) or "").strip()
@@ -584,6 +587,12 @@ def patch_artist(artist_id: int, payload: ArtistPatch, db: Session = Depends(get
     linked = find_linked_artists(db, artist)
     data = payload.model_dump(exclude_unset=True)
     singles_changed = "include_singles" in data
+    if "tags" in data:
+        import json
+
+        tags_json = json.dumps(clean_tags(data.pop("tags") or []))
+        for row in linked:
+            row.tags_json = tags_json
     for row in linked:
         for key, value in data.items():
             setattr(row, key, value)
@@ -631,8 +640,14 @@ def patch_artist(artist_id: int, payload: ArtistPatch, db: Session = Depends(get
 
 @router.delete("/{artist_id}")
 def remove_artist(artist_id: int, db: Session = Depends(get_db)):
+    from app.models import Artist as _Artist
+    from app.services.history import audit
+
+    row = db.get(_Artist, artist_id)
+    name = row.name if row else ""
     if not delete_artist(db, artist_id):
         raise HTTPException(status_code=404, detail="Artist not found")
+    audit(db, "Artist removed", f"{name} (id {artist_id})")
     return {"ok": True}
 
 

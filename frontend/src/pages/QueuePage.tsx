@@ -75,6 +75,11 @@ export function QueuePage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['queue'] }),
     onError: (err) => toast.push((err as Error).message, 'error'),
   })
+  const blocklist = useMutation({
+    mutationFn: (id: number) => api.blocklistJob(id, 'Blocklisted from queue'),
+    onSuccess: () => toast.push('Release blocklisted — auto-grab will skip it', 'ok'),
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
   const retryFailed = useMutation({
     mutationFn: () => api.retryFailedJobs({ skipPermanent: true }),
     onSuccess: (res) => {
@@ -311,7 +316,16 @@ export function QueuePage() {
                     </button>
                   )}
                   {job.state === 'failed' && job.source === 'indexer' && (
-                    <span className="muted tiny">Search releases again to retry</span>
+                    <>
+                      <span className="muted tiny">Search releases again to retry</span>
+                      <button
+                        className="btn ghost"
+                        title="Never auto-grab this release again"
+                        onClick={() => blocklist.mutate(job.id)}
+                      >
+                        Blocklist
+                      </button>
+                    </>
                   )}
                 </td>
               </tr>

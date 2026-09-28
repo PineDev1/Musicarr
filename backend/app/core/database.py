@@ -157,6 +157,8 @@ def migrate_schema(engine_: Engine | None = None) -> None:
             add_column("artists", "quality_pref VARCHAR(16)")
         if "auto_grab_override" not in artist_cols:
             add_column("artists", "auto_grab_override VARCHAR(16)")
+        if "tags_json" not in artist_cols:
+            add_column("artists", "tags_json TEXT DEFAULT '[]'")
         with eng.begin() as conn:
             conn.execute(
                 text("UPDATE artists SET status = 'active' WHERE status IS NULL OR status = ''")

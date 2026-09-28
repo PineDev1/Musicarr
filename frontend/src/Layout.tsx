@@ -26,6 +26,7 @@ const toolsLinks = [
   { to: '/calendar', label: 'Release Calendar' },
   { to: '/maintenance', label: 'Duplicate Cleanup' },
   { to: '/activity', label: 'Activity' },
+  { to: '/system', label: 'System' },
 ]
 
 const bottomLinks = [

@@ -61,6 +61,7 @@ def app_login(payload: AppLoginRequest, response: Response, db: Session = Depend
             token = app_auth.create_session_token(db, admin_user.username, user_id=admin_user.id)
             add_history(db, "app_login", f"Signed in as {admin_user.username}")
     if not token:
+        add_history(db, "audit", f"Failed admin sign-in attempt for '{username[:64]}'")
         raise HTTPException(status_code=401, detail="Invalid username or password")
     app_auth.set_session_cookie(response, token, db)
     return AppAuthStatus(**app_auth.auth_status(db, token))
@@ -107,6 +108,16 @@ def update_admin_user(user_id: int, payload: AdminUserUpdate, db: Session = Depe
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    changed = [
+        n
+        for n, v in (
+            ("password", payload.password),
+            ("display name", payload.display_name),
+            ("active", payload.is_active),
+        )
+        if v is not None
+    ]
+    add_history(db, "audit", f"Updated admin user {user.username}: " + ", ".join(changed or ["no changes"]))
     return admin_auth.admin_user_out(user)
 
 
@@ -116,6 +127,7 @@ def delete_admin_user(user_id: int, db: Session = Depends(get_db)):
         admin_auth.delete_user(db, user_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    add_history(db, "audit", f"Deleted admin user id {user_id}")
     return {"ok": True}
 
 
@@ -181,6 +193,7 @@ def delete_api_key(key_id: int, db: Session = Depends(get_db)):
         api_keys.revoke_key(db, key_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    add_history(db, "audit", f"Revoked API key id {key_id}")
     return {"ok": True}
 
 

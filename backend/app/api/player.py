@@ -539,6 +539,7 @@ def admin_delete_user(user_id: int, request: Request, db: Session = Depends(get_
         player_auth.delete_user(db, user_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    add_history(db, "audit", f"Deleted player user id {user_id}")
     return {"ok": True}
 
 

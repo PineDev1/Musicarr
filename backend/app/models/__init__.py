@@ -157,6 +157,7 @@ class Artist(Base):
     quality_pref: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
     # None = inherit AppSettings.auto_grab_indexers_enabled; "on" | "off" overrides it
     auto_grab_override: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
+    tags_json: Mapped[str] = mapped_column(Text, default="[]")
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -269,6 +270,21 @@ class DownloadJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class BlocklistEntry(Base):
+    """A release that failed or was rejected — auto-grab never picks it again."""
+
+    __tablename__ = "blocklist_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    release_title: Mapped[str] = mapped_column(String(1024), default="")
+    title_key: Mapped[str] = mapped_column(String(1024), default="", index=True)
+    indexer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    artist_name: Mapped[str] = mapped_column(String(512), default="")
+    album_title: Mapped[str] = mapped_column(String(512), default="")
+    reason: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Indexer(Base):

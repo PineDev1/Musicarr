@@ -84,6 +84,10 @@ async def lifespan(_: FastAPI):
     wanted_indexer_sweep.stop()
 
 
+from app.services import system_info as _system_info  # noqa: E402
+
+_system_info.install_log_buffer()
+
 app = FastAPI(title="Musicarr", version="0.1.0", lifespan=lifespan)
 
 # Static local origins at boot; DynamicCorsMiddleware also allows configured public_domain.

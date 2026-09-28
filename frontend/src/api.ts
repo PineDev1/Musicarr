@@ -234,6 +234,7 @@ export type Artist = {
   download_mode?: 'auto' | 'manual' | null
   quality_pref?: 'flac' | '320' | '128' | null
   auto_grab_override?: 'on' | 'off' | null
+  tags?: string[]
   musicbrainz_id?: string | null
   added_at: string
   last_synced_at: string | null
@@ -672,7 +673,13 @@ export const api = {
     }),
   clearFinishedQueue: () =>
     request<{ cleared: number }>('/queue/clear-finished', { method: 'POST' }),
-  history: () => request<HistoryEvent[]>('/history'),
+  history: (eventType?: 'audit' | 'activity') =>
+    request<HistoryEvent[]>(`/history${eventType ? `?event_type=${eventType}` : ''}`),
+  systemStatus: () => request<SystemStatus>('/system/status'),
+  systemLogs: (level: string, search: string) =>
+    request<SystemLogLine[]>(
+      `/system/logs?level=${encodeURIComponent(level)}&search=${encodeURIComponent(search)}&limit=300`,
+    ),
   search: (q: string) => request<SearchResults>(`/search?q=${encodeURIComponent(q)}`),
   stats: () => request<Stats>('/stats'),
   statsHistory: () => request<StatsHistory>('/stats/history'),
@@ -778,6 +785,20 @@ export const api = {
       body: JSON.stringify({ mode }),
     }),
   acquisitionStatus: () => request<AcquisitionStatus>('/acquisition/status'),
+  blocklist: () => request<BlocklistEntry[]>('/acquisition/blocklist'),
+  blocklistJob: (jobId: number, reason = '') =>
+    request<BlocklistEntry>('/acquisition/blocklist', {
+      method: 'POST',
+      body: JSON.stringify({ job_id: jobId, reason }),
+    }),
+  blocklistRelease: (release_title: string, reason = '') =>
+    request<BlocklistEntry>('/acquisition/blocklist', {
+      method: 'POST',
+      body: JSON.stringify({ release_title, reason }),
+    }),
+  unblocklist: (id: number) =>
+    request<{ ok: boolean }>(`/acquisition/blocklist/${id}`, { method: 'DELETE' }),
+  clearBlocklist: () => request<{ removed: number }>('/acquisition/blocklist', { method: 'DELETE' }),
   indexers: () => request<Indexer[]>('/acquisition/indexers'),
   createIndexer: (body: Record<string, unknown>) =>
     request<Indexer>('/acquisition/indexers', { method: 'POST', body: JSON.stringify(body) }),
@@ -905,6 +926,29 @@ export type ReleaseCandidate = {
   // Only set by the artist-level search — see searchReleasesForArtist.
   matched_album_id: number | null
   matched_album_title: string | null
+  blocklisted?: boolean
+}
+
+export type SystemStatus = {
+  version: string
+  python: string
+  platform: string
+  uptime_seconds: number
+  data_dir: string
+  db_bytes: number
+  disk: { path: string; free: number; total: number } | null
+  tasks: { id: string; name: string; trigger: string; next_run: string | null }[]
+}
+
+export type SystemLogLine = { time: string; level: string; logger: string; message: string }
+
+export type BlocklistEntry = {
+  id: number
+  release_title: string
+  artist_name: string
+  album_title: string
+  reason: string
+  created_at: string | null
 }
 
 export type IndexerSearchError = {

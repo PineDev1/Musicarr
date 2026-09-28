@@ -465,6 +465,11 @@ export function ArtistPage() {
             <option value="off">Disabled</option>
           </select>
         </div>
+        <TagsEditor
+          tags={data.tags || []}
+          disabled={patchArtist.isPending}
+          onChange={(tags) => patchArtist.mutate({ tags })}
+        />
         <div className="field" style={{ margin: 0, minWidth: 220 }}>
           <label>Include singles</label>
           <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -781,6 +786,60 @@ export function ArtistPage() {
           </div>
         </details>
       )}
+    </div>
+  )
+}
+
+function TagsEditor({
+  tags,
+  disabled,
+  onChange,
+}: {
+  tags: string[]
+  disabled: boolean
+  onChange: (tags: string[]) => void
+}) {
+  const [draft, setDraft] = useState('')
+  const add = () => {
+    const t = draft.trim()
+    if (!t) return
+    onChange([...tags, t])
+    setDraft('')
+  }
+  return (
+    <div className="field" style={{ margin: 0, minWidth: 220 }}>
+      <label>Tags</label>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        {tags.map((t) => (
+          <span key={t} className="badge queued" style={{ display: 'inline-flex', gap: 4 }}>
+            {t}
+            <button
+              type="button"
+              aria-label={`Remove tag ${t}`}
+              disabled={disabled}
+              onClick={() => onChange(tags.filter((x) => x !== t))}
+              style={{ background: 'none', border: 0, color: 'inherit', cursor: 'pointer', padding: 0 }}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        <input
+          type="text"
+          value={draft}
+          maxLength={32}
+          placeholder="Add tag…"
+          disabled={disabled}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              add()
+            }
+          }}
+          style={{ width: 110 }}
+        />
+      </div>
     </div>
   )
 }

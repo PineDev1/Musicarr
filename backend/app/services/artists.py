@@ -1963,3 +1963,25 @@ def retag_downloaded_album(db: Session, album: Album, primary: Artist) -> None:
             year=year,
             cover_path=cover,
         )
+
+
+def parse_tags(raw: str | None) -> list[str]:
+    import json
+
+    try:
+        data = json.loads(raw or "[]")
+    except (ValueError, TypeError):
+        return []
+    return [t for t in data if isinstance(t, str)] if isinstance(data, list) else []
+
+
+def clean_tags(tags: list[str]) -> list[str]:
+    """Trim, drop empties, dedupe case-insensitively (first spelling wins), cap size."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in tags:
+        t = " ".join((t or "").split())[:32]
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(t)
+    return out[:20]
