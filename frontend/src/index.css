@@ -2919,3 +2919,10 @@ textarea.code-block {
     grid-column: 1 / -1;
   }
 }
+
+.audio-settings { display: flex; flex-direction: column; gap: 12px; margin: 16px 0; }
+.audio-row { display: flex; flex-direction: column; gap: 6px; }
+.audio-toggle { display: flex; align-items: center; gap: 8px; }
+.eq-bands { display: flex; gap: 4px; justify-content: space-between; }
+.eq-band { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; }
+.eq-band input[type='range'] { writing-mode: vertical-lr; direction: rtl; height: 90px; width: 20px; }

@@ -10,6 +10,7 @@ import {
 } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { DEFAULT_PREFS, playerApi, type PlayerTrack } from './playerApi'
+import { EQ_BANDS, getAudioSettings, subscribeAudioSettings } from './audioSettings'
 
 type RepeatMode = 'off' | 'all' | 'one'
 type Slot = 'A' | 'B'
@@ -74,7 +75,6 @@ type QueueApi = QueueState & {
 
 const Ctx = createContext<QueueApi | null>(null)
 
-const CROSSFADE_MS = 700
 /** Start preloading the next track once this many seconds remain — long enough
  * on any reasonable connection to fully buffer before playback reaches it,
  * which is what makes the track-boundary swap gapless. */
@@ -124,6 +124,8 @@ export function PlayerQueueProvider({
   const ctxRef = useRef<AudioContext | null>(null)
   const masterGainRef = useRef<GainNode | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
+  const preampRef = useRef<GainNode | null>(null)
+  const filtersRef = useRef<BiquadFilterNode[]>([])
   const slotRef = useRef<Slot>('A')
   /** Track id currently buffered on the inactive slot, if any. */
   const preloadedTrackIdRef = useRef<number | null>(null)
@@ -165,6 +167,25 @@ export function PlayerQueueProvider({
 
   const activeAudio = useCallback(() => audioRefs.current[slotRef.current], [])
 
+  const applyAudioSettings = useCallback(() => {
+    const st = getAudioSettings()
+    if (preampRef.current) {
+      preampRef.current.gain.value = st.eqEnabled ? Math.pow(10, st.preampDb / 20) : 1
+    }
+    filtersRef.current.forEach((f, i) => {
+      f.gain.value = st.eqEnabled ? st.bandsDb[i] ?? 0 : 0
+    })
+    ;(['A', 'B'] as Slot[]).forEach((slot) => {
+      const a = audioRefs.current[slot]
+      if (a) {
+        a.defaultPlaybackRate = st.speed
+        a.playbackRate = st.speed
+      }
+    })
+  }, [])
+
+  useEffect(() => subscribeAudioSettings(applyAudioSettings), [applyAudioSettings])
+
   const ensureAudioGraph = useCallback(() => {
     if (!ctxRef.current) {
       const CtxAudio =
@@ -178,8 +199,25 @@ export function PlayerQueueProvider({
       analyserNode.fftSize = 64
       const master = ctx.createGain()
       master.gain.value = Math.max(0, Math.min(1, volumeRef.current))
-      analyserNode.connect(master)
+      const preamp = ctx.createGain()
+      const filters = EQ_BANDS.map((freq, i) => {
+        const f = ctx.createBiquadFilter()
+        f.type = i === 0 ? 'lowshelf' : i === EQ_BANDS.length - 1 ? 'highshelf' : 'peaking'
+        f.frequency.value = freq
+        f.Q.value = 1.1
+        return f
+      })
+      analyserNode.connect(preamp)
+      let tail: AudioNode = preamp
+      filters.forEach((f) => {
+        tail.connect(f)
+        tail = f
+      })
+      tail.connect(master)
       master.connect(ctx.destination)
+      preampRef.current = preamp
+      filtersRef.current = filters
+      applyAudioSettings()
       analyserRef.current = analyserNode
       masterGainRef.current = master
       setAnalyser(analyserNode)
@@ -196,7 +234,7 @@ export function PlayerQueueProvider({
       sourceRefs.current[slot] = src
       trackGainRefs.current[slot] = trackGain
     })
-  }, [])
+  }, [applyAudioSettings])
 
   /** Ramp a single slot's gain from 0 to full — used for a fresh manual load
    * with crossfade enabled (no second source to overlap with yet). */
@@ -207,7 +245,7 @@ export function PlayerQueueProvider({
     const now = ctx.currentTime
     gain.gain.cancelScheduledValues(now)
     gain.gain.setValueAtTime(0, now)
-    gain.gain.linearRampToValueAtTime(1, now + CROSSFADE_MS / 1000)
+    gain.gain.linearRampToValueAtTime(1, now + getAudioSettings().crossfadeMs / 1000)
   }, [])
 
   /** True overlapping crossfade between the outgoing and incoming slots. */
@@ -219,10 +257,10 @@ export function PlayerQueueProvider({
     const now = ctx.currentTime
     outGain.gain.cancelScheduledValues(now)
     outGain.gain.setValueAtTime(outGain.gain.value, now)
-    outGain.gain.linearRampToValueAtTime(0, now + CROSSFADE_MS / 1000)
+    outGain.gain.linearRampToValueAtTime(0, now + getAudioSettings().crossfadeMs / 1000)
     inGain.gain.cancelScheduledValues(now)
     inGain.gain.setValueAtTime(0, now)
-    inGain.gain.linearRampToValueAtTime(1, now + CROSSFADE_MS / 1000)
+    inGain.gain.linearRampToValueAtTime(1, now + getAudioSettings().crossfadeMs / 1000)
   }, [])
 
   // Holds the latest versions of values/callbacks the (mount-once) audio
@@ -806,6 +844,50 @@ export function PlayerQueueProvider({
     })
     orderRef.current = []
   }, [])
+
+  // Lock-screen / OS media-key controls.
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    const ms = navigator.mediaSession
+    const set = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
+      try {
+        ms.setActionHandler(action, handler)
+      } catch {
+        /* unsupported action */
+      }
+    }
+    set('play', () => {
+      if (activeAudio()?.paused) void togglePlay()
+    })
+    set('pause', () => {
+      if (!activeAudio()?.paused) void togglePlay()
+    })
+    set('previoustrack', () => prev())
+    set('nexttrack', () => next())
+    set('seekbackward', (d) => seek((activeAudio()?.currentTime || 0) - (d.seekOffset || 10)))
+    set('seekforward', (d) => seek((activeAudio()?.currentTime || 0) + (d.seekOffset || 10)))
+    set('seekto', (d) => {
+      if (d.seekTime != null) seek(d.seekTime)
+    })
+    return () => {
+      ;(
+        ['play', 'pause', 'previoustrack', 'nexttrack', 'seekbackward', 'seekforward', 'seekto'] as MediaSessionAction[]
+      ).forEach((a) => set(a, null))
+    }
+  }, [togglePlay, next, prev, seek, activeAudio])
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator) || !duration || !Number.isFinite(duration)) return
+    try {
+      navigator.mediaSession.setPositionState({
+        duration,
+        position: Math.min(currentTime, duration),
+        playbackRate: getAudioSettings().speed,
+      })
+    } catch {
+      /* ignore */
+    }
+  }, [currentTime, duration])
 
   // Global keyboard shortcuts, suppressed while typing.
   useEffect(() => {
