@@ -2926,3 +2926,4 @@ textarea.code-block {
 .eq-bands { display: flex; gap: 4px; justify-content: space-between; }
 .eq-band { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; }
 .eq-band input[type='range'] { writing-mode: vertical-lr; direction: rtl; height: 90px; width: 20px; }
+.eq-save { display: flex; gap: 6px; } .eq-custom-preset { display: inline-flex; }

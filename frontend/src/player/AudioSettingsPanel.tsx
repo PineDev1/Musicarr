@@ -1,5 +1,9 @@
+import { useState } from 'react'
 import {
   EQ_BANDS,
+  deleteCustomPreset,
+  saveCustomPreset,
+  useCustomPresets,
   EQ_PRESETS,
   updateAudioSettings,
   useAudioSettings,
@@ -13,6 +17,8 @@ function bandLabel(f: number) {
 
 export function AudioSettingsPanel() {
   const s = useAudioSettings()
+  const custom = useCustomPresets()
+  const [presetName, setPresetName] = useState('')
   return (
     <div className="audio-settings">
       <div className="section-label">Audio</div>
@@ -66,6 +72,49 @@ export function AudioSettingsPanel() {
               {name}
             </button>
           ))}
+        </div>
+        {Object.keys(custom).length > 0 && (
+          <div className="sleep-options">
+            {Object.entries(custom).map(([name, bands]) => (
+              <span key={name} className="eq-custom-preset">
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => updateAudioSettings({ eqEnabled: true, bandsDb: bands })}
+                >
+                  {name}
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost danger"
+                  aria-label={`Delete preset ${name}`}
+                  onClick={() => deleteCustomPreset(name)}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="eq-save">
+          <input
+            type="text"
+            placeholder="Save current curve as preset…"
+            value={presetName}
+            maxLength={40}
+            onChange={(e) => setPresetName(e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn ghost"
+            disabled={!presetName.trim() || presetName.trim() in EQ_PRESETS}
+            onClick={() => {
+              saveCustomPreset(presetName, s.bandsDb)
+              setPresetName('')
+            }}
+          >
+            Save
+          </button>
         </div>
         <label className="audio-row">
           <span className="muted tiny">Preamp {s.preampDb > 0 ? '+' : ''}{s.preampDb} dB</span>

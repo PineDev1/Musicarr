@@ -20,6 +20,50 @@ export const EQ_PRESETS: Record<string, number[]> = {
 }
 
 const KEY = 'musicarr-audio-settings-v1'
+const PRESETS_KEY = 'musicarr-eq-presets-v1'
+
+function loadCustomPresets(): Record<string, number[]> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PRESETS_KEY) || '{}')
+    const out: Record<string, number[]> = {}
+    for (const [k, v] of Object.entries(raw)) {
+      if (Array.isArray(v) && v.length === EQ_BANDS.length) {
+        out[k] = v.map((b) => clamp(Number(b) || 0, -12, 12))
+      }
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+let customPresets = loadCustomPresets()
+
+export function saveCustomPreset(name: string, bands: number[]) {
+  const n = name.trim().slice(0, 40)
+  if (!n || n in EQ_PRESETS) return
+  customPresets = { ...customPresets, [n]: bands.slice() }
+  persistPresets()
+}
+
+export function deleteCustomPreset(name: string) {
+  const { [name]: _removed, ...rest } = customPresets
+  customPresets = rest
+  persistPresets()
+}
+
+function persistPresets() {
+  try {
+    localStorage.setItem(PRESETS_KEY, JSON.stringify(customPresets))
+  } catch {
+    /* storage unavailable */
+  }
+  listeners.forEach((l) => l())
+}
+
+export function getCustomPresets() {
+  return customPresets
+}
 
 export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
   eqEnabled: false,
@@ -84,4 +128,8 @@ export function subscribeAudioSettings(fn: () => void) {
 
 export function useAudioSettings() {
   return useSyncExternalStore(subscribeAudioSettings, getAudioSettings, getAudioSettings)
+}
+
+export function useCustomPresets() {
+  return useSyncExternalStore(subscribeAudioSettings, getCustomPresets, getCustomPresets)
 }

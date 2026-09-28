@@ -1,4 +1,3 @@
-import { AudioSettingsPanel } from './AudioSettingsPanel'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { Link } from 'react-router-dom'
@@ -314,8 +313,6 @@ export function ExpandedNowPlaying({ onClose }: { onClose: () => void }) {
             )}
             {q.sleepMode === 'end' && <span className="muted tiny">Pausing after this song</span>}
           </div>
-
-          <AudioSettingsPanel />
 
           <div className="lyrics-panel">
             <div className="section-label">Lyrics</div>

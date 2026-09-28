@@ -21,6 +21,7 @@ import {
 import { DEFAULT_PREFS, playerApi, type PlayerPrefs, type PlayerRepeatMode } from './playerApi'
 import { copyToClipboard } from './TrackMenu'
 import { WavyPlayBar } from './WavyPlayBar'
+import { AudioSettingsPanel } from './AudioSettingsPanel'
 
 type Props = {
   displayName: string
@@ -496,6 +497,7 @@ export function PlayerLayout({ displayName, avatarUrl, userId }: Props) {
               />
               Start new sessions with shuffle on
             </label>
+            <AudioSettingsPanel />
             <div className="field">
               <label>Default repeat</label>
               <select
