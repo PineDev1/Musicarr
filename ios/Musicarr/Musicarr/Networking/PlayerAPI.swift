@@ -98,6 +98,37 @@ enum PlayerAPI {
         try await APIClient.shared.request("/shares", method: "POST", body: CreateShareBody(track_id: trackID))
     }
 
+    static func people() async throws -> [Person] {
+        try await APIClient.shared.request("/social/people")
+    }
+
+    static func profile(id: Int) async throws -> Profile {
+        try await APIClient.shared.request("/social/profile/\(id)")
+    }
+
+    static func follow(id: Int) async throws {
+        let _: EmptyResponse = try await APIClient.shared.request("/social/follow/\(id)", method: "POST")
+    }
+
+    static func unfollow(id: Int) async throws {
+        let _: EmptyResponse = try await APIClient.shared.request("/social/follow/\(id)", method: "DELETE")
+    }
+
+    static func addCollaborator(playlistID: Int, username: String) async throws -> [Collaborator] {
+        try await APIClient.shared.request(
+            "/social/playlists/\(playlistID)/collaborators", method: "POST",
+            body: AddCollaboratorBody(username: username))
+    }
+
+    static func removeCollaborator(playlistID: Int, userID: Int) async throws {
+        let _: EmptyResponse = try await APIClient.shared.request(
+            "/social/playlists/\(playlistID)/collaborators/\(userID)", method: "DELETE")
+    }
+
+    static func leavePlaylist(id: Int) async throws {
+        let _: EmptyResponse = try await APIClient.shared.request("/social/playlists/\(id)/leave", method: "POST")
+    }
+
     static func lastfmStatus() async throws -> LastfmStatus {
         try await APIClient.shared.request("/lastfm/status")
     }
@@ -166,4 +197,9 @@ struct SongsPage: Codable {
 
 struct FavoriteIDs: Codable {
     var ids: [Int]
+}
+
+
+private struct AddCollaboratorBody: Encodable {
+    let username: String
 }

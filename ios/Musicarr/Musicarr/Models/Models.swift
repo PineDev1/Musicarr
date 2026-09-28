@@ -30,9 +30,11 @@ struct Track: Codable, Identifiable, Equatable, Hashable {
     var quality: String
     var format: String
     var genre: String?
+    var addedByName: String?
 
     enum CodingKeys: String, CodingKey {
         case id, title, duration, quality, format, genre
+        case addedByName = "added_by_name"
         case trackNo = "track_no"
         case discNo = "disc_no"
         case albumId = "album_id"
@@ -103,9 +105,16 @@ struct Playlist: Codable, Identifiable, Hashable {
     var isSmart: Bool
     var builtin: Bool
     var kind: String?
+    var ownerId: Int?
+    var ownerName: String?
+    var isOwner: Bool?
+    var collaborators: [Collaborator]?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, tracks, kind
+        case id, name, tracks, kind, collaborators
+        case ownerId = "owner_id"
+        case ownerName = "owner_name"
+        case isOwner = "is_owner"
         case trackCount = "track_count"
         case isSmart = "is_smart"
         case builtin
@@ -208,4 +217,68 @@ struct APIErrorBody: Codable {
 struct APIError: Error, LocalizedError {
     let message: String
     var errorDescription: String? { message }
+}
+
+
+struct Collaborator: Codable, Identifiable, Hashable {
+    var userId: Int
+    var username: String
+    var displayName: String
+    var avatarUrl: String?
+    var id: Int { userId }
+
+    enum CodingKeys: String, CodingKey {
+        case username
+        case userId = "user_id"
+        case displayName = "display_name"
+        case avatarUrl = "avatar_url"
+    }
+}
+
+struct Person: Codable, Identifiable, Hashable {
+    var id: Int
+    var username: String
+    var displayName: String
+    var avatarUrl: String?
+    var isFollowing: Bool
+    var followsYou: Bool
+
+    var shownName: String { displayName.isEmpty ? username : displayName }
+
+    enum CodingKeys: String, CodingKey {
+        case id, username
+        case displayName = "display_name"
+        case avatarUrl = "avatar_url"
+        case isFollowing = "is_following"
+        case followsYou = "follows_you"
+    }
+}
+
+struct Profile: Codable {
+    var id: Int
+    var username: String
+    var displayName: String
+    var avatarUrl: String?
+    var isFollowing: Bool
+    var followsYou: Bool
+    var followers: Int
+    var following: Int
+    var favorites: Int
+    var plays30d: Int
+    var isSelf: Bool
+    var activityShared: Bool
+    var recent: [Track]
+
+    var shownName: String { displayName.isEmpty ? username : displayName }
+
+    enum CodingKeys: String, CodingKey {
+        case id, username, followers, following, favorites, recent
+        case displayName = "display_name"
+        case avatarUrl = "avatar_url"
+        case isFollowing = "is_following"
+        case followsYou = "follows_you"
+        case plays30d = "plays_30d"
+        case isSelf = "is_self"
+        case activityShared = "activity_shared"
+    }
 }

@@ -488,6 +488,12 @@ class PlayerPlaylist(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     user: Mapped["PlayerUser"] = relationship(back_populates="playlists")
+    # SQLite here runs without foreign_keys enforcement, so ON DELETE CASCADE
+    # never fires — without an ORM cascade, memberships outlive the playlist and
+    # get inherited by whichever playlist later reuses the id.
+    members: Mapped[list["PlayerPlaylistMember"]] = relationship(
+        cascade="all, delete-orphan", overlaps="user"
+    )
     tracks: Mapped[list["PlayerPlaylistTrack"]] = relationship(
         back_populates="playlist",
         cascade="all, delete-orphan",

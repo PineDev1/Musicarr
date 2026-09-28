@@ -94,3 +94,23 @@ def test_collaborator_can_add_tracks_but_not_rename_or_share(db, as_user):
     player_social.remove_collaborator(pl.id, friend.id, None, db)  # leave
     with pytest.raises(HTTPException):
         player.get_playlist(pl.id, None, db)
+
+
+def test_deleting_playlist_or_user_leaves_no_social_rows_behind(db, as_user):
+    from app.models import PlayerPlaylistMember
+    from app.services import player_auth
+
+    owner, friend = _user(db, "owner"), _user(db, "friend")
+    pl = PlayerPlaylist(user_id=owner.id, name="Mix")
+    db.add(pl)
+    db.commit()
+    as_user(owner)
+    player_social.add_collaborator(pl.id, player_social.AddCollaborator(username="friend"), None, db)
+    player_social.follow(friend.id, None, db)
+
+    db.delete(pl)  # what DELETE /playlists/{id} does
+    db.commit()
+    assert db.query(PlayerPlaylistMember).count() == 0  # no orphan to inherit on id reuse
+
+    player_auth.delete_user(db, friend.id)
+    assert db.query(PlayerFollow).count() == 0

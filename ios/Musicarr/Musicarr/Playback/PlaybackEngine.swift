@@ -17,6 +17,10 @@ final class PlaybackEngine: NSObject, ObservableObject {
     @Published private(set) var duration: Double = 0
     @Published var sourceLabel: String = ""
     @Published private(set) var shuffleEnabled = false
+    @Published private(set) var playbackSpeed: Double = {
+        let v = UserDefaults.standard.double(forKey: "musicarr.playbackSpeed")
+        return v >= 0.5 && v <= 2 ? v : 1.0
+    }()
     @Published var repeatMode: RepeatMode = .off
     @Published var sleepDeadline: Date?
 
@@ -227,6 +231,7 @@ final class PlaybackEngine: NSObject, ObservableObject {
         let newPlayer = AVPlayer(playerItem: item)
         player = newPlayer
         addObservers(item: item)
+        newPlayer.defaultRate = Float(playbackSpeed)
         newPlayer.play()
         isPlaying = true
         currentTime = 0
@@ -235,6 +240,14 @@ final class PlaybackEngine: NSObject, ObservableObject {
         loadArtworkIfNeeded(for: track)
         publishSharedState()
         Task { try? await PlayerAPI.reportPlaying(trackID: track.id, position: 0, playing: true, title: track.title, artistName: track.artistName, coverURL: track.coverUrl) }
+    }
+
+    func setPlaybackSpeed(_ speed: Double) {
+        playbackSpeed = speed
+        UserDefaults.standard.set(speed, forKey: "musicarr.playbackSpeed")
+        player?.defaultRate = Float(speed)
+        if isPlaying { player?.rate = Float(speed) }
+        updateNowPlayingInfo()
     }
 
     func togglePlayPause() {
@@ -382,7 +395,7 @@ final class PlaybackEngine: NSObject, ObservableObject {
             MPMediaItemPropertyAlbumTitle: track.albumTitle,
             MPMediaItemPropertyPlaybackDuration: duration,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
-            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
+            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? playbackSpeed : 0.0,
         ]
         if let artwork = artworkCache[track.id] {
             info[MPMediaItemPropertyArtwork] = artwork
