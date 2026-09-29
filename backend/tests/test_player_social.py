@@ -112,5 +112,24 @@ def test_deleting_playlist_or_user_leaves_no_social_rows_behind(db, as_user):
     db.commit()
     assert db.query(PlayerPlaylistMember).count() == 0  # no orphan to inherit on id reuse
 
+    from datetime import datetime, timedelta, timezone
+
+    from app.models import PlayerCastToken, PlayerPlayEvent, PlayerShareLink
+
+    t = _track(db)
+    exp = datetime.now(timezone.utc) + timedelta(days=1)
+    db.add_all(
+        [
+            PlayerPlayEvent(user_id=friend.id, track_id=t.id),
+            PlayerShareLink(token="tok", track_id=t.id, created_by_user_id=friend.id, expires_at=exp),
+            PlayerCastToken(token="cast", user_id=friend.id, expires_at=exp),
+        ]
+    )
+    db.commit()
+
     player_auth.delete_user(db, friend.id)
     assert db.query(PlayerFollow).count() == 0
+    # history/share/cast rows must go too, or a reused id inherits them
+    assert db.query(PlayerPlayEvent).count() == 0
+    assert db.query(PlayerShareLink).count() == 0
+    assert db.query(PlayerCastToken).count() == 0

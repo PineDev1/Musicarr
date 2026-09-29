@@ -22,6 +22,7 @@ import { DEFAULT_PREFS, playerApi, type PlayerPrefs, type PlayerRepeatMode } fro
 import { copyToClipboard } from './TrackMenu'
 import { WavyPlayBar } from './WavyPlayBar'
 import { AudioSettingsPanel } from './AudioSettingsPanel'
+import { SubsonicPanel } from './SubsonicPanel'
 
 type Props = {
   displayName: string
@@ -499,6 +500,7 @@ export function PlayerLayout({ displayName, avatarUrl, userId }: Props) {
               Start new sessions with shuffle on
             </label>
             <AudioSettingsPanel />
+            <SubsonicPanel />
             <div className="field">
               <label>Default repeat</label>
               <select

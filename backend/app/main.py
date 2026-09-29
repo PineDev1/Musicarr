@@ -29,6 +29,7 @@ from app.api import (
     search,
     settings,
     stats,
+    subsonic,
 )
 from app.core.database import SessionLocal, ensure_dirs, init_db
 from app.services import api_keys, app_auth, player_auth, player_presence
@@ -208,6 +209,8 @@ app.include_router(ops.router, prefix="/api")
 app.include_router(events.router, prefix="/api")
 app.include_router(player.router, prefix="/api")
 app.include_router(player_social.router, prefix="/api")
+app.include_router(subsonic.settings_router, prefix="/api")
+app.include_router(subsonic.router)
 app.include_router(musicbrainz_catalog.router, prefix="/api")
 app.include_router(backup.router, prefix="/api")
 app.include_router(import_lists.router, prefix="/api")

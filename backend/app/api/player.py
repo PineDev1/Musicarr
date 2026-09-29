@@ -1627,11 +1627,27 @@ def listen_history(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/library/stats")
-def listen_stats(request: Request, db: Session = Depends(get_db), range_days: int = 30):
-    """Aggregate play counts for the current listener."""
+def listen_stats(
+    request: Request,
+    db: Session = Depends(get_db),
+    range_days: int = 30,
+    year: int | None = None,
+):
+    """Aggregate play counts for the current listener.
+
+    With `year`, covers that calendar year (year-in-review) instead of the
+    trailing `range_days`.
+    """
     user = _current_player_user(request, db)
-    days = max(1, min(365, int(range_days or 30)))
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+    until: datetime | None = None
+    if year is not None:
+        year = max(2000, min(2100, int(year)))
+        since = datetime(year, 1, 1, tzinfo=timezone.utc)
+        until = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        days = (until - since).days
+    else:
+        days = max(1, min(365, int(range_days or 30)))
+        since = datetime.now(timezone.utc) - timedelta(days=days)
     events = list(
         db.scalars(
             select(PlayerPlayEvent)
@@ -1643,6 +1659,7 @@ def listen_stats(request: Request, db: Session = Depends(get_db), range_days: in
             .where(
                 PlayerPlayEvent.user_id == user.id,
                 PlayerPlayEvent.played_at >= since,
+                *([PlayerPlayEvent.played_at < until] if until else []),
             )
             .order_by(PlayerPlayEvent.played_at.desc())
         )
@@ -1651,6 +1668,11 @@ def listen_stats(request: Request, db: Session = Depends(get_db), range_days: in
     )
     track_counts: dict[int, dict] = {}
     artist_counts: dict[int, dict] = {}
+    album_counts: dict[int, dict] = {}
+    genre_counts: dict[str, dict] = {}
+    hours = [0] * 24
+    weekdays = [0] * 7
+    daily_seconds: dict[str, int] = {}
     total_seconds = 0
     for ev in events:
         track = ev.track
@@ -1658,6 +1680,34 @@ def listen_stats(request: Request, db: Session = Depends(get_db), range_days: in
             continue
         dur = int(track.duration or 0)
         total_seconds += dur
+        when = ev.played_at
+        if when is not None:
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            hours[when.hour] += 1
+            weekdays[when.weekday()] += 1
+            day_key = when.date().isoformat()
+            daily_seconds[day_key] = daily_seconds.get(day_key, 0) + dur
+        album = track.album
+        if album:
+            al = album_counts.setdefault(
+                album.id,
+                {
+                    "album_id": album.id,
+                    "title": album.title,
+                    "artist_name": album.artist.name if album.artist else "",
+                    "cover_url": album.cover_url,
+                    "plays": 0,
+                    "seconds": 0,
+                },
+            )
+            al["plays"] += 1
+            al["seconds"] += dur
+        g = (track.genre or "").strip()
+        if g:
+            ge = genre_counts.setdefault(g.lower(), {"genre": g, "plays": 0, "seconds": 0})
+            ge["plays"] += 1
+            ge["seconds"] += dur
         t_entry = track_counts.setdefault(
             track.id,
             {
@@ -1690,15 +1740,52 @@ def listen_stats(request: Request, db: Session = Depends(get_db), range_days: in
 
     top_tracks = sorted(track_counts.values(), key=lambda x: (-x["plays"], -x["seconds"]))[:20]
     top_artists = sorted(artist_counts.values(), key=lambda x: (-x["plays"], -x["seconds"]))[:20]
+    top_albums = sorted(album_counts.values(), key=lambda x: (-x["plays"], -x["seconds"]))[:10]
+    top_genres = sorted(genre_counts.values(), key=lambda x: (-x["plays"], -x["seconds"]))[:10]
+    longest_streak, current_streak = _listening_streaks(set(daily_seconds))
     return {
         "range_days": days,
+        "year": year,
         "play_events": len(events),
         "unique_tracks": len(track_counts),
         "unique_artists": len(artist_counts),
         "total_seconds": total_seconds,
         "top_tracks": top_tracks,
         "top_artists": top_artists,
+        "top_albums": top_albums,
+        "top_genres": top_genres,
+        "plays_by_hour": hours,
+        "plays_by_weekday": weekdays,
+        "active_days": len(daily_seconds),
+        "longest_streak_days": longest_streak,
+        "current_streak_days": current_streak,
+        "daily_seconds": [
+            {"date": d, "seconds": s} for d, s in sorted(daily_seconds.items())[-366:]
+        ],
     }
+
+
+def _listening_streaks(days: set[str]) -> tuple[int, int]:
+    """(longest, current) run of consecutive listening days. Current counts
+    back from today, or yesterday if today has no plays yet."""
+    from datetime import date
+
+    if not days:
+        return 0, 0
+    parsed = sorted(date.fromisoformat(d) for d in days)
+    longest = run = 1
+    for prev, cur in zip(parsed, parsed[1:]):
+        run = run + 1 if (cur - prev).days == 1 else 1
+        longest = max(longest, run)
+    have = set(parsed)
+    cursor = datetime.now(timezone.utc).date()
+    if cursor not in have:
+        cursor -= timedelta(days=1)
+    current = 0
+    while cursor in have:
+        current += 1
+        cursor -= timedelta(days=1)
+    return longest, current
 
 
 _AVATAR_MAX_BYTES = 2 * 1024 * 1024

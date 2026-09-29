@@ -278,6 +278,10 @@ export const playerApi = {
   }) => request<{ ok: boolean }>('/me/playing', { method: 'POST', body: JSON.stringify(body) }),
   commands: () => request<{ stop: boolean }>('/me/commands'),
   activity: () => request<PlayerActivity>('/activity'),
+  subsonic: () => request<{ username: string; secret: string | null }>('/subsonic'),
+  regenerateSubsonic: () =>
+    request<{ username: string; secret: string | null }>('/subsonic/regenerate', { method: 'POST' }),
+  revokeSubsonic: () => request<{ ok: boolean }>('/subsonic', { method: 'DELETE' }),
   people: () => request<PlayerPerson[]>('/social/people'),
   profile: (id: number) => request<PlayerProfile>(`/social/profile/${id}`),
   follow: (id: number) => request<{ ok: boolean }>(`/social/follow/${id}`, { method: 'POST' }),
@@ -322,9 +326,25 @@ export const playerApi = {
       `/library/songs?q=${encodeURIComponent(q)}&offset=${offset}&limit=${limit}`,
     ),
   continueListening: () => request<PlayerContinue>('/library/continue'),
-  stats: (rangeDays = 30) =>
+  stats: (rangeDays = 30, year?: number) =>
     request<{
       range_days: number
+      year: number | null
+      top_albums: {
+        album_id: number
+        title: string
+        artist_name: string
+        cover_url: string | null
+        plays: number
+        seconds: number
+      }[]
+      top_genres: { genre: string; plays: number; seconds: number }[]
+      plays_by_hour: number[]
+      plays_by_weekday: number[]
+      active_days: number
+      longest_streak_days: number
+      current_streak_days: number
+      daily_seconds: { date: string; seconds: number }[]
       play_events: number
       unique_tracks: number
       unique_artists: number
@@ -344,7 +364,7 @@ export const playerApi = {
         plays: number
         seconds: number
       }[]
-    }>(`/library/stats?range_days=${rangeDays}`),
+    }>(`/library/stats?${year ? `year=${year}` : `range_days=${rangeDays}`}`),
   listenHistory: () => request<PlayerPlaylist>('/library/history'),
   clearHistory: () => request<{ ok: boolean }>('/library/history', { method: 'DELETE' }),
   streamUrl: (trackId: number) => `/api/player/stream/${trackId}`,

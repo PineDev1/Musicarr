@@ -149,6 +149,11 @@ enum PlayerAPI {
         try await APIClient.shared.request("/library/continue")
     }
 
+    static func stats(rangeDays: Int = 30, year: Int? = nil) async throws -> ListeningStats {
+        let query = year.map { ["year": String($0)] } ?? ["range_days": String(rangeDays)]
+        return try await APIClient.shared.request("/library/stats", query: query)
+    }
+
     static func recommended() async throws -> [Track] {
         try await APIClient.shared.request("/library/recommended")
     }

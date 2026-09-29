@@ -464,6 +464,9 @@ class PlayerUser(Base):
     # player accounts on this instance is a meaningfully different privacy
     # posture than the existing admin-only now-playing monitor.
     share_listening_activity: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Dedicated secret for the Subsonic-compatible API (token auth needs the
+    # plain value server-side), deliberately separate from the login password.
+    subsonic_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     playlists: Mapped[list["PlayerPlaylist"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

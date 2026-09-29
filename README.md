@@ -71,6 +71,8 @@ so the people you share it with never need their own accounts on the source serv
 | **Backup & restore** | One-click export of settings and library metadata (secrets excluded); guided restore. |
 | **Media server hooks** | Refresh Plex, Jellyfin, Navidrome, or a generic webhook after downloads/imports. |
 | **Multi-user music player** | `/player` — its own logins, playlists, drag-and-drop queue, wavy seek bar, smart mixes, and lossless streaming. |
+| **Subsonic-compatible API** | Play your library from Symfonium, DSub, Feishin, Substreamer and other Subsonic / OpenSubsonic apps. Create a dedicated secret in Player → Settings (it's separate from your login password and can be revoked). Endpoint: `/rest`. |
+| **Listening stats & year in review** | Top artists, tracks, albums and genres, listening streaks, and when you listen, for any period or a full calendar year — on the web player and iOS. |
 | **Admin Now Playing** | See who's listening, live, and force-pause a session. |
 | **Guided setup wizard** | First run walks you through sources, library path, and (optionally) the player. |
 | **Docker-first deploy** | Single container, single process, web UI on port `8787`. |
