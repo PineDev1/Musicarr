@@ -1,7 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { playerApi, type PlayerSmartCriteria, type PlayerSmartRule } from './playerApi'
+import {
+  playerApi,
+  type PlayerCollaborator,
+  type PlayerSmartCriteria,
+  type PlayerSmartRule,
+} from './playerApi'
 import { usePlayerQueue } from './PlayerQueueContext'
 import { SongRow } from './PlayerShelves'
 import { IconPlay, IconPlus } from './icons'
@@ -161,6 +166,86 @@ function SmartCriteriaEditor({
   )
 }
 
+function CollaboratorsPanel({
+  playlistId,
+  isOwner,
+  collaborators,
+  onChanged,
+}: {
+  playlistId: number
+  isOwner: boolean
+  collaborators: PlayerCollaborator[]
+  onChanged: () => void
+}) {
+  const [username, setUsername] = useState('')
+  const add = useMutation({
+    mutationFn: () => playerApi.addCollaborator(playlistId, username.trim()),
+    onSuccess: () => {
+      setUsername('')
+      onChanged()
+    },
+  })
+  const remove = useMutation({
+    mutationFn: (uid: number) => playerApi.removeCollaborator(playlistId, uid),
+    onSuccess: onChanged,
+  })
+  const leave = useMutation({
+    mutationFn: () => playerApi.leavePlaylist(playlistId),
+    onSuccess: () => {
+      window.location.assign('/player/playlists')
+    },
+  })
+  return (
+    <section className="suggest-block">
+      <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Collaborators</h2>
+      <p className="muted tiny">Collaborators can add and remove songs. Only the owner can rename or delete.</p>
+      <div className="toolbar" style={{ flexWrap: 'wrap' }}>
+        {collaborators.map((c) => (
+          <span key={c.user_id} className="btn ghost" style={{ cursor: 'default' }}>
+            {c.display_name || c.username}
+            {isOwner && (
+              <button
+                type="button"
+                className="btn ghost danger"
+                aria-label={`Remove ${c.username}`}
+                onClick={() => remove.mutate(c.user_id)}
+              >
+                ×
+              </button>
+            )}
+          </span>
+        ))}
+        {!collaborators.length && <span className="muted tiny">Just you.</span>}
+      </div>
+      {isOwner && (
+        <form
+          className="toolbar"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (username.trim()) add.mutate()
+          }}
+        >
+          <input
+            type="text"
+            placeholder="Add by username…"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
+          <button type="submit" className="btn secondary" disabled={!username.trim() || add.isPending}>
+            Add
+          </button>
+        </form>
+      )}
+      {add.isError && <p className="error">{(add.error as Error).message}</p>}
+      {!isOwner && (
+        <button type="button" className="btn ghost danger" onClick={() => leave.mutate()}>
+          Leave this playlist
+        </button>
+      )}
+    </section>
+  )
+}
+
 export function PlayerPlaylistDetailPage() {
   const { id } = useParams()
   const isBuiltin = id != null && Number.isNaN(Number(id))
@@ -224,15 +309,17 @@ export function PlayerPlaylistDetailPage() {
             {data.track_count} tracks
             {data.is_smart ? ' · Smart' : ''}
             {data.builtin ? ' · Built-in' : ''}
+            {data.is_owner === false ? ` · Shared by ${data.owner_name || 'someone'}` : ''}
+            {data.is_owner !== false && data.collaborators?.length ? ' · Shared' : ''}
           </p>
         </div>
         <div className="toolbar">
-          {!data.builtin && !hasCriteria && (
+          {!data.builtin && data.is_owner !== false && !hasCriteria && (
             <button type="button" className="btn secondary" onClick={() => toggleSmart.mutate()}>
               {data.is_smart ? 'Disable Smart' : 'Enable Smart'}
             </button>
           )}
-          {!data.builtin && (
+          {!data.builtin && data.is_owner !== false && (
             <button type="button" className="btn secondary" onClick={() => setEditingRules((v) => !v)}>
               {hasCriteria ? 'Edit smart rules' : 'Make smart (rules)'}
             </button>
@@ -314,6 +401,18 @@ export function PlayerPlaylistDetailPage() {
             )}
           </div>
         </section>
+      )}
+
+      {!data.builtin && !data.is_smart && (
+        <CollaboratorsPanel
+          playlistId={playlistId}
+          isOwner={data.is_owner !== false}
+          collaborators={data.collaborators || []}
+          onChanged={() => {
+            qc.invalidateQueries({ queryKey: ['player-playlist', id] })
+            qc.invalidateQueries({ queryKey: ['player-playlists'] })
+          }}
+        />
       )}
 
       <div className="am-song-list bordered">

@@ -29,7 +29,7 @@ struct TrackRow: View {
                     .font(.body)
                     .foregroundStyle(isCurrent ? Theme.accent : Theme.text)
                     .lineLimit(1)
-                Text(showAlbum ? "\(track.artistName) — \(track.albumTitle)" : track.artistName)
+                Text((showAlbum ? "\(track.artistName) — \(track.albumTitle)" : track.artistName) + (track.addedByName.map { " · added by \($0)" } ?? ""))
                     .font(.caption)
                     .foregroundStyle(Theme.muted)
                     .lineLimit(1)

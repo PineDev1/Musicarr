@@ -55,7 +55,18 @@ export function ReleaseResultsTable({
           <tbody>
             {results.map((r, i) => (
               <tr key={`${r.indexer_id}-${i}`}>
-                <td style={{ maxWidth: 420, wordBreak: 'break-word' }}>{r.title}</td>
+                <td style={{ maxWidth: 420, wordBreak: 'break-word' }}>
+                  {r.title}
+                  {r.blocklisted && (
+                    <span
+                      className="badge failed"
+                      style={{ marginLeft: 8 }}
+                      title="Failed or rejected before — auto-grab skips this release"
+                    >
+                      Blocklisted
+                    </span>
+                  )}
+                </td>
                 {showAlbumBadge && (
                   <td>
                     {r.matched_album_id != null ? (

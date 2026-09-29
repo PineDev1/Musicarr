@@ -6,10 +6,10 @@ import time
 from typing import Any
 
 from fastapi import Response
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.models import PlayerUser
+from app.models import PlayerFollow, PlayerPlaylistMember, PlayerUser
 from app.models.schemas import PlayerUserOut
 from app.services.app_auth import hash_password, verify_password
 from app.services.proxy import cookie_domain_for_settings, ssl_enabled
@@ -195,6 +195,14 @@ def delete_user(db: Session, user_id: int) -> None:
     user = db.get(PlayerUser, user_id)
     if not user:
         raise ValueError("User not found")
+    # No FK enforcement on SQLite: clear social rows explicitly so a reused id
+    # can't inherit this user's follows or playlist memberships.
+    db.execute(
+        delete(PlayerFollow).where(
+            (PlayerFollow.follower_id == user_id) | (PlayerFollow.followee_id == user_id)
+        )
+    )
+    db.execute(delete(PlayerPlaylistMember).where(PlayerPlaylistMember.user_id == user_id))
     db.delete(user)
     db.commit()
 

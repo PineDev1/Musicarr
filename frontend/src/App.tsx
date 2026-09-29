@@ -9,6 +9,7 @@ import { AddArtistPage } from './pages/AddArtistPage'
 import { AlbumPage } from './pages/AlbumPage'
 import { ArtistPage } from './pages/ArtistPage'
 import { CalendarPage } from './pages/CalendarPage'
+import { SystemPage } from './pages/SystemPage'
 import { DiscoverPage } from './pages/DiscoverPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ImportListsPage } from './pages/ImportListsPage'
@@ -107,6 +108,7 @@ function AdminApp() {
           <Route path="calendar" element={<CalendarPage />} />
           <Route path="discover" element={<DiscoverPage />} />
           <Route path="maintenance" element={<MaintenancePage />} />
+          <Route path="system" element={<SystemPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       )}

@@ -8,9 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
-from app.models import Album, Artist, DownloadClient, DownloadJob, Indexer, RemotePathMapping
+from app.models import Album, Artist, BlocklistEntry, DownloadClient, DownloadJob, Indexer, RemotePathMapping
 from app.models.schemas import (
     AcquisitionStatusOut,
+    BlocklistAdd,
+    BlocklistEntryOut,
     DownloadClientCreate,
     DownloadClientOut,
     DownloadClientTestDraft,
@@ -34,6 +36,7 @@ from app.services.download_clients import (
     get_client,
     pick_client,
 )
+from app.services.blocklist import add_from_job, add_release, blocked_keys, title_key
 from app.services.history import add_history
 from app.services.indexers.newznab import verify_indexer_key
 from app.services.indexers.search import parse_categories
@@ -461,6 +464,7 @@ def search_releases(
     candidates, errors = search_album(
         db, artist_name, album.title, year=album.release_date, query_override=query
     )
+    blocked = blocked_keys(db)
     return ReleaseSearchOut(
         results=[
             ReleaseCandidateOut(
@@ -474,6 +478,7 @@ def search_releases(
                 indexer_id=c.indexer_id,
                 indexer_name=c.indexer_name,
                 score=c.score,
+                blocklisted=title_key(c.title) in blocked,
             )
             for c in candidates
         ],
@@ -501,6 +506,7 @@ def search_releases_for_artist(
         raise HTTPException(status_code=404, detail="Artist not found")
 
     annotated, errors = search_artist_catalog(db, artist)
+    blocked = blocked_keys(db)
     return ReleaseSearchOut(
         results=[
             ReleaseCandidateOut(
@@ -516,6 +522,7 @@ def search_releases_for_artist(
                 score=c.score,
                 matched_album_id=album.id if album else None,
                 matched_album_title=album.title if album else None,
+                blocklisted=title_key(c.title) in blocked,
             )
             for c, album in annotated
         ],
@@ -598,3 +605,47 @@ def sweep_wanted_now():
     from app.services.indexer_engine import wanted_indexer_sweep
 
     return wanted_indexer_sweep.run_once(force=True)
+
+
+@router.get("/blocklist", response_model=list[BlocklistEntryOut])
+def list_blocklist(db: Session = Depends(get_db)):
+    return list(db.scalars(select(BlocklistEntry).order_by(BlocklistEntry.created_at.desc())))
+
+
+@router.post("/blocklist", response_model=BlocklistEntryOut, status_code=201)
+def add_to_blocklist(payload: BlocklistAdd, db: Session = Depends(get_db)):
+    """Block a release by title, or by a download job (the Queue's "Blocklist" button)."""
+    reason = payload.reason.strip() or "Blocked manually"
+    if payload.job_id is not None:
+        job = db.get(DownloadJob, payload.job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        entry = add_from_job(db, job, reason)
+        if not entry:
+            raise HTTPException(status_code=400, detail="Only indexer downloads can be blocklisted")
+    else:
+        title = (payload.release_title or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="release_title or job_id is required")
+        entry = add_release(db, title, reason=reason)
+        if not entry:
+            raise HTTPException(status_code=400, detail="Release title is empty")
+    add_history(db, "blocklisted", f"Blocklisted '{entry.release_title}': {entry.reason}")
+    return entry
+
+
+@router.delete("/blocklist/{entry_id}")
+def remove_from_blocklist(entry_id: int, db: Session = Depends(get_db)):
+    row = db.get(BlocklistEntry, entry_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/blocklist")
+def clear_blocklist(db: Session = Depends(get_db)):
+    n = db.query(BlocklistEntry).delete()
+    db.commit()
+    return {"removed": n}

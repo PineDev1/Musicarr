@@ -16,6 +16,7 @@ export type PlayerUser = {
 }
 
 export type PlayerTrack = {
+  added_by_name?: string | null
   id: number
   title: string
   track_no: number
@@ -131,6 +132,36 @@ export type PlayerPlaylist = {
   criteria?: PlayerSmartCriteria | null
   builtin?: boolean
   kind?: string | null
+  owner_id?: number | null
+  owner_name?: string | null
+  is_owner?: boolean
+  collaborators?: PlayerCollaborator[]
+}
+
+export type PlayerCollaborator = {
+  user_id: number
+  username: string
+  display_name: string
+  avatar_url: string | null
+}
+
+export type PlayerPerson = {
+  id: number
+  username: string
+  display_name: string
+  avatar_url: string | null
+  is_following: boolean
+  follows_you: boolean
+}
+
+export type PlayerProfile = PlayerPerson & {
+  followers: number
+  following: number
+  favorites: number
+  plays_30d: number
+  is_self: boolean
+  activity_shared: boolean
+  recent: PlayerTrack[]
 }
 
 export type PlayerPrefs = {
@@ -247,6 +278,21 @@ export const playerApi = {
   }) => request<{ ok: boolean }>('/me/playing', { method: 'POST', body: JSON.stringify(body) }),
   commands: () => request<{ stop: boolean }>('/me/commands'),
   activity: () => request<PlayerActivity>('/activity'),
+  people: () => request<PlayerPerson[]>('/social/people'),
+  profile: (id: number) => request<PlayerProfile>(`/social/profile/${id}`),
+  follow: (id: number) => request<{ ok: boolean }>(`/social/follow/${id}`, { method: 'POST' }),
+  unfollow: (id: number) => request<{ ok: boolean }>(`/social/follow/${id}`, { method: 'DELETE' }),
+  addCollaborator: (playlistId: number, username: string) =>
+    request<PlayerCollaborator[]>(`/social/playlists/${playlistId}/collaborators`, {
+      method: 'POST',
+      body: JSON.stringify({ username }),
+    }),
+  leavePlaylist: (playlistId: number) =>
+    request<{ ok: boolean }>(`/social/playlists/${playlistId}/leave`, { method: 'POST' }),
+  removeCollaborator: (playlistId: number, userId: number) =>
+    request<{ ok: boolean }>(`/social/playlists/${playlistId}/collaborators/${userId}`, {
+      method: 'DELETE',
+    }),
   lastfmStatus: () => request<{ connected: boolean; username: string | null }>('/lastfm/status'),
   lastfmStart: () => request<{ auth_url: string }>('/lastfm/start'),
   lastfmCallback: (token: string) =>

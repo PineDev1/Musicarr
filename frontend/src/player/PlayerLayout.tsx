@@ -21,6 +21,7 @@ import {
 import { DEFAULT_PREFS, playerApi, type PlayerPrefs, type PlayerRepeatMode } from './playerApi'
 import { copyToClipboard } from './TrackMenu'
 import { WavyPlayBar } from './WavyPlayBar'
+import { AudioSettingsPanel } from './AudioSettingsPanel'
 
 type Props = {
   displayName: string
@@ -33,6 +34,7 @@ const LIBRARY_LINKS = [
   { to: '/player/playlists/recently-added', label: 'Recently Added', icon: IconQueue },
   { to: '/player/history', label: 'History', icon: IconQueue },
   { to: '/player/stats', label: 'Stats', icon: IconMusic },
+  { to: '/player/people', label: 'People', icon: IconUser },
   { to: '/player/artists', label: 'Artists', icon: IconUser },
   { to: '/player/albums', label: 'Albums', icon: IconLibrary },
   { to: '/player/songs', label: 'Songs', icon: IconMusic },
@@ -496,6 +498,7 @@ export function PlayerLayout({ displayName, avatarUrl, userId }: Props) {
               />
               Start new sessions with shuffle on
             </label>
+            <AudioSettingsPanel />
             <div className="field">
               <label>Default repeat</label>
               <select

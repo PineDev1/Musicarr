@@ -206,7 +206,12 @@ def try_auto_grab_release(db: Session, artist: Artist, album: Album, settings) -
     from app.services.history import add_history
     from app.services.indexers.search import pick_best, search_album
 
+    from app.services.blocklist import blocked_keys, title_key
+
     candidates, _errors = search_album(db, artist.name, album.title, year=None)
+    blocked = blocked_keys(db)
+    if blocked:
+        candidates = [c for c in candidates if title_key(c.title) not in blocked]
     min_score = float(getattr(settings, "auto_grab_min_score", 20.0) or 20.0)
     best = pick_best(candidates, min_score=min_score)
     if not best:

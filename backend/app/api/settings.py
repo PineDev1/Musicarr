@@ -48,6 +48,11 @@ def put_settings(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     out = settings_to_out_validated(db, row)
+    from app.services.history import audit
+
+    changed = sorted(payload.model_dump(exclude_unset=True).keys())
+    if changed:
+        audit(db, "Settings changed", "fields: " + ", ".join(changed))
     # When turning auth on, keep the current browser signed in
     if row.auth_enabled and (not was_enabled or payload.auth_password or payload.auth_username):
         username = (row.auth_username or "admin").strip() or "admin"
@@ -170,6 +175,9 @@ def list_library_roots(db: Session = Depends(get_db)):
 def create_library_root(payload: LibraryRootCreate, db: Session = Depends(get_db)):
     try:
         row = library_roots.add_root(db, path=payload.path, label=payload.label)
+        from app.services.history import audit
+
+        audit(db, "Library folder added", payload.path)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return row

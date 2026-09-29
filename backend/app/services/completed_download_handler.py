@@ -637,6 +637,12 @@ class CompletedDownloadHandler:
             return
         logger.warning("Job %s failed: %s", job.id, message)
         try:
+            from app.services.blocklist import add_from_job
+
+            add_from_job(db, job, f"Failed: {message}")
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not blocklist failed job %s", job.id, exc_info=True)
+        try:
             add_history(
                 db,
                 "download_failed",

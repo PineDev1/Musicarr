@@ -8,6 +8,7 @@ import { useToast } from '../Toast'
 export function LibraryPage() {
   const [filter, setFilter] = useState('')
   const [genre, setGenre] = useState('')
+  const [tag, setTag] = useState('')
   const [mergeGroup, setMergeGroup] = useState<
     { id: number; name: string; provider: string; provider_id: string }[] | null
   >(null)
@@ -72,9 +73,18 @@ export function LibraryPage() {
   const filtered = useMemo(() => {
     if (!data) return []
     const q = filter.trim().toLowerCase()
-    if (!q) return data
-    return data.filter((a) => a.name.toLowerCase().includes(q))
-  }, [data, filter])
+    return data.filter(
+      (a) =>
+        (!q || a.name.toLowerCase().includes(q)) &&
+        (!tag || (a.tags || []).some((t) => t.toLowerCase() === tag.toLowerCase())),
+    )
+  }, [data, filter, tag])
+
+  const allTags = useMemo(() => {
+    const seen = new Map<string, string>()
+    for (const a of data || []) for (const t of a.tags || []) seen.set(t.toLowerCase(), t)
+    return [...seen.values()].sort((x, y) => x.localeCompare(y))
+  }, [data])
 
   const upgradeCount = upgradable?.length || 0
   const collisionGroups = collisions.data?.groups || []
@@ -183,6 +193,16 @@ export function LibraryPage() {
             onChange={(e) => setFilter(e.target.value)}
             style={{ flex: 1, minWidth: 180 }}
           />
+          {!!allTags.length && (
+            <select value={tag} onChange={(e) => setTag(e.target.value)} style={{ minWidth: 140 }}>
+              <option value="">All tags</option>
+              {allTags.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          )}
           {!!genres.data?.length && (
             <select value={genre} onChange={(e) => setGenre(e.target.value)} style={{ minWidth: 160 }}>
               <option value="">All genres</option>

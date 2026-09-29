@@ -157,6 +157,8 @@ def migrate_schema(engine_: Engine | None = None) -> None:
             add_column("artists", "quality_pref VARCHAR(16)")
         if "auto_grab_override" not in artist_cols:
             add_column("artists", "auto_grab_override VARCHAR(16)")
+        if "tags_json" not in artist_cols:
+            add_column("artists", "tags_json TEXT DEFAULT '[]'")
         with eng.begin() as conn:
             conn.execute(
                 text("UPDATE artists SET status = 'active' WHERE status IS NULL OR status = ''")
@@ -256,6 +258,10 @@ def migrate_schema(engine_: Engine | None = None) -> None:
             add_column("player_playlists", "is_smart BOOLEAN DEFAULT 0")
         if "criteria_json" not in pl_cols:
             add_column("player_playlists", "criteria_json TEXT")
+
+    plt_cols = existing_columns("player_playlist_tracks")
+    if plt_cols and "added_by_user_id" not in plt_cols:
+        add_column("player_playlist_tracks", "added_by_user_id INTEGER")
 
     admin_user_cols = existing_columns("admin_users")
     if admin_user_cols:

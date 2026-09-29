@@ -1,3 +1,5 @@
+import { PlayerPeoplePage } from './PlayerPeoplePage'
+import { PlayerProfilePage } from './PlayerProfilePage'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
@@ -105,6 +107,8 @@ export function PlayerApp() {
           <Route path="stats" element={<PlayerStatsPage />} />
           <Route path="playlists" element={<PlayerPlaylistsPage />} />
           <Route path="playlists/:id" element={<PlayerPlaylistDetailPage />} />
+          <Route path="people" element={<PlayerPeoplePage />} />
+          <Route path="people/:id" element={<PlayerProfilePage />} />
           <Route path="search" element={<PlayerSearchPage />} />
           <Route path="*" element={<Navigate to="/player" replace />} />
         </Route>

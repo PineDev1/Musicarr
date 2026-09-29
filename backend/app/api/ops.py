@@ -13,6 +13,7 @@ from app.models.schemas import (
     LibraryJobOut,
     LinkArtistRequest,
 )
+from app.services import system_info
 from app.services.download_queue import ACTIVE_JOB_STATES, download_queue
 from app.services.library import (
     build_import_review,
@@ -111,10 +112,17 @@ def retry_failed_jobs(
 
 
 @router.get("/history", response_model=list[HistoryOut])
-def get_history(db: Session = Depends(get_db), limit: int = 100):
+def get_history(
+    db: Session = Depends(get_db), limit: int = 100, event_type: str | None = None
+):
+    stmt = select(HistoryEvent)
+    if event_type == "audit":
+        stmt = stmt.where(HistoryEvent.event_type == "audit")
+    elif event_type == "activity":
+        stmt = stmt.where(HistoryEvent.event_type != "audit")
     return list(
         db.scalars(
-            select(HistoryEvent).order_by(HistoryEvent.created_at.desc()).limit(limit)
+            stmt.order_by(HistoryEvent.created_at.desc()).limit(max(1, min(limit, 500)))
         ).all()
     )
 
@@ -227,3 +235,21 @@ def library_reorganize():
 @router.post("/monitor/run")
 def run_monitor():
     return release_monitor.run_check(force=True)
+
+
+@router.get("/system/status")
+def system_status(db: Session = Depends(get_db)):
+    from app.services.settings_service import library_root
+
+    try:
+        root = str(library_root(db))
+    except Exception:  # noqa: BLE001
+        root = None
+    return system_info.system_status(root)
+
+
+@router.get("/system/logs")
+def system_logs(level: str = "INFO", search: str = "", limit: int = 300):
+    return system_info.log_buffer.snapshot(
+        level=level, search=search, limit=max(1, min(limit, 1000))
+    )

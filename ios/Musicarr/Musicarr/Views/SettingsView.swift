@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var session: SessionStore
+    @EnvironmentObject var playback: PlaybackEngine
     @Environment(\.dismiss) private var dismiss
     @State private var lastfm: LastfmStatus?
     @State private var isConnectingLastfm = false
@@ -23,6 +24,17 @@ struct SettingsView: View {
                                     .font(.caption)
                                     .foregroundStyle(Theme.muted)
                             }
+                        }
+                    }
+                }
+
+                Section("Playback") {
+                    Picker("Speed", selection: Binding(
+                        get: { playback.playbackSpeed },
+                        set: { playback.setPlaybackSpeed($0) }
+                    )) {
+                        ForEach([0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { v in
+                            Text("\(v, specifier: "%g")x").tag(v)
                         }
                     }
                 }

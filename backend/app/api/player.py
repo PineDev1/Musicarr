@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.config import settings as app_config
 from app.core.database import get_db
 from app.models import (
+    PlayerPlaylistMember,
     Album,
     Artist,
     PlayerCastToken,
@@ -39,6 +40,7 @@ from app.models import (
     Track,
 )
 from app.models.schemas import (
+    PlayerCollaboratorOut,
     PlayerActivityEntryOut,
     PlayerActivityOut,
     PlayerAlbumOut,
@@ -537,6 +539,7 @@ def admin_delete_user(user_id: int, request: Request, db: Session = Depends(get_
         player_auth.delete_user(db, user_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    add_history(db, "audit", f"Deleted player user id {user_id}")
     return {"ok": True}
 
 
@@ -740,7 +743,81 @@ def stream_track(track_id: int, request: Request, db: Session = Depends(get_db))
 # ----- Playlists -----
 
 
+def _collaborators_out(db: Session, pl: PlayerPlaylist) -> list[PlayerCollaboratorOut]:
+    rows = db.scalars(
+        select(PlayerPlaylistMember)
+        .options(joinedload(PlayerPlaylistMember.user))
+        .where(PlayerPlaylistMember.playlist_id == pl.id)
+    ).unique().all()
+    return [
+        PlayerCollaboratorOut(
+            user_id=m.user_id,
+            username=m.user.username,
+            display_name=m.user.display_name or "",
+            avatar_url=_avatar_url(m.user),
+        )
+        for m in rows
+        if m.user
+    ]
+
+
+def _accessible_playlist(
+    db: Session, playlist_id: int, user, *, owner_only: bool = False, load_tracks: bool = False
+) -> PlayerPlaylist:
+    """Playlist the user owns, or (unless owner_only) is a collaborator on."""
+    stmt = select(PlayerPlaylist).where(PlayerPlaylist.id == playlist_id)
+    if load_tracks:
+        stmt = stmt.options(
+            joinedload(PlayerPlaylist.tracks)
+            .joinedload(PlayerPlaylistTrack.track)
+            .joinedload(Track.album)
+            .joinedload(Album.artist)
+        )
+    pl = db.scalars(stmt).unique().first()
+    if pl and pl.user_id != user.id:
+        is_member = (
+            not owner_only
+            and db.scalar(
+                select(PlayerPlaylistMember.id).where(
+                    PlayerPlaylistMember.playlist_id == pl.id,
+                    PlayerPlaylistMember.user_id == user.id,
+                )
+            )
+            is not None
+        )
+        if not is_member:
+            pl = None
+    if not pl:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    return pl
+
+
 def _playlist_out(
+    pl: PlayerPlaylist,
+    *,
+    include_tracks: bool = False,
+    db: Session | None = None,
+    viewer_id: int | None = None,
+) -> PlayerPlaylistOut:
+    out = _playlist_out_base(pl, include_tracks=include_tracks, db=db)
+    out.owner_id = pl.user_id
+    out.owner_name = (pl.user.display_name or pl.user.username) if pl.user else None
+    out.is_owner = viewer_id is None or viewer_id == pl.user_id
+    if db is not None and not out.builtin:
+        out.collaborators = _collaborators_out(db, pl)
+        if include_tracks and out.collaborators and not out.is_smart:
+            names = {
+                pl.user_id: out.owner_name,
+                **{c.user_id: c.display_name or c.username for c in out.collaborators},
+            }
+            by_track = {i.track_id: i.added_by_user_id for i in (pl.tracks or [])}
+            for t in out.tracks:
+                uid = by_track.get(t.id)
+                t.added_by_name = names.get(uid) if uid else None
+    return out
+
+
+def _playlist_out_base(
     pl: PlayerPlaylist, *, include_tracks: bool = False, db: Session | None = None
 ) -> PlayerPlaylistOut:
     criteria_dict = parse_criteria(pl)
@@ -1839,10 +1916,17 @@ def list_playlists(request: Request, db: Session = Depends(get_db)):
     rows = db.scalars(
         select(PlayerPlaylist)
         .options(joinedload(PlayerPlaylist.tracks).joinedload(PlayerPlaylistTrack.track))
-        .where(PlayerPlaylist.user_id == user.id)
+        .where(
+            (PlayerPlaylist.user_id == user.id)
+            | PlayerPlaylist.id.in_(
+                select(PlayerPlaylistMember.playlist_id).where(
+                    PlayerPlaylistMember.user_id == user.id
+                )
+            )
+        )
         .order_by(PlayerPlaylist.name)
     ).unique().all()
-    return [_playlist_out(p, db=db) for p in rows]
+    return [_playlist_out(p, db=db, viewer_id=user.id) for p in rows]
 
 
 @router.post("/playlists", response_model=PlayerPlaylistOut)
@@ -1867,19 +1951,8 @@ def create_playlist(
 @router.get("/playlists/{playlist_id}", response_model=PlayerPlaylistOut)
 def get_playlist(playlist_id: int, request: Request, db: Session = Depends(get_db)):
     user = _current_player_user(request, db)
-    pl = db.scalar(
-        select(PlayerPlaylist)
-        .options(
-            joinedload(PlayerPlaylist.tracks)
-            .joinedload(PlayerPlaylistTrack.track)
-            .joinedload(Track.album)
-            .joinedload(Album.artist)
-        )
-        .where(PlayerPlaylist.id == playlist_id, PlayerPlaylist.user_id == user.id)
-    )
-    if not pl:
-        raise HTTPException(status_code=404, detail="Playlist not found")
-    return _playlist_out(pl, include_tracks=True, db=db)
+    pl = _accessible_playlist(db, playlist_id, user, load_tracks=True)
+    return _playlist_out(pl, include_tracks=True, db=db, viewer_id=user.id)
 
 
 @router.patch("/playlists/{playlist_id}", response_model=PlayerPlaylistOut)
@@ -1930,13 +2003,7 @@ def add_tracks(
     db: Session = Depends(get_db),
 ):
     user = _current_player_user(request, db)
-    pl = db.scalar(
-        select(PlayerPlaylist)
-        .options(joinedload(PlayerPlaylist.tracks))
-        .where(PlayerPlaylist.id == playlist_id, PlayerPlaylist.user_id == user.id)
-    )
-    if not pl:
-        raise HTTPException(status_code=404, detail="Playlist not found")
+    pl = _accessible_playlist(db, playlist_id, user)
     if parse_criteria(pl):
         raise HTTPException(
             status_code=400, detail="Smart playlist tracks are computed from criteria"
@@ -1949,7 +2016,11 @@ def add_tracks(
         track = db.get(Track, tid)
         if not track or not track.path:
             continue
-        db.add(PlayerPlaylistTrack(playlist_id=pl.id, track_id=tid, position=pos))
+        db.add(
+            PlayerPlaylistTrack(
+                playlist_id=pl.id, track_id=tid, position=pos, added_by_user_id=user.id
+            )
+        )
         pos += 1
         existing.add(tid)
     pl.updated_at = datetime.now(timezone.utc)
@@ -1962,13 +2033,7 @@ def remove_track(
     playlist_id: int, track_id: int, request: Request, db: Session = Depends(get_db)
 ):
     user = _current_player_user(request, db)
-    pl = db.scalar(
-        select(PlayerPlaylist).where(
-            PlayerPlaylist.id == playlist_id, PlayerPlaylist.user_id == user.id
-        )
-    )
-    if not pl:
-        raise HTTPException(status_code=404, detail="Playlist not found")
+    pl = _accessible_playlist(db, playlist_id, user)
     row = db.scalar(
         select(PlayerPlaylistTrack).where(
             PlayerPlaylistTrack.playlist_id == playlist_id,

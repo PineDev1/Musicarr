@@ -1,5 +1,16 @@
 # Musicarr for iOS
 
+> **Status: very early beta.** This has been built and smoke-tested in the
+> iOS Simulator against a real local Musicarr instance — sign-in, browsing,
+> playback, lyrics, sharing, the queue, and the Dynamic Island/widget have
+> all been individually exercised and confirmed working. It has **not**
+> been run on a real device yet, hasn't been used for extended real-world
+> listening, and almost certainly has rough edges: missing error states,
+> untested network-loss/backgrounding edge cases, and features that work in
+> the simulator but haven't been proven under real cellular/Wi-Fi
+> conditions. Treat it as a first working build to try and break, not a
+> finished app — expect to file (or just fix) bugs as you use it.
+
 A native SwiftUI client for the Musicarr Player — the same `/api/player/*`
 backend the web player (`frontend/src/player/`) already talks to.
 
@@ -74,6 +85,48 @@ line:
 xcodebuild -project Musicarr.xcodeproj -scheme Musicarr \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
 ```
+
+## Installing on your own iPhone
+
+No paid Apple Developer account needed — a free Apple ID is enough to run
+this on your own device for personal use (it just needs reinstalling every
+7 days, see below).
+
+1. **Connect your iPhone** to the Mac with a cable (or over Wi-Fi once
+   you've paired it once in Xcode: Window → Devices and Simulators).
+2. **Generate and open the project** (see Building, above):
+   ```bash
+   cd ios/Musicarr
+   xcodegen generate
+   open Musicarr.xcodeproj
+   ```
+3. **Add your Apple ID to Xcode**, if it isn't already: Xcode → Settings →
+   Accounts → `+` → sign in with your regular Apple ID (no enrollment,
+   no payment).
+4. **Set the signing team on both targets** — this project has two:
+   `Musicarr` (the app) and `MusicarrWidgets` (the widget/Dynamic Island
+   extension), and both need it. For each: select it in the project
+   navigator's target list → **Signing & Capabilities** tab → check
+   "Automatically manage signing" → set **Team** to your Apple ID (shown as
+   "your name (Personal Team)").
+5. **Pick your iPhone** as the run destination in Xcode's device/scheme
+   picker at the top of the window (instead of a Simulator), then press
+   Run (▶). First build/install can take a minute.
+6. **Trust the developer certificate on the phone** (only needed once): on
+   the iPhone, go to Settings → General → VPN & Device Management → under
+   "Developer App", tap your Apple ID → Trust.
+7. On first launch, enter your Musicarr server's **real, reachable
+   address** — not `localhost` (that only makes sense from a Mac/Simulator
+   reaching a server running on the same machine). Use whatever address
+   your phone can actually reach it at: a LAN IP on the same Wi-Fi, or your
+   remote/Unraid box's address if you access it that way.
+
+**Free-account limits to know about**: the app stops launching after **7
+days** and needs re-running from Xcode to keep working (a paid $99/year
+Apple Developer account removes this limit, entirely optional for personal
+use); a free account can also only have a handful of self-signed apps
+installed on a device at once, so remove old test apps if you hit that
+ceiling.
 
 ## Using the app
 

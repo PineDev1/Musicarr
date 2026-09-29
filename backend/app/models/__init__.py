@@ -157,6 +157,7 @@ class Artist(Base):
     quality_pref: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
     # None = inherit AppSettings.auto_grab_indexers_enabled; "on" | "off" overrides it
     auto_grab_override: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
+    tags_json: Mapped[str] = mapped_column(Text, default="[]")
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -269,6 +270,21 @@ class DownloadJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class BlocklistEntry(Base):
+    """A release that failed or was rejected — auto-grab never picks it again."""
+
+    __tablename__ = "blocklist_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    release_title: Mapped[str] = mapped_column(String(1024), default="")
+    title_key: Mapped[str] = mapped_column(String(1024), default="", index=True)
+    indexer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    artist_name: Mapped[str] = mapped_column(String(512), default="")
+    album_title: Mapped[str] = mapped_column(String(512), default="")
+    reason: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Indexer(Base):
@@ -472,6 +488,12 @@ class PlayerPlaylist(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     user: Mapped["PlayerUser"] = relationship(back_populates="playlists")
+    # SQLite here runs without foreign_keys enforcement, so ON DELETE CASCADE
+    # never fires — without an ORM cascade, memberships outlive the playlist and
+    # get inherited by whichever playlist later reuses the id.
+    members: Mapped[list["PlayerPlaylistMember"]] = relationship(
+        cascade="all, delete-orphan", overlaps="user"
+    )
     tracks: Mapped[list["PlayerPlaylistTrack"]] = relationship(
         back_populates="playlist",
         cascade="all, delete-orphan",
@@ -493,9 +515,48 @@ class PlayerPlaylistTrack(Base):
         ForeignKey("tracks.id", ondelete="CASCADE"), index=True
     )
     position: Mapped[int] = mapped_column(Integer, default=0)
+    added_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("player_users.id", ondelete="SET NULL"), nullable=True
+    )
 
     playlist: Mapped["PlayerPlaylist"] = relationship(back_populates="tracks")
     track: Mapped["Track"] = relationship()
+
+
+class PlayerPlaylistMember(Base):
+    """A non-owner account allowed to add/remove tracks on someone's playlist."""
+
+    __tablename__ = "player_playlist_members"
+    __table_args__ = (
+        UniqueConstraint("playlist_id", "user_id", name="uq_playlist_member"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    playlist_id: Mapped[int] = mapped_column(
+        ForeignKey("player_playlists.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("player_users.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped["PlayerUser"] = relationship()
+
+
+class PlayerFollow(Base):
+    __tablename__ = "player_follows"
+    __table_args__ = (
+        UniqueConstraint("follower_id", "followee_id", name="uq_player_follow"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    follower_id: Mapped[int] = mapped_column(
+        ForeignKey("player_users.id", ondelete="CASCADE"), index=True
+    )
+    followee_id: Mapped[int] = mapped_column(
+        ForeignKey("player_users.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class PlayerFavorite(Base):
