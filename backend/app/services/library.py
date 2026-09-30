@@ -1008,11 +1008,93 @@ def link_local_artist(
 
 
 
+def _album_reorg_plan(db: Session, album: Album, settings, root: Path):
+    """(dest_folder, [(track, src, dest, already_in_place)]) for one album, or
+    None when none of its tracks exist on disk. No side effects, so the dry-run
+    preview and the real run always agree."""
+    tracks = [t for t in album.tracks if t.path and Path(t.path).exists()]
+    if not tracks:
+        return None
+    artist_name = artist_folder_name(album.artist, db=db) if album.artist else "Unknown Artist"
+    dest_folder = build_album_folder(
+        root,
+        settings.folder_template,
+        artist=artist_name,
+        album=album.title,
+        year=year_from_release(album.release_date),
+        album_type=album.album_type,
+    )
+    moves = []
+    for track in tracks:
+        src = Path(track.path)
+        filename = build_track_filename(
+            settings.track_template,
+            title=track.title,
+            track=track.track_no or 0,
+            disc=track.disc_no or 1,
+            artist=artist_name,
+            album=album.title,
+            ext=src.suffix.lower(),
+        )
+        dest = dest_folder / filename
+        moves.append((track, src, dest, src.resolve() == dest.resolve()))
+    return dest_folder, moves
+
+
+def preview_reorganize(db: Session, *, limit: int = 200) -> dict:
+    """Dry run of reorganize_library: what would move, what would be skipped
+    because the destination already exists, and how much is already in place."""
+    settings = ensure_settings(db)
+    root = library_root(db)
+    albums = db.scalars(
+        select(Album).options(joinedload(Album.tracks), joinedload(Album.artist))
+    ).unique().all()
+    moves: list[dict] = []
+    conflicts: list[dict] = []
+    in_place = 0
+    total_moves = 0
+    total_conflicts = 0
+    for album in albums:
+        plan = _album_reorg_plan(db, album, settings, root)
+        if plan is None:
+            continue
+        _folder, items = plan
+        for track, src, dest, same in items:
+            if same:
+                in_place += 1
+                continue
+            entry = {
+                "artist": album.artist.name if album.artist else "Unknown Artist",
+                "album": album.title,
+                "from": str(src),
+                "to": str(dest),
+            }
+            if dest.exists():
+                total_conflicts += 1
+                if len(conflicts) < limit:
+                    conflicts.append(entry)
+            else:
+                total_moves += 1
+                if len(moves) < limit:
+                    moves.append(entry)
+    return {
+        "total_moves": total_moves,
+        "total_conflicts": total_conflicts,
+        "already_in_place": in_place,
+        "moves": moves,
+        "conflicts": conflicts,
+        "limit": limit,
+    }
+
+
 def reorganize_library(db: Session, *, on_progress: ProgressCb | None = None) -> dict:
+    import shutil
+
     settings = ensure_settings(db)
     root = library_root(db)
     moved = 0
     skipped = 0
+    failed = 0
     albums = db.scalars(
         select(Album).options(joinedload(Album.tracks), joinedload(Album.artist))
     ).unique().all()
@@ -1027,46 +1109,38 @@ def reorganize_library(db: Session, *, on_progress: ProgressCb | None = None) ->
                 skipped=skipped,
                 progress_pct=5.0 + (90.0 * idx / total),
             )
-        tracks = [t for t in album.tracks if t.path and Path(t.path).exists()]
-        if not tracks:
+        plan = _album_reorg_plan(db, album, settings, root)
+        if plan is None:
             skipped += 1
             continue
-        artist_name = artist_folder_name(album.artist, db=db) if album.artist else "Unknown Artist"
-        dest_folder = build_album_folder(
-            root,
-            settings.folder_template,
-            artist=artist_name,
-            album=album.title,
-            year=year_from_release(album.release_date),
-            album_type=album.album_type,
-        )
-        dest_folder.mkdir(parents=True, exist_ok=True)
-        for track in tracks:
-            src = Path(track.path)
-            filename = build_track_filename(
-                settings.track_template,
-                title=track.title,
-                track=track.track_no or 0,
-                disc=track.disc_no or 1,
-                artist=artist_name,
-                album=album.title,
-                ext=src.suffix.lower(),
-            )
-            dest = dest_folder / filename
-            if src.resolve() == dest.resolve():
+        dest_folder, items = plan
+        for track, src, dest, same in items:
+            if same:
                 continue
-            if dest.exists() and src.resolve() != dest.resolve():
+            if dest.exists():
                 skipped += 1
                 continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            src.rename(dest)
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                # shutil.move (not Path.rename) so a move across filesystems or
+                # mounts works instead of raising.
+                shutil.move(str(src), str(dest))
+            except OSError:
+                failed += 1
+                continue
             track.path = str(dest)
             moved += 1
         album.path = str(dest_folder)
+        # Commit per album: the files just moved are on disk, so their new
+        # paths must be recorded now — one commit at the very end would leave
+        # every earlier move unrecorded if a later album blew up.
+        db.commit()
     db.commit()
-    msg = f"Reorganized library: moved {moved}, skipped {skipped}"
+    msg = f"Reorganized library: moved {moved}, skipped {skipped}" + (
+        f", failed {failed}" if failed else ""
+    )
     add_history(db, "reorganize", msg)
     from app.services.notifications import send_notification
 
     send_notification(db, "Library reorganized", msg, kind="library")
-    return {"moved": moved, "skipped": skipped, "message": msg}
+    return {"moved": moved, "skipped": skipped, "failed": failed, "message": msg}

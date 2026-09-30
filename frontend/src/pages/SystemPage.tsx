@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../api'
+import { useToast } from '../Toast'
 
 function formatBytes(n: number) {
   if (!n) return '0 B'
@@ -32,6 +33,16 @@ export function SystemPage() {
     refetchInterval: 5000,
   })
   const s = status.data
+  const qc = useQueryClient()
+  const toast = useToast()
+  const runTask = useMutation({
+    mutationFn: (id: string) => api.runSystemTask(id),
+    onSuccess: () => {
+      toast.push('Task started. Check the logs below.', 'ok')
+      window.setTimeout(() => qc.invalidateQueries({ queryKey: ['system-status'] }), 1500)
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
 
   return (
     <div>
@@ -68,6 +79,7 @@ export function SystemPage() {
                 <th>Task</th>
                 <th>Schedule</th>
                 <th>Next run</th>
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -76,6 +88,17 @@ export function SystemPage() {
                   <td>{t.name}</td>
                   <td className="muted">{t.trigger}</td>
                   <td className="muted">{when(t.next_run)}</td>
+                  <td className="row-actions">
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      title="Runs it now. A task switched off in Settings still skips itself."
+                      disabled={runTask.isPending}
+                      onClick={() => runTask.mutate(t.id)}
+                    >
+                      Run now
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

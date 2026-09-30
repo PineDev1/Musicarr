@@ -546,6 +546,26 @@ class PlayerPlaylistMember(Base):
     user: Mapped["PlayerUser"] = relationship()
 
 
+class PlayerQueueState(Base):
+    """The last queue a user was playing, so another device can pick it up."""
+
+    __tablename__ = "player_queue_states"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("player_users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    track_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    index: Mapped[int] = mapped_column(Integer, default=0)
+    position: Mapped[float] = mapped_column(Float, default=0.0)
+    shuffle: Mapped[bool] = mapped_column(Boolean, default=False)
+    repeat: Mapped[str] = mapped_column(String(8), default="off")
+    source_label: Mapped[str] = mapped_column(String(120), default="")
+    device_id: Mapped[str] = mapped_column(String(64), default="")
+    device_name: Mapped[str] = mapped_column(String(80), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class PlayerFollow(Base):
     __tablename__ = "player_follows"
     __table_args__ = (

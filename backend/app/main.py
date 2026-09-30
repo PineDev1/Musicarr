@@ -24,6 +24,7 @@ from app.api import (
     musicbrainz_catalog,
     ops,
     player,
+    player_queue,
     player_social,
     push,
     search,
@@ -208,6 +209,7 @@ app.include_router(albums.router, prefix="/api")
 app.include_router(ops.router, prefix="/api")
 app.include_router(events.router, prefix="/api")
 app.include_router(player.router, prefix="/api")
+app.include_router(player_queue.router, prefix="/api")
 app.include_router(player_social.router, prefix="/api")
 app.include_router(subsonic.settings_router, prefix="/api")
 app.include_router(subsonic.router)

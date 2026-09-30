@@ -306,6 +306,29 @@ export const playerApi = {
   regenerateSubsonic: () =>
     request<{ username: string; secret: string | null }>('/subsonic/regenerate', { method: 'POST' }),
   revokeSubsonic: () => request<{ ok: boolean }>('/subsonic', { method: 'DELETE' }),
+  saveQueue: (body: {
+    track_ids: number[]
+    index: number
+    position: number
+    shuffle: boolean
+    repeat: string
+    source_label: string
+    device_id: string
+    device_name: string
+  }) => request<{ ok: boolean }>('/me/queue', { method: 'PUT', body: JSON.stringify(body) }),
+  savedQueue: () =>
+    request<{
+      exists: boolean
+      tracks: PlayerTrack[]
+      index: number
+      position: number
+      shuffle: boolean
+      repeat: string
+      source_label: string
+      device_id: string
+      device_name: string
+      updated_at: string | null
+    }>('/me/queue'),
   people: () => request<PlayerPerson[]>('/social/people'),
   profile: (id: number) => request<PlayerProfile>(`/social/profile/${id}`),
   follow: (id: number) => request<{ ok: boolean }>(`/social/follow/${id}`, { method: 'POST' }),

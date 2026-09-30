@@ -5,6 +5,7 @@ import { acquisitionModeLabel, api, resolveAcquisitionMode } from '../api'
 import { playerApi } from '../player/playerApi'
 import { useToast } from '../Toast'
 import { AcquisitionPanels } from './AcquisitionPanels'
+import { ReorganizePreview } from './ReorganizePreview'
 import { LibraryRootsPanel } from './LibraryRootsPanel'
 import { PushNotificationsPanel } from './PushPanel'
 import { ApiKeysPanel, TwoFactorPanel } from './SecurityPanels'
@@ -1983,6 +1984,7 @@ export function SettingsPage() {
                   ? 'Reorganizing…'
                   : 'Reorganize files'}
               </button>
+              <ReorganizePreview disabled={libraryJobRunning} />
               <button
                 type="button"
                 className="btn secondary"

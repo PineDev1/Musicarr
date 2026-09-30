@@ -85,19 +85,14 @@ def install_log_buffer() -> None:
         root.setLevel(logging.INFO)
 
 
-def _scheduled_tasks() -> list[dict]:
+def _running_schedulers() -> list:
     from app.services.completed_download_handler import completed_download_handler
     from app.services.import_lists import import_list_runner
     from app.services.indexer_engine import wanted_indexer_sweep
     from app.services.maintenance_scheduler import maintenance_scheduler
     from app.services.monitor import release_monitor
 
-    labels = {
-        "backup_nightly": "Nightly backup",
-        "dedupe_scan_weekly": "Weekly duplicate scan",
-        "health_check": "Health check (disk, provider session)",
-    }
-    tasks: list[dict] = []
+    out = []
     for owner in (
         release_monitor,
         maintenance_scheduler,
@@ -106,8 +101,30 @@ def _scheduled_tasks() -> list[dict]:
         import_list_runner,
     ):
         sched = getattr(owner, "scheduler", None)
-        if sched is None or not getattr(sched, "running", False):
-            continue
+        if sched is not None and getattr(sched, "running", False):
+            out.append(sched)
+    return out
+
+
+def run_task_now(task_id: str) -> bool:
+    """Ask the owning scheduler to fire a job immediately (its own enable
+    flags are still honoured inside the job). Returns False for unknown ids."""
+    for sched in _running_schedulers():
+        job = sched.get_job(task_id)
+        if job is not None:
+            job.modify(next_run_time=datetime.now(timezone.utc))
+            return True
+    return False
+
+
+def _scheduled_tasks() -> list[dict]:
+    labels = {
+        "backup_nightly": "Nightly backup",
+        "dedupe_scan_weekly": "Weekly duplicate scan",
+        "health_check": "Health check (disk, provider session)",
+    }
+    tasks: list[dict] = []
+    for sched in _running_schedulers():
         for job in sched.get_jobs():
             nxt = getattr(job, "next_run_time", None)
             tasks.append(

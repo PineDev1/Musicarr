@@ -23,6 +23,7 @@ import { copyToClipboard } from './TrackMenu'
 import { WavyPlayBar } from './WavyPlayBar'
 import { AudioSettingsPanel } from './AudioSettingsPanel'
 import { SubsonicPanel } from './SubsonicPanel'
+import { ContinueElsewhereBanner } from './ContinueElsewhereBanner'
 
 type Props = {
   displayName: string
@@ -322,6 +323,7 @@ export function PlayerLayout({ displayName, avatarUrl, userId }: Props) {
           </button>
         </div>
         <main className="player-main">
+          <ContinueElsewhereBanner />
           <Outlet />
         </main>
       </div>

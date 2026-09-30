@@ -11,6 +11,7 @@ import {
 import { useQuery } from '@tanstack/react-query'
 import { DEFAULT_PREFS, playerApi, type PlayerTrack } from './playerApi'
 import { EQ_BANDS, getAudioSettings, subscribeAudioSettings } from './audioSettings'
+import { getDeviceId, getDeviceName } from './deviceInfo'
 
 type RepeatMode = 'off' | 'all' | 'one'
 type Slot = 'A' | 'B'
@@ -833,12 +834,26 @@ export function PlayerQueueProvider({
   }, [])
 
   const clearQueue = useCallback(() => {
+    if (userId != null) {
+      void playerApi
+        .saveQueue({
+          track_ids: [],
+          index: 0,
+          position: 0,
+          shuffle: false,
+          repeat: 'off',
+          source_label: '',
+          device_id: getDeviceId(),
+          device_name: getDeviceName(),
+        })
+        .catch(() => undefined)
+    }
     preloadedTrackIdRef.current = null
     setTracks([])
     setIndex(0)
     setSourceLabel(null)
     activeAudio()?.pause()
-  }, [activeAudio])
+  }, [activeAudio, userId])
 
   const jumpTo = useCallback((i: number) => setIndex(i), [])
 
@@ -871,6 +886,34 @@ export function PlayerQueueProvider({
     })
     orderRef.current = []
   }, [])
+
+  // Sync the queue to the server so another device can pick it up. Only while
+  // this device is actually playing (plus once on pause): a device that merely
+  // restored an old queue from localStorage must not overwrite the fresher one
+  // another device saved.
+  const hasPlayedRef = useRef(false)
+  useEffect(() => {
+    if (userId == null || !tracks.length) return
+    if (playing) hasPlayedRef.current = true
+    if (!playing && !hasPlayedRef.current) return
+    const save = () =>
+      void playerApi
+        .saveQueue({
+          track_ids: tracks.map((t) => t.id),
+          index,
+          position: activeAudio()?.currentTime || 0,
+          shuffle,
+          repeat,
+          source_label: sourceLabel || '',
+          device_id: getDeviceId(),
+          device_name: getDeviceName(),
+        })
+        .catch(() => undefined)
+    save()
+    if (!playing) return
+    const id = window.setInterval(save, 15000)
+    return () => window.clearInterval(id)
+  }, [userId, playing, tracks, index, shuffle, repeat, sourceLabel, activeAudio])
 
   // Lock-screen / OS media-key controls.
   useEffect(() => {

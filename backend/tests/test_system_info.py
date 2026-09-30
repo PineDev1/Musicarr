@@ -41,3 +41,22 @@ def test_system_status_shape(tmp_path):
     out = system_info.system_status(str(tmp_path))
     assert out["disk"]["free"] > 0 and out["uptime_seconds"] >= 0
     assert isinstance(out["tasks"], list)
+
+
+def test_run_task_now_actually_fires_the_job_and_rejects_unknown_ids(monkeypatch):
+    import threading
+
+    from apscheduler.schedulers.background import BackgroundScheduler
+
+    fired = threading.Event()
+    sched = BackgroundScheduler()
+    sched.start()
+    try:
+        sched.add_job(fired.set, "interval", hours=6, id="far_future")
+        monkeypatch.setattr(system_info, "_running_schedulers", lambda: [sched])
+        assert not fired.is_set()  # next natural run is 6h away
+        assert system_info.run_task_now("far_future") is True
+        assert fired.wait(5), "job never ran after run_task_now"
+        assert system_info.run_task_now("does_not_exist") is False
+    finally:
+        sched.shutdown(wait=False)

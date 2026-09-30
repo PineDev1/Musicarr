@@ -14,6 +14,7 @@ from app.models import (
     PlayerFollow,
     PlayerPlayEvent,
     PlayerPlaylistMember,
+    PlayerQueueState,
     PlayerShareLink,
     PlayerUser,
 )
@@ -215,6 +216,7 @@ def delete_user(db: Session, user_id: int) -> None:
     db.execute(delete(PlayerPlayEvent).where(PlayerPlayEvent.user_id == user_id))
     db.execute(delete(PlayerShareLink).where(PlayerShareLink.created_by_user_id == user_id))
     db.execute(delete(PlayerCastToken).where(PlayerCastToken.user_id == user_id))
+    db.execute(delete(PlayerQueueState).where(PlayerQueueState.user_id == user_id))
     db.delete(user)
     db.commit()
 

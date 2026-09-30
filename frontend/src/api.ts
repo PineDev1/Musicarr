@@ -697,6 +697,17 @@ export const api = {
     request<{ cleared: number }>('/queue/clear-finished', { method: 'POST' }),
   history: (eventType?: 'audit' | 'activity') =>
     request<HistoryEvent[]>(`/history${eventType ? `?event_type=${eventType}` : ''}`),
+  reorganizePreview: () =>
+    request<{
+      total_moves: number
+      total_conflicts: number
+      already_in_place: number
+      moves: { artist: string; album: string; from: string; to: string }[]
+      conflicts: { artist: string; album: string; from: string; to: string }[]
+      limit: number
+    }>('/library/reorganize/preview'),
+  runSystemTask: (id: string) =>
+    request<{ ok: boolean }>(`/system/tasks/${encodeURIComponent(id)}/run`, { method: 'POST' }),
   systemStatus: () => request<SystemStatus>('/system/status'),
   systemLogs: (level: string, search: string) =>
     request<SystemLogLine[]>(
