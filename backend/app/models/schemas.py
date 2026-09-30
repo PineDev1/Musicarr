@@ -446,6 +446,12 @@ class BulkArtistIdsRequest(BaseModel):
     artist_ids: list[int]
 
 
+class BulkArtistActionRequest(BaseModel):
+    artist_ids: list[int]
+    action: str
+    value: str | None = None
+
+
 class ImportListCreate(BaseModel):
     name: str
     names_raw: str = ""

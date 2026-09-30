@@ -150,7 +150,9 @@ enum PlayerAPI {
     }
 
     static func stats(rangeDays: Int = 30, year: Int? = nil) async throws -> ListeningStats {
-        let query = year.map { ["year": String($0)] } ?? ["range_days": String(rangeDays)]
+        var query = year.map { ["year": String($0)] } ?? ["range_days": String(rangeDays)]
+        // Same convention as JS getTimezoneOffset(): minutes, UTC minus local.
+        query["tz_offset"] = String(-TimeZone.current.secondsFromGMT() / 60)
         return try await APIClient.shared.request("/library/stats", query: query)
     }
 

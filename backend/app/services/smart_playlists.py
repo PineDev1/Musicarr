@@ -29,6 +29,11 @@ def _format_from_path(path: str | None) -> str:
     return path.rsplit(".", 1)[-1].lower() if "." in path else ""
 
 
+def _year(track: Track) -> int | None:
+    rd = (track.album.release_date or "")[:4] if track.album else ""
+    return int(rd) if rd.isdigit() else None
+
+
 def evaluate_smart_playlist(db: Session, playlist: PlayerPlaylist) -> list[Track]:
     """Compute a smart playlist's track list live from its criteria_json.
 
@@ -117,9 +122,32 @@ def evaluate_smart_playlist(db: Session, playlist: PlayerPlaylist) -> list[Track
                 if played.tzinfo is None:
                     played = played.replace(tzinfo=timezone.utc)
                 actual = (datetime.now(timezone.utc) - played).days
+        elif field == "year":
+            actual = _year(track)
+        elif field == "decade":
+            y = _year(track)
+            actual = (y // 10) * 10 if y is not None else None
+        elif field == "duration":
+            actual = int(track.duration or 0)
+        elif field in ("title", "artist_name", "album_title"):
+            if field == "title":
+                actual = (track.title or "").lower()
+            elif field == "album_title":
+                actual = (track.album.title if track.album else "").lower()
+            else:
+                actual = (track.album.artist.name if track.album and track.album.artist else "").lower()
+            value = str(value or "").strip().lower()
         else:
             return False
 
+        if op in ("contains", "not_contains", "starts_with"):
+            if not isinstance(actual, str) or not isinstance(value, str) or not value:
+                return False
+            if op == "contains":
+                return value in actual
+            if op == "starts_with":
+                return actual.startswith(value)
+            return value not in actual
         if op == "eq":
             return actual == value
         if op == "ne":
@@ -155,6 +183,28 @@ def evaluate_smart_playlist(db: Session, playlist: PlayerPlaylist) -> list[Track
     elif sort == "most_played":
         counts = _play_counts()
         matched.sort(key=lambda t: counts.get(t.id, 0), reverse=True)
+    elif sort == "least_played":
+        counts = _play_counts()
+        matched.sort(key=lambda t: counts.get(t.id, 0))
+    elif sort == "last_played":
+        seen = _last_played()
+        floor = datetime.min.replace(tzinfo=timezone.utc)
+
+        def _when(t: Track) -> datetime:
+            w = seen.get(t.id)
+            if w is None:
+                return floor
+            return w if w.tzinfo else w.replace(tzinfo=timezone.utc)
+
+        matched.sort(key=_when, reverse=True)
+    elif sort == "newest_release":
+        matched.sort(key=lambda t: _year(t) or 0, reverse=True)
+    elif sort == "oldest_release":
+        matched.sort(key=lambda t: _year(t) or 9999)
+    elif sort == "longest":
+        matched.sort(key=lambda t: t.duration or 0, reverse=True)
+    elif sort == "shortest":
+        matched.sort(key=lambda t: t.duration or 0)
     elif sort == "title":
         matched.sort(key=lambda t: (t.title or "").lower())
     elif sort == "artist":

@@ -38,15 +38,39 @@ export type PlayerLyrics = {
 }
 
 export type PlayerSmartRule = {
-  field: 'favorited' | 'genre' | 'format' | 'artist_id' | 'album_id' | 'play_count' | 'last_played_days'
-  op: 'eq' | 'ne' | 'in' | 'not_in' | 'gte' | 'lte' | 'gt' | 'lt'
+  field:
+    | 'favorited'
+    | 'genre'
+    | 'format'
+    | 'artist_id'
+    | 'album_id'
+    | 'play_count'
+    | 'last_played_days'
+    | 'year'
+    | 'decade'
+    | 'duration'
+    | 'title'
+    | 'artist_name'
+    | 'album_title'
+  op: 'eq' | 'ne' | 'in' | 'not_in' | 'gte' | 'lte' | 'gt' | 'lt' | 'contains' | 'not_contains' | 'starts_with'
   value: unknown
 }
 
 export type PlayerSmartCriteria = {
   match: 'all' | 'any'
   rules: PlayerSmartRule[]
-  sort: 'random' | 'recently_added' | 'most_played' | 'title' | 'artist'
+  sort:
+    | 'random'
+    | 'recently_added'
+    | 'most_played'
+    | 'least_played'
+    | 'last_played'
+    | 'newest_release'
+    | 'oldest_release'
+    | 'longest'
+    | 'shortest'
+    | 'title'
+    | 'artist'
   limit: number
 }
 
@@ -364,7 +388,9 @@ export const playerApi = {
         plays: number
         seconds: number
       }[]
-    }>(`/library/stats?${year ? `year=${year}` : `range_days=${rangeDays}`}`),
+    }>(
+      `/library/stats?${year ? `year=${year}` : `range_days=${rangeDays}`}&tz_offset=${new Date().getTimezoneOffset()}`,
+    ),
   listenHistory: () => request<PlayerPlaylist>('/library/history'),
   clearHistory: () => request<{ ok: boolean }>('/library/history', { method: 'DELETE' }),
   streamUrl: (trackId: number) => `/api/player/stream/${trackId}`,

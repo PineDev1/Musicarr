@@ -109,6 +109,16 @@ def _snapshot_db_bytes(db_path: Path) -> bytes:
             source.backup(dest)
             assignments = ", ".join(f"{col} = ''" for col in SECRET_COLUMNS)
             dest.execute(f"UPDATE app_settings SET {assignments}")
+            # Player accounts carry usable credentials too (the Subsonic secret
+            # is stored in plaintext by necessity; Last.fm session keys too).
+            # Users just re-create/reconnect them after a restore.
+            try:
+                dest.execute(
+                    "UPDATE player_users SET subsonic_secret = NULL, "
+                    "lastfm_session_key = NULL, lastfm_pending_token = NULL"
+                )
+            except sqlite3.OperationalError:
+                pass  # very old snapshot without those columns
             dest.commit()
         finally:
             dest.close()

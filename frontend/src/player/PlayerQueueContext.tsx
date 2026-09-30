@@ -245,23 +245,29 @@ export function PlayerQueueProvider({
     const now = ctx.currentTime
     gain.gain.cancelScheduledValues(now)
     gain.gain.setValueAtTime(0, now)
-    gain.gain.linearRampToValueAtTime(1, now + getAudioSettings().crossfadeMs / 1000)
+    // A manual play only gets a short fade-in however long the crossfade is —
+    // a 10s fade-in after tapping a song would just feel broken.
+    gain.gain.linearRampToValueAtTime(1, now + Math.min(getAudioSettings().crossfadeMs, 1500) / 1000)
   }, [])
 
   /** True overlapping crossfade between the outgoing and incoming slots. */
-  const crossfadeSwap = useCallback((fromSlot: Slot, toSlot: Slot) => {
-    const ctx = ctxRef.current
-    const outGain = trackGainRefs.current[fromSlot]
-    const inGain = trackGainRefs.current[toSlot]
-    if (!ctx || !outGain || !inGain) return
-    const now = ctx.currentTime
-    outGain.gain.cancelScheduledValues(now)
-    outGain.gain.setValueAtTime(outGain.gain.value, now)
-    outGain.gain.linearRampToValueAtTime(0, now + getAudioSettings().crossfadeMs / 1000)
-    inGain.gain.cancelScheduledValues(now)
-    inGain.gain.setValueAtTime(0, now)
-    inGain.gain.linearRampToValueAtTime(1, now + getAudioSettings().crossfadeMs / 1000)
-  }, [])
+  const crossfadeSwap = useCallback(
+    (fromSlot: Slot, toSlot: Slot, fadeMs: number = getAudioSettings().crossfadeMs) => {
+      const ctx = ctxRef.current
+      const outGain = trackGainRefs.current[fromSlot]
+      const inGain = trackGainRefs.current[toSlot]
+      if (!ctx || !outGain || !inGain) return
+      const now = ctx.currentTime
+      const end = now + Math.max(0.05, fadeMs / 1000)
+      outGain.gain.cancelScheduledValues(now)
+      outGain.gain.setValueAtTime(outGain.gain.value, now)
+      outGain.gain.linearRampToValueAtTime(0, end)
+      inGain.gain.cancelScheduledValues(now)
+      inGain.gain.setValueAtTime(0, now)
+      inGain.gain.linearRampToValueAtTime(1, end)
+    },
+    [],
+  )
 
   // Holds the latest versions of values/callbacks the (mount-once) audio
   // element event handlers need, so they never see stale closures without
@@ -453,17 +459,33 @@ export function PlayerQueueProvider({
       if (inGain && ctxRef.current) inGain.gain.setValueAtTime(0, ctxRef.current.currentTime)
     }
 
-    function handleEnded(slot: Slot) {
-      if (sleepAtEndRef.current) {
+    /** Start the next track a little before this one ends so the two overlap. */
+    function maybeStartCrossfade(slot: Slot) {
+      const { crossfadeEnabled } = latestRef.current
+      const audio = audioRefs.current[slot]
+      if (!crossfadeEnabled || sleepAtEndRef.current || !audio) return
+      if (!Number.isFinite(audio.duration) || audio.duration <= 0) return
+      const fadeMs = getAudioSettings().crossfadeMs
+      // Skip tracks too short to overlap sensibly; they fall back to the
+      // normal end-of-track swap.
+      if (audio.duration < (fadeMs / 1000) * 2 + 1) return
+      const remaining = audio.duration - audio.currentTime
+      if (remaining > fadeMs / 1000 || remaining < 0.15) return
+      handleEnded(slot, remaining * 1000)
+    }
+
+    function handleEnded(slot: Slot, earlyFadeMs?: number) {
+      const early = earlyFadeMs != null
+      if (!early && sleepAtEndRef.current) {
         sleepAtEndRef.current = false
         setSleepMode(null)
         setPlaying(false)
         return
       }
       const { nextIndex: getNext, tracks: currentTracks, crossfadeEnabled } = latestRef.current
-      const n = getNext()
+      const n = early ? latestRef.current.peekNextIndex() : getNext()
       if (n == null) {
-        setPlaying(false)
+        if (!early) setPlaying(false)
         return
       }
       const nextTrack = currentTracks[n]
@@ -474,6 +496,10 @@ export function PlayerQueueProvider({
         !!inactiveAudio &&
         preloadedTrackIdRef.current === nextTrack.id &&
         inactiveAudio.readyState >= 2
+      // An early start is only worthwhile when the next track is already
+      // buffered; otherwise keep playing and let the normal end handle it.
+      if (early && !preloadReady) return
+      if (early) getNext() // commit the shuffle/queue advance peekNextIndex only previewed
 
       if (nextTrack && preloadReady && inactiveAudio) {
         // Fast path: the next track is already buffered on the idle element,
@@ -481,7 +507,7 @@ export function PlayerQueueProvider({
         // what makes the boundary gapless.
         slotRef.current = inactive
         preloadedTrackIdRef.current = null
-        if (crossfadeEnabled) crossfadeSwap(slot, inactive)
+        if (crossfadeEnabled) crossfadeSwap(slot, inactive, early ? earlyFadeMs : undefined)
         else {
           const now = ctxRef.current?.currentTime ?? 0
           trackGainRefs.current[inactive]?.gain.setValueAtTime(1, now)
@@ -510,6 +536,7 @@ export function PlayerQueueProvider({
         if (slotRef.current !== slot) return
         setCurrentTime(audio.currentTime || 0)
         maybePreloadNext(slot)
+        maybeStartCrossfade(slot)
       }
       const onMeta = () => {
         if (slotRef.current !== slot) return

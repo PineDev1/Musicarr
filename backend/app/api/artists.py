@@ -9,6 +9,7 @@ from app.models.schemas import (
     ArtistOut,
     ArtistPatch,
     ArtistSearchResult,
+    BulkArtistActionRequest,
     BulkArtistIdsRequest,
     BulkArtistSearchRequest,
     BulkArtistSearchResult,
@@ -498,6 +499,17 @@ def get_pending_artists(db: Session = Depends(get_db)):
         )
         for artist in list_pending_artists(db)
     ]
+
+
+@router.post("/bulk-action")
+def bulk_artist_action(payload: BulkArtistActionRequest, db: Session = Depends(get_db)):
+    """Apply one action (monitor, quality, tags, delete...) to many artists at once."""
+    from app.services.artist_bulk import BulkError, apply_bulk_action
+
+    try:
+        return apply_bulk_action(db, payload.artist_ids, payload.action, payload.value)
+    except BulkError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/pending/bulk-approve")

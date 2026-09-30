@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import mimetypes
 import os
 import secrets
@@ -728,6 +729,11 @@ async def dispatch(method: str, request: Request, db: Session = Depends(get_db))
         return _render(request, {}, error=e)
     except HTTPException as e:
         return _render(request, {}, error=SubsonicError(70 if e.status_code == 404 else 0, str(e.detail)))
+    except Exception:  # noqa: BLE001
+        # Subsonic clients can't parse an HTML 500 page; give them a protocol error.
+        logging.getLogger(__name__).exception("Subsonic %s failed", name)
+        db.rollback()
+        return _render(request, {}, error=SubsonicError(0, "Internal server error"))
     if isinstance(result, Response):
         return result
     return _render(request, result)

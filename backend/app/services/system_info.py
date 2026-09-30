@@ -23,10 +23,14 @@ _BEARER_RE = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}")
 
 
 _PATH_TOKEN_RE = re.compile(r"(/(?:cast|share)/)[A-Za-z0-9_-]{16,}")
+# Subsonic clients put their credentials in short query params (t=token, s=salt,
+# p=password); a logged token+salt pair can be replayed indefinitely.
+_SUBSONIC_QS_RE = re.compile(r"([?&](?:t|s|p)=)[^&\s\"']+")
 
 
 def redact(text: str) -> str:
     text = _PATH_TOKEN_RE.sub(lambda m: f"{m.group(1)}***", text)
+    text = _SUBSONIC_QS_RE.sub(lambda m: f"{m.group(1)}***", text)
     text = _BEARER_RE.sub(lambda m: f"{m.group(1)} ***", text)
     return _SECRET_RE.sub(lambda m: f"{m.group(1)}***", text)
 

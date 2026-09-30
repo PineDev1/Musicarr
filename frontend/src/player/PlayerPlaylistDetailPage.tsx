@@ -18,7 +18,31 @@ const RULE_FIELDS: PlayerSmartRule['field'][] = [
   'artist_id',
   'play_count',
   'last_played_days',
+  'year',
+  'decade',
+  'duration',
+  'title',
+  'artist_name',
+  'album_title',
 ]
+
+const FIELD_LABELS: Record<PlayerSmartRule['field'], string> = {
+  favorited: 'Favorited',
+  genre: 'Genre',
+  format: 'File format',
+  artist_id: 'Artist id',
+  album_id: 'Album id',
+  play_count: 'Play count',
+  last_played_days: 'Days since played',
+  year: 'Release year',
+  decade: 'Decade (e.g. 2010)',
+  duration: 'Length (seconds)',
+  title: 'Song title',
+  artist_name: 'Artist name',
+  album_title: 'Album title',
+}
+
+const TEXT_FIELDS: PlayerSmartRule['field'][] = ['title', 'artist_name', 'album_title']
 
 const EMPTY_CRITERIA: PlayerSmartCriteria = {
   match: 'all',
@@ -75,6 +99,12 @@ function SmartCriteriaEditor({
             <option value="random">Random</option>
             <option value="recently_added">Recently added</option>
             <option value="most_played">Most played</option>
+            <option value="least_played">Least played</option>
+            <option value="last_played">Recently played</option>
+            <option value="newest_release">Newest release</option>
+            <option value="oldest_release">Oldest release</option>
+            <option value="longest">Longest</option>
+            <option value="shortest">Shortest</option>
             <option value="title">Title</option>
             <option value="artist">Artist</option>
           </select>
@@ -96,7 +126,7 @@ function SmartCriteriaEditor({
           <select value={rule.field} onChange={(e) => updateRule(i, { field: e.target.value as PlayerSmartRule['field'] })}>
             {RULE_FIELDS.map((f) => (
               <option key={f} value={f}>
-                {f}
+                {FIELD_LABELS[f]}
               </option>
             ))}
           </select>
@@ -107,6 +137,13 @@ function SmartCriteriaEditor({
             <option value="lte">≤</option>
             <option value="gt">&gt;</option>
             <option value="lt">&lt;</option>
+            {TEXT_FIELDS.includes(rule.field) && (
+              <>
+                <option value="contains">contains</option>
+                <option value="not_contains">doesn't contain</option>
+                <option value="starts_with">starts with</option>
+              </>
+            )}
           </select>
           {rule.field === 'favorited' ? (
             <select

@@ -12,6 +12,10 @@ def test_redact_strips_secrets_in_common_shapes():
     assert "abc123secret" not in redact('{"password": "abc123secret"}')
     assert "abc123secretvalue" not in redact("Authorization: Bearer abc123secretvalue")
     assert "AAAAAAAAAAAAAAAAAAAA" not in redact("GET /api/player/cast/AAAAAAAAAAAAAAAAAAAA/stream/1")
+    line = 'GET /rest/ping?u=riley&t=0123456789abcdef0123456789abcdef&s=saltvalue&v=1.16.1 HTTP/1.1'
+    out = redact(line)
+    assert "0123456789abcdef" not in out and "saltvalue" not in out and "u=riley" in out
+    assert "p=hunter2" not in redact("GET /rest/ping?u=riley&p=hunter2&f=json")
     assert redact("plain message, nothing secret") == "plain message, nothing secret"
 
 

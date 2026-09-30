@@ -64,11 +64,23 @@ def test_failed_indexer_job_is_auto_blocklisted_but_streaming_is_not(db):
     db.commit()
     handler = CompletedDownloadHandler.__new__(CompletedDownloadHandler)
     with patch("app.services.notifications.send_notification"):
-        handler._fail_job(db, idx, "corrupt")
-        handler._fail_job(db, streaming, "boom")
+        handler._fail_job(db, idx, "corrupt", blocklist=True)
+        handler._fail_job(db, streaming, "boom", blocklist=True)
     entries = db.query(BlocklistEntry).all()
     assert [e.release_title for e in entries] == ["Bad Release [MP3]"]
     assert "corrupt" in entries[0].reason
+
+
+def test_local_failures_do_not_blocklist_a_good_release(db):
+    """A missing path mapping / crash / disk error says nothing about the release."""
+    job = DownloadJob(target_type="album", state="grabbed", source="indexer", release_title="Good Release [FLAC]")
+    db.add(job)
+    db.commit()
+    handler = CompletedDownloadHandler.__new__(CompletedDownloadHandler)
+    with patch("app.services.notifications.send_notification"):
+        handler._fail_job(db, job, "Completed download not found at '/downloads/x'")
+    assert db.query(BlocklistEntry).count() == 0
+    assert job.state == "failed"
 
 
 def test_blocklist_endpoints_add_from_job_list_remove(db):

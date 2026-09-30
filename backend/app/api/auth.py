@@ -61,10 +61,36 @@ def app_login(payload: AppLoginRequest, response: Response, db: Session = Depend
             token = app_auth.create_session_token(db, admin_user.username, user_id=admin_user.id)
             add_history(db, "app_login", f"Signed in as {admin_user.username}")
     if not token:
-        add_history(db, "audit", f"Failed admin sign-in attempt for '{username[:64]}'")
+        _audit_failed_login(db, username)
         raise HTTPException(status_code=401, detail="Invalid username or password")
     app_auth.set_session_cookie(response, token, db)
     return AppAuthStatus(**app_auth.auth_status(db, token))
+
+
+_FAILED_LOGIN_AUDIT_CAP = 30  # rows per 10 minutes
+
+
+def _audit_failed_login(db: Session, username: str) -> None:
+    """Record a failed sign-in, but stop writing rows once a burst passes the
+    cap so an unauthenticated flood can't grow the history table without bound."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import func, select
+
+    from app.models import HistoryEvent
+
+    since = datetime.now(timezone.utc) - timedelta(minutes=10)
+    recent = db.scalar(
+        select(func.count())
+        .select_from(HistoryEvent)
+        .where(
+            HistoryEvent.event_type == "audit",
+            HistoryEvent.message.like("Failed admin sign-in%"),
+            HistoryEvent.created_at >= since,
+        )
+    )
+    if (recent or 0) < _FAILED_LOGIN_AUDIT_CAP:
+        add_history(db, "audit", f"Failed admin sign-in attempt for '{username[:64]}'")
 
 
 def hmac_compare(a: str, b: str) -> bool:

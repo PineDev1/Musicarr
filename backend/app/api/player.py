@@ -1632,18 +1632,24 @@ def listen_stats(
     db: Session = Depends(get_db),
     range_days: int = 30,
     year: int | None = None,
+    tz_offset: int = 0,
 ):
     """Aggregate play counts for the current listener.
 
     With `year`, covers that calendar year (year-in-review) instead of the
-    trailing `range_days`.
+    trailing `range_days`. `tz_offset` is the client's offset in minutes in
+    JavaScript's `getTimezoneOffset()` convention (UTC minus local), so hours,
+    weekdays, streak days and year boundaries follow the listener's own clock
+    instead of UTC.
     """
     user = _current_player_user(request, db)
+    tz_offset = max(-14 * 60, min(14 * 60, int(tz_offset or 0)))
+    shift = timedelta(minutes=-tz_offset)
     until: datetime | None = None
     if year is not None:
         year = max(2000, min(2100, int(year)))
-        since = datetime(year, 1, 1, tzinfo=timezone.utc)
-        until = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        since = datetime(year, 1, 1, tzinfo=timezone.utc) - shift
+        until = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - shift
         days = (until - since).days
     else:
         days = max(1, min(365, int(range_days or 30)))
@@ -1684,6 +1690,7 @@ def listen_stats(
         if when is not None:
             if when.tzinfo is None:
                 when = when.replace(tzinfo=timezone.utc)
+            when = when + shift
             hours[when.hour] += 1
             weekdays[when.weekday()] += 1
             day_key = when.date().isoformat()
@@ -1742,7 +1749,9 @@ def listen_stats(
     top_artists = sorted(artist_counts.values(), key=lambda x: (-x["plays"], -x["seconds"]))[:20]
     top_albums = sorted(album_counts.values(), key=lambda x: (-x["plays"], -x["seconds"]))[:10]
     top_genres = sorted(genre_counts.values(), key=lambda x: (-x["plays"], -x["seconds"]))[:10]
-    longest_streak, current_streak = _listening_streaks(set(daily_seconds))
+    longest_streak, current_streak = _listening_streaks(
+        set(daily_seconds), (datetime.now(timezone.utc) + shift).date()
+    )
     return {
         "range_days": days,
         "year": year,
@@ -1765,9 +1774,10 @@ def listen_stats(
     }
 
 
-def _listening_streaks(days: set[str]) -> tuple[int, int]:
+def _listening_streaks(days: set[str], today=None) -> tuple[int, int]:
     """(longest, current) run of consecutive listening days. Current counts
-    back from today, or yesterday if today has no plays yet."""
+    back from `today` (the listener's local date), or yesterday if today has
+    no plays yet."""
     from datetime import date
 
     if not days:
@@ -1778,7 +1788,7 @@ def _listening_streaks(days: set[str]) -> tuple[int, int]:
         run = run + 1 if (cur - prev).days == 1 else 1
         longest = max(longest, run)
     have = set(parsed)
-    cursor = datetime.now(timezone.utc).date()
+    cursor = today or datetime.now(timezone.utc).date()
     if cursor not in have:
         cursor -= timedelta(days=1)
     current = 0

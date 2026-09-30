@@ -47,6 +47,29 @@ def test_genres_albums_hours_and_totals(db, seeded):
     assert out["active_days"] == 1 and out["year"] is None
 
 
+def test_hours_and_days_follow_the_listeners_timezone_not_utc(db, seeded):
+    user, t1, _ = seeded
+    # 02:30 UTC on the 10th is 21:30 on the 9th for a UTC-5 listener
+    # (JS getTimezoneOffset() reports +300 for UTC-5).
+    when = datetime.now(timezone.utc).replace(hour=2, minute=30, second=0, microsecond=0)
+    _play(db, user, t1, when)
+    utc = player.listen_stats(None, db, range_days=30)
+    assert utc["plays_by_hour"][2] == 1
+    local = player.listen_stats(None, db, range_days=30, tz_offset=300)
+    assert local["plays_by_hour"][21] == 1 and local["plays_by_hour"][2] == 0
+    day_local = (when - timedelta(hours=5)).date().isoformat()
+    assert local["daily_seconds"][0]["date"] == day_local
+
+
+def test_year_boundary_uses_local_midnight(db, seeded):
+    user, t1, _ = seeded
+    # Dec 31 23:30 in UTC-5 is Jan 1 04:30 UTC: belongs to 2024 locally, 2025 in UTC.
+    _play(db, user, t1, datetime(2025, 1, 1, 4, 30, tzinfo=timezone.utc))
+    assert player.listen_stats(None, db, year=2025)["play_events"] == 1
+    assert player.listen_stats(None, db, year=2025, tz_offset=300)["play_events"] == 0
+    assert player.listen_stats(None, db, year=2024, tz_offset=300)["play_events"] == 1
+
+
 def test_streaks_consecutive_days_and_broken_run(db, seeded):
     user, t1, _ = seeded
     today = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)

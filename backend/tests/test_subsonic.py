@@ -150,6 +150,17 @@ def test_star_scrobble_and_playlist_lifecycle(client, db):
     assert _ok(client.get("/rest/getPlaylists", params=_auth()))["playlists"]["playlist"] == []
 
 
+def test_unexpected_handler_error_is_a_subsonic_error_not_an_html_500(client, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setitem(subsonic.HANDLERS, "ping", boom)
+    r = client.get("/rest/ping", params=_auth())
+    assert r.status_code == 200
+    err = r.json()["subsonic-response"]["error"]
+    assert err["code"] == 0 and "kaboom" not in err["message"]
+
+
 def test_unknown_method(client):
     err = client.get("/rest/nonsense", params=_auth()).json()["subsonic-response"]["error"]
     assert err["code"] == 70
