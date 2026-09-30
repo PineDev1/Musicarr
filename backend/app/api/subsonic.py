@@ -35,11 +35,12 @@ from app.models import (
     PlayerUser,
     Track,
 )
+from app.core.config import APP_VERSION
 from app.services import player_auth
 from app.services.smart_playlists import evaluate_smart_playlist, parse_criteria
 
 API_VERSION = "1.16.1"
-SERVER_VERSION = "1.22"
+SERVER_VERSION = APP_VERSION
 
 router = APIRouter(tags=["subsonic"])
 settings_router = APIRouter(prefix="/player/subsonic", tags=["subsonic"])

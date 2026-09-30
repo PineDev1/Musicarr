@@ -29,6 +29,23 @@ def _format_from_path(path: str | None) -> str:
     return path.rsplit(".", 1)[-1].lower() if "." in path else ""
 
 
+_NUMERIC_FIELDS = {
+    "artist_id", "album_id", "play_count", "last_played_days", "year", "decade", "duration",
+}
+_TEXT_FIELDS = {"genre", "format", "title", "artist_name", "album_title"}
+
+
+def _to_number(value: object) -> float | int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        return float(str(value).strip())
+    except ValueError:
+        return None
+
+
 def _year(track: Track) -> int | None:
     rd = (track.album.release_date or "")[:4] if track.album else ""
     return int(rd) if rd.isdigit() else None
@@ -100,6 +117,15 @@ def evaluate_smart_playlist(db: Session, playlist: PlayerPlaylist) -> list[Track
         op = (rule.get("op") or "eq").lower()
         value = rule.get("value")
 
+        if field in _NUMERIC_FIELDS:
+            # JSON/editor values may arrive as "1999" or "" — comparing those to
+            # an int raised TypeError and 500'd the whole playlist.
+            value = _to_number(value) if op not in ("in", "not_in") else [
+                n for n in (_to_number(v) for v in (value if isinstance(value, list) else [value])) if n is not None
+            ]
+        elif op in ("in", "not_in") and isinstance(value, str):
+            value = [v.strip().lower() if field in _TEXT_FIELDS else v for v in value.split(",") if v.strip()]
+
         if field == "favorited":
             actual: object = track.id in _favorites()
         elif field == "genre":
@@ -148,6 +174,10 @@ def evaluate_smart_playlist(db: Session, playlist: PlayerPlaylist) -> list[Track
             if op == "starts_with":
                 return actual.startswith(value)
             return value not in actual
+        if field in _NUMERIC_FIELDS and value is None:
+            # Unparseable number: a rule that can't be evaluated matches nothing
+            # (including "ne", which would otherwise match every track).
+            return False
         if op == "eq":
             return actual == value
         if op == "ne":

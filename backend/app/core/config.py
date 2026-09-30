@@ -3,6 +3,9 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+APP_VERSION = "1.22"
+
+
 class AppConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MUSICARR_")
 

@@ -88,11 +88,13 @@ def test_a_failed_move_does_not_lose_track_of_files_already_moved(db, lib, monke
     out = library.reorganize_library(db)
     assert out["moved"] == 1 and out["failed"] == 1
     moved = failed = 0
-    for _al, t, f in albums:
+    for al, t, f in albums:
         db.refresh(t)
+        db.refresh(al)
         if f.exists():
             failed += 1
             assert t.path == str(f)  # untouched file keeps its old, valid path
+            assert al.path != str(Path(t.path).parent)  # album isn't repointed at a folder lacking its file
         else:
             moved += 1
             assert Path(t.path).exists()  # moved file's new path was recorded

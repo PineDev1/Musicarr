@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.core.config import APP_VERSION
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -90,7 +91,7 @@ from app.services import system_info as _system_info  # noqa: E402
 
 _system_info.install_log_buffer()
 
-app = FastAPI(title="Musicarr", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Musicarr", version=APP_VERSION, lifespan=lifespan)
 
 # Static local origins at boot; DynamicCorsMiddleware also allows configured public_domain.
 app.add_middleware(

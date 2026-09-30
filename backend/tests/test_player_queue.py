@@ -101,3 +101,11 @@ def test_deleting_the_user_removes_their_saved_queue(db, world):
     _save(db, [tracks[0].id])
     player_auth.delete_user(db, me.id)
     assert db.query(PlayerQueueState).count() == 0
+
+
+def test_get_queue_keeps_slot_when_song_is_queued_twice(db, world):
+    _, _, tracks, _ = world
+    a, b = tracks[0].id, tracks[1].id
+    _save(db, [a, b, a], index=2, position=5.0)
+    out = player_queue.get_queue(None, db)
+    assert out.index == 2 and out.position == 5.0

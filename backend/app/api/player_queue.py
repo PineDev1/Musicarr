@@ -91,10 +91,11 @@ def get_queue(request: Request, db: Session = Depends(get_db)):
         return QueueOut()
     # Tracks deleted or no longer on disk drop out; keep pointing at the same
     # song when we can, otherwise at the nearest surviving position.
-    if wanted_id in by_id:
-        index, position = playable.index(wanted_id), row.position
-    else:
-        index, position = min(row.index, len(playable) - 1), 0.0
+    # Surviving entries before the saved slot — not playable.index(), which would
+    # land on the first copy when the same song is queued twice.
+    survivors_before = sum(1 for i in ids[: max(row.index, 0)] if i in by_id)
+    index = min(survivors_before, len(playable) - 1)
+    position = row.position if wanted_id in by_id else 0.0
     return QueueOut(
         exists=True,
         tracks=[_track_out(by_id[i]) for i in playable],

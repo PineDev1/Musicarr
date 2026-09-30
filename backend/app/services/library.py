@@ -1114,11 +1114,13 @@ def reorganize_library(db: Session, *, on_progress: ProgressCb | None = None) ->
             skipped += 1
             continue
         dest_folder, items = plan
+        all_in_dest = True
         for track, src, dest, same in items:
             if same:
                 continue
             if dest.exists():
                 skipped += 1
+                all_in_dest = False
                 continue
             try:
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1127,10 +1129,14 @@ def reorganize_library(db: Session, *, on_progress: ProgressCb | None = None) ->
                 shutil.move(str(src), str(dest))
             except OSError:
                 failed += 1
+                all_in_dest = False
                 continue
             track.path = str(dest)
             moved += 1
-        album.path = str(dest_folder)
+        if all_in_dest:
+            # Only repoint the album when all its files really live there now;
+            # otherwise it would name a folder that doesn't hold its tracks.
+            album.path = str(dest_folder)
         # Commit per album: the files just moved are on disk, so their new
         # paths must be recorded now — one commit at the very end would leave
         # every earlier move unrecorded if a later album blew up.

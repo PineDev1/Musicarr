@@ -99,3 +99,15 @@ def test_new_sorts(db, lib):
     assert _titles(db, user, sort="oldest_release")[-1] == "Chemical"
     assert _titles(db, user, sort="last_played")[0] == "Hurricane"
     assert _titles(db, user, sort="least_played")[-1] == "Chemical"
+
+
+def test_numeric_rule_with_string_or_blank_value_does_not_crash(db, lib):
+    user, _ = lib
+    # "2020" as a string used to raise TypeError (int >= str) and 500 the playlist.
+    assert _titles(db, user, rules=[{"field": "year", "op": "gte", "value": "2020"}]) == ["Chemical"]
+    assert _titles(db, user, rules=[{"field": "decade", "op": "eq", "value": "2010"}]) == [
+        "Beer Never Broke My Heart", "Hurricane",
+    ]
+    # A cleared number box saves '': the rule can't be evaluated, so it matches nothing.
+    for op in ("gte", "eq", "ne", "lt"):
+        assert _titles(db, user, rules=[{"field": "year", "op": op, "value": ""}]) == []

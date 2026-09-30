@@ -10,7 +10,7 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 
-from app.core.config import settings as app_config
+from app.core.config import APP_VERSION, settings as app_config
 
 STARTED_AT = time.time()
 LOG_CAPACITY = 1000
@@ -148,7 +148,7 @@ def system_status(library_path: str | None) -> dict:
         except OSError:
             disk = None
     return {
-        "version": "0.1.0",
+        "version": APP_VERSION,
         "python": platform.python_version(),
         "platform": f"{platform.system()} {platform.release()}",
         "uptime_seconds": int(time.time() - STARTED_AT),

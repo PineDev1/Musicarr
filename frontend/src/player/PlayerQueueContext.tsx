@@ -896,11 +896,16 @@ export function PlayerQueueProvider({
     if (userId == null || !tracks.length) return
     if (playing) hasPlayedRef.current = true
     if (!playing && !hasPlayedRef.current) return
+    // The server caps a saved queue at 500 tracks (a bigger one 422s and would
+    // silently never sync), so send a window that still contains the current song.
+    const MAX_SYNC = 500
+    const start = tracks.length > MAX_SYNC ? Math.min(Math.max(0, index - 20), tracks.length - MAX_SYNC) : 0
+    const windowed = tracks.slice(start, start + MAX_SYNC)
     const save = () =>
       void playerApi
         .saveQueue({
-          track_ids: tracks.map((t) => t.id),
-          index,
+          track_ids: windowed.map((t) => t.id),
+          index: index - start,
           position: activeAudio()?.currentTime || 0,
           shuffle,
           repeat,
