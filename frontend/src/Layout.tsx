@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
 import { acquisitionModeLabel, api } from './api'
+import { CommandPalette } from './components/CommandPalette'
 import { type AccentChoice, type ThemeChoice, getAccent, getTheme, setAccent, setTheme } from './theme'
 
 const topLinks = [
@@ -258,6 +259,52 @@ function GlobalSearch() {
   )
 }
 
+const DISMISSED_UPDATE_KEY = 'musicarr-dismissed-update'
+
+function UpdateBanner() {
+  const status = useQuery({
+    queryKey: ['update-status'],
+    queryFn: () => api.updateStatus(),
+    staleTime: 60 * 60 * 1000,
+    retry: false,
+  })
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(DISMISSED_UPDATE_KEY)
+    } catch {
+      return null
+    }
+  })
+  const s = status.data
+  if (!s?.update_available || !s.latest || dismissed === s.latest) return null
+  return (
+    <div className="banner warn" style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+      <span style={{ flex: 1 }}>
+        Musicarr {s.latest} is available (you're on {s.current}).{' '}
+        {s.url && (
+          <a href={s.url} target="_blank" rel="noreferrer">
+            See what's new
+          </a>
+        )}
+      </span>
+      <button
+        type="button"
+        className="btn ghost"
+        onClick={() => {
+          try {
+            localStorage.setItem(DISMISSED_UPDATE_KEY, s.latest || '')
+          } catch {
+            /* storage unavailable */
+          }
+          setDismissed(s.latest)
+        }}
+      >
+        Dismiss
+      </button>
+    </div>
+  )
+}
+
 export function Layout() {
   const qc = useQueryClient()
   const health = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 15000 })
@@ -330,7 +377,12 @@ export function Layout() {
       <main className="main">
         <div className="main-topbar">
           <GlobalSearch />
+          <span className="muted tiny" title="Command palette" style={{ whiteSpace: 'nowrap' }}>
+            Press / or ⌘K
+          </span>
         </div>
+        <CommandPalette />
+        <UpdateBanner />
         {health.data && health.data.resolved_acquisition_mode !== 'indexer' && !health.data.provider_ok && (
           <div className="banner danger">
             {health.data.provider_error ||

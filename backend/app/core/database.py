@@ -118,6 +118,8 @@ def migrate_schema(engine_: Engine | None = None) -> None:
         "spotify_client_id": "VARCHAR(128) DEFAULT ''",
         "spotify_client_secret": "VARCHAR(128) DEFAULT ''",
         "backup_schedule_enabled": "BOOLEAN DEFAULT 1",
+        "update_check_enabled": "BOOLEAN DEFAULT 1",
+        "trash_retention_days": "INTEGER DEFAULT 30",
         "backup_retention_count": "INTEGER DEFAULT 7",
         "dedupe_scan_schedule_enabled": "BOOLEAN DEFAULT 1",
         "low_disk_threshold_gb": "INTEGER DEFAULT 10",

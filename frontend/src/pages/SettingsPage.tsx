@@ -5,6 +5,9 @@ import { acquisitionModeLabel, api, resolveAcquisitionMode } from '../api'
 import { playerApi } from '../player/playerApi'
 import { useToast } from '../Toast'
 import { AcquisitionPanels } from './AcquisitionPanels'
+import { FolderPicker } from '../components/FolderPicker'
+import { BackupFilesPanel } from './BackupFilesPanel'
+import { PlayerInvitesPanel } from './PlayerInvitesPanel'
 import { ReorganizePreview } from './ReorganizePreview'
 import { LibraryRootsPanel } from './LibraryRootsPanel'
 import { PushNotificationsPanel } from './PushPanel'
@@ -161,6 +164,9 @@ export function SettingsPage() {
   const [spotifyClientSecret, setSpotifyClientSecret] = useState('')
   const [backupScheduleEnabled, setBackupScheduleEnabled] = useState(true)
   const [backupRetentionCount, setBackupRetentionCount] = useState(7)
+  const [updateCheckEnabled, setUpdateCheckEnabled] = useState(true)
+  const [trashRetentionDays, setTrashRetentionDays] = useState(30)
+  const [pickingLibrary, setPickingLibrary] = useState(false)
   const [dedupeScanScheduleEnabled, setDedupeScanScheduleEnabled] = useState(true)
   const [lowDiskThresholdGb, setLowDiskThresholdGb] = useState(10)
   const [notifyOnMaintenance, setNotifyOnMaintenance] = useState(true)
@@ -215,6 +221,8 @@ export function SettingsPage() {
     setSpotifyClientSecret('')
     setBackupScheduleEnabled(data.backup_schedule_enabled ?? true)
     setBackupRetentionCount(data.backup_retention_count ?? 7)
+    setUpdateCheckEnabled(data.update_check_enabled ?? true)
+    setTrashRetentionDays(data.trash_retention_days ?? 30)
     setDedupeScanScheduleEnabled(data.dedupe_scan_schedule_enabled ?? true)
     setLowDiskThresholdGb(data.low_disk_threshold_gb ?? 10)
     setNotifyOnMaintenance(data.notify_on_maintenance ?? true)
@@ -277,6 +285,8 @@ export function SettingsPage() {
         spotify_client_id: spotifyClientId.trim(),
         backup_schedule_enabled: backupScheduleEnabled,
         backup_retention_count: backupRetentionCount,
+        update_check_enabled: updateCheckEnabled,
+        trash_retention_days: trashRetentionDays,
         dedupe_scan_schedule_enabled: dedupeScanScheduleEnabled,
         low_disk_threshold_gb: lowDiskThresholdGb,
         notify_on_maintenance: notifyOnMaintenance,
@@ -601,7 +611,7 @@ export function SettingsPage() {
 
   function onSubmit(e: FormEvent) {
     e.preventDefault()
-    if (tab === 'tools' || tab === 'musicbrainz' || tab === 'backup' || tab === 'indexers') return
+    if (tab === 'tools' || tab === 'musicbrainz' || tab === 'indexers') return
     save.mutate()
   }
 
@@ -879,7 +889,28 @@ export function SettingsPage() {
           <>
             <div className="field">
               <label>Library path</label>
-              <input type="text" value={libraryPath} onChange={(e) => setLibraryPath(e.target.value)} />
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <input
+                  type="text"
+                  value={libraryPath}
+                  onChange={(e) => setLibraryPath(e.target.value)}
+                  style={{ flex: 1 }}
+                />
+                <button type="button" className="btn ghost" onClick={() => setPickingLibrary(true)}>
+                  Browse…
+                </button>
+              </div>
+              {pickingLibrary && (
+                <FolderPicker
+                  title="Choose the library folder"
+                  initialPath={libraryPath}
+                  onClose={() => setPickingLibrary(false)}
+                  onSelect={(p) => {
+                    setLibraryPath(p)
+                    setPickingLibrary(false)
+                  }}
+                />
+              )}
             </div>
 
             <LibraryRootsPanel />
@@ -1809,6 +1840,10 @@ export function SettingsPage() {
 
             <hr className="settings-divider" />
 
+            <PlayerInvitesPanel />
+
+            <hr className="settings-divider" />
+
             <h3 style={{ margin: '0 0 0.25rem', fontSize: '1.05rem' }}>Player users</h3>
             <p className="muted" style={{ marginTop: 0, maxWidth: 560 }}>
               Create listener accounts. They can change their own password inside the player.
@@ -2089,6 +2124,7 @@ export function SettingsPage() {
                 </button>
               </div>
             </div>
+            <BackupFilesPanel restoreBusy={restoreJobRunning} />
             {(restoreJob.data?.state === 'running' ||
               restoreJob.data?.state === 'error' ||
               (restoreJob.data?.state === 'done' && restoreJob.data.message)) && (
@@ -2163,6 +2199,33 @@ export function SettingsPage() {
               />
             </div>
             <div className="field">
+              <label>Trash</label>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input
+                  type="number"
+                  min={0}
+                  max={365}
+                  value={trashRetentionDays}
+                  onChange={(e) => setTrashRetentionDays(Math.max(0, Math.min(365, Number(e.target.value) || 0)))}
+                  style={{ maxWidth: 100 }}
+                />
+                <span className="muted">days — deleted albums and duplicate files wait in the trash. 0 = delete immediately.</span>
+              </div>
+            </div>
+            <div className="field">
+              <label>Updates</label>
+              <div className="checks">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={updateCheckEnabled}
+                    onChange={(e) => setUpdateCheckEnabled(e.target.checked)}
+                  />
+                  Tell me when a new Musicarr release is available (checks GitHub at most every 6 hours)
+                </label>
+              </div>
+            </div>
+            <div className="field">
               <label>Weekly duplicate scan</label>
               <div className="checks">
                 <label>
@@ -2178,7 +2241,7 @@ export function SettingsPage() {
           </>
         )}
 
-        {tab !== 'tools' && tab !== 'musicbrainz' && tab !== 'backup' && tab !== 'indexers' && (
+        {tab !== 'tools' && tab !== 'musicbrainz' && tab !== 'indexers' && (
           <div className="toolbar">
             <button className="btn" type="submit" disabled={save.isPending}>
               Save settings

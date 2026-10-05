@@ -176,6 +176,8 @@ textarea {
 .main-topbar {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 0.75rem;
   margin-bottom: 1rem;
 }
 
@@ -2927,3 +2929,124 @@ textarea.code-block {
 .eq-band { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; }
 .eq-band input[type='range'] { writing-mode: vertical-lr; direction: rtl; height: 90px; width: 20px; }
 .eq-save { display: flex; gap: 6px; } .eq-custom-preset { display: inline-flex; }
+
+/* ---- ease-of-use additions: folder picker, command palette, setup checklist ---- */
+.folder-picker {
+  width: min(520px, 100%);
+  max-height: min(80vh, 640px);
+  display: flex;
+  flex-direction: column;
+}
+.folder-picker-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+}
+.folder-picker-shortcuts .btn {
+  padding: 0.2rem 0.6rem;
+  font-size: 0.8rem;
+}
+.folder-picker-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.folder-picker-list {
+  margin-top: 0.5rem;
+  overflow-y: auto;
+  min-height: 160px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.folder-picker-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.45rem 0.65rem;
+  cursor: pointer;
+  font: inherit;
+}
+.folder-picker-row:hover {
+  background: var(--bg-soft);
+}
+.palette-backdrop {
+  align-items: start;
+  padding-top: 12vh;
+}
+.palette {
+  width: min(560px, 100%);
+  padding: 0;
+  overflow: hidden;
+}
+.palette-input {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding: 0.9rem 1rem;
+  font-size: 1rem;
+  background: transparent;
+  color: var(--text);
+  outline: none;
+}
+.palette-list {
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.palette-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+  background: none;
+  border: 0;
+  color: var(--text);
+  padding: 0.55rem 1rem;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.palette-row.active {
+  background: var(--bg-soft);
+}
+.checklist-item {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.4rem 0;
+}
+.checklist-dot {
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  flex: none;
+  margin-top: 0.15rem;
+  display: grid;
+  place-items: center;
+  font-size: 0.7rem;
+  border: 2px solid var(--border);
+  color: transparent;
+}
+.checklist-dot.ok {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.checklist-dot.todo {
+  border-color: #d4a017;
+}

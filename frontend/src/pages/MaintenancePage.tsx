@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../api'
+import { TrashPanel } from './TrashPanel'
 import { useToast } from '../Toast'
 import { LibraryHealthPanel } from './LibraryHealthPanel'
 
@@ -175,6 +176,7 @@ export function MaintenancePage() {
           })}
         </>
       )}
+      <TrashPanel />
     </div>
   )
 }

@@ -607,6 +607,26 @@ def sweep_wanted_now():
     return wanted_indexer_sweep.run_once(force=True)
 
 
+@router.post("/search-wanted", status_code=202)
+def search_wanted_all(include_all: bool = True):
+    """The Wanted page's "Search all wanted" button: runs in the background and
+    grabs the best match for every wanted album (not only artists that opted into
+    auto-grab). The auto-grab score threshold and the blocklist still apply."""
+    from app.services.indexer_engine import wanted_indexer_sweep
+
+    try:
+        return wanted_indexer_sweep.start_manual(include_all=include_all)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/search-wanted/status")
+def search_wanted_status():
+    from app.services.indexer_engine import wanted_indexer_sweep
+
+    return wanted_indexer_sweep.manual
+
+
 @router.get("/blocklist", response_model=list[BlocklistEntryOut])
 def list_blocklist(db: Session = Depends(get_db)):
     return list(db.scalars(select(BlocklistEntry).order_by(BlocklistEntry.created_at.desc())))

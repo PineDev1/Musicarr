@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.models import Album, Track
 from app.models.schemas import AlbumOut, AlbumPatch, TrackOut
+from app.services import trash
 from app.services.download_queue import download_queue
 from app.services.filters import is_junk_title, is_live_title
 from app.services.history import add_history
@@ -438,27 +439,30 @@ def delete_album(
     db: Session = Depends(get_db),
     delete_files: bool = Query(False),
 ):
-    import shutil
     from pathlib import Path
 
     album = db.scalar(
-        select(Album).options(joinedload(Album.tracks)).where(Album.id == album_id)
+        select(Album).options(joinedload(Album.tracks), joinedload(Album.artist)).where(Album.id == album_id)
     )
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
     title = album.title
     if delete_files and album.path:
-        folder = Path(album.path)
-        if folder.exists() and folder.is_dir():
-            shutil.rmtree(folder, ignore_errors=True)
-        for track in album.tracks or []:
-            if track.path:
-                p = Path(track.path)
-                if p.exists() and p.is_file():
-                    p.unlink(missing_ok=True)
+        label = f"{album.artist.name} — {title}" if album.artist else title
+        try:
+            folder = Path(album.path)
+            if folder.exists() and folder.is_dir():
+                trash.delete_or_trash(db, folder, reason="album_deleted", label=label)
+            for track in album.tracks or []:
+                if track.path:
+                    p = Path(track.path)
+                    if p.exists() and p.is_file():
+                        trash.delete_or_trash(db, p, reason="album_deleted", label=f"{label} / {p.name}")
+        except trash.TrashError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
     db.delete(album)
     db.commit()
-    add_history(db, "album_removed", f"Removed album {title}" + (" (+files)" if delete_files else ""))
+    add_history(db, "album_removed", f"Removed album {title}" + (" (+files, in trash)" if delete_files and trash.retention_days(db) > 0 else " (+files)" if delete_files else ""))
     return {"ok": True, "deleted_files": delete_files}
 
 

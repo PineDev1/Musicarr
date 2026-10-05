@@ -51,6 +51,16 @@ export function SystemPage() {
           <h1>System</h1>
           <p>Server status, scheduled tasks, and recent logs.</p>
         </div>
+        <div className="toolbar" style={{ marginBottom: 0 }}>
+          <a
+            className="btn ghost"
+            href="/api/system/diagnostics"
+            download
+            title="A secrets-masked JSON file with version, settings, task status and recent logs — attach it to a bug report"
+          >
+            Download diagnostics
+          </a>
+        </div>
       </div>
       {status.error && <div className="banner warn">{(status.error as Error).message}</div>}
       {s && (

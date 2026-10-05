@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import zipfile
@@ -161,6 +162,66 @@ def export_backup(db: Session) -> tuple[bytes, str]:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     filename = f"musicarr-backup-{stamp}.zip"
     return buf.getvalue(), filename
+
+
+BACKUP_FILE_RE = re.compile(r"^musicarr-backup-\d{8}-\d{6}\.zip$")
+
+
+def backups_dir() -> Path:
+    d = app_config.data_dir / "backups"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def backup_file_path(name: str) -> Path:
+    """Resolve a saved backup by NAME only. The strict pattern is what keeps a
+    request like '../musicarr.db' from ever reaching the filesystem."""
+    if not BACKUP_FILE_RE.match(name or ""):
+        raise ValueError("Invalid backup file name")
+    path = backups_dir() / name
+    if not path.is_file():
+        raise FileNotFoundError(name)
+    return path
+
+
+def list_backup_files() -> list[dict[str, Any]]:
+    out = []
+    for p in sorted(backups_dir().glob("musicarr-backup-*.zip"), key=lambda p: p.name, reverse=True):
+        if not BACKUP_FILE_RE.match(p.name):
+            continue
+        st = p.stat()
+        out.append(
+            {
+                "name": p.name,
+                "size": st.st_size,
+                "created_at": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
+            }
+        )
+    return out
+
+
+def prune_backup_files(retention: int) -> int:
+    """Keep the newest `retention` saved backups; returns how many were removed."""
+    existing = sorted(
+        (p for p in backups_dir().glob("musicarr-backup-*.zip") if BACKUP_FILE_RE.match(p.name)),
+        key=lambda p: p.name,
+    )
+    removed = 0
+    for stale in existing[: max(0, len(existing) - max(1, retention))]:
+        stale.unlink(missing_ok=True)
+        removed += 1
+    return removed
+
+
+def save_backup_file(db: Session, exported: tuple[bytes, str] | None = None) -> Path:
+    """Write a backup into the backups folder (used by the nightly job and the
+    'Back up now' button) and apply the retention setting."""
+    data, filename = exported or export_backup(db)
+    out_path = backups_dir() / filename
+    out_path.write_bytes(data)
+    row = ensure_settings(db)
+    prune_backup_files(int(getattr(row, "backup_retention_count", 7) or 7))
+    return out_path
 
 
 @dataclass

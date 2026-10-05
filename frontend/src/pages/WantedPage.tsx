@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import { useToast } from '../Toast'
 
@@ -17,6 +17,37 @@ export function WantedPage() {
     queryFn: () => api.wanted(),
     refetchInterval: 10000,
   })
+
+  // "Search all wanted" runs in the background on the server; poll its progress.
+  const search = useQuery({
+    queryKey: ['search-wanted'],
+    queryFn: api.searchAllWantedStatus,
+    refetchInterval: (q) => (q.state.data?.state === 'running' ? 1500 : false),
+  })
+  const searchRunning = search.data?.state === 'running'
+  const searchAll = useMutation({
+    mutationFn: api.searchAllWanted,
+    onSuccess: () => {
+      toast.push('Searching your indexers for every wanted album…', 'ok')
+      qc.invalidateQueries({ queryKey: ['search-wanted'] })
+    },
+    onError: (err) => toast.push((err as Error).message, 'error'),
+  })
+  // Surface the result once when a run we watched finishes.
+  const lastState = useRef(search.data?.state)
+  useEffect(() => {
+    const now = search.data
+    if (lastState.current === 'running' && now && now.state !== 'running') {
+      if (now.state === 'done') {
+        toast.push(`Checked ${now.checked ?? 0} album(s), grabbed ${now.grabbed ?? 0}`, 'ok')
+        qc.invalidateQueries({ queryKey: ['wanted'] })
+        qc.invalidateQueries({ queryKey: ['health'] })
+      } else if (now.state === 'error') {
+        toast.push(now.error || 'Wanted search failed', 'error')
+      }
+    }
+    lastState.current = now?.state
+  }, [search.data, toast, qc])
 
   const filtered = useMemo(() => {
     if (!data) return []
@@ -143,6 +174,25 @@ export function WantedPage() {
             <button className="btn" onClick={() => downloadAll.mutate()} disabled={downloadAll.isPending}>
               Download all
             </button>
+            {health.data && health.data.resolved_acquisition_mode !== 'streaming' && (
+              <button
+                className="btn"
+                title="Search your indexers for every wanted album and grab the best match for each (the auto-grab minimum score and the blocklist still apply)"
+                disabled={searchAll.isPending || searchRunning}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      `Search your indexers for all ${data.length} wanted album(s) and download the best match for each? Releases below your auto-grab minimum score or on the blocklist are skipped.`,
+                    )
+                  )
+                    searchAll.mutate()
+                }}
+              >
+                {searchRunning
+                  ? `Searching… ${search.data?.checked ?? 0}/${search.data?.total || data.length}`
+                  : 'Search all wanted'}
+              </button>
+            )}
             <button className="btn ghost" onClick={() => skipSingles.mutate()} disabled={skipSingles.isPending}>
               Skip all singles
             </button>

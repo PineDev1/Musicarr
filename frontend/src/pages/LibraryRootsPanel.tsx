@@ -2,12 +2,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../api'
 import { useToast } from '../Toast'
+import { FolderPicker } from '../components/FolderPicker'
 
 export function LibraryRootsPanel() {
   const qc = useQueryClient()
   const toast = useToast()
   const [path, setPath] = useState('')
   const [label, setLabel] = useState('')
+  const [picking, setPicking] = useState(false)
 
   const { data, isLoading } = useQuery({ queryKey: ['library-roots'], queryFn: api.libraryRoots })
 
@@ -46,6 +48,20 @@ export function LibraryRootsPanel() {
             autoComplete="off"
           />
         </div>
+        <button type="button" className="btn ghost" onClick={() => setPicking(true)}>
+          Browse…
+        </button>
+        {picking && (
+          <FolderPicker
+            title="Choose a folder to add"
+            initialPath={path}
+            onClose={() => setPicking(false)}
+            onSelect={(p) => {
+              setPath(p)
+              setPicking(false)
+            }}
+          />
+        )}
         <div className="field" style={{ margin: 0 }}>
           <label>Label (optional)</label>
           <input

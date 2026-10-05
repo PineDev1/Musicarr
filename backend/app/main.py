@@ -27,13 +27,16 @@ from app.api import (
     musicbrainz_catalog,
     ops,
     player,
+    player_invites,
     player_queue,
     player_social,
     push,
     search,
+    server_tools as server_tools_api,
     settings,
     stats,
     subsonic,
+    trash as trash_api,
 )
 from app.core.database import SessionLocal, ensure_dirs, init_db
 from app.services import api_keys, app_auth, player_auth, player_presence
@@ -243,6 +246,7 @@ app.include_router(ops.router, prefix="/api")
 app.include_router(events.router, prefix="/api")
 app.include_router(player.router, prefix="/api")
 app.include_router(player_queue.router, prefix="/api")
+app.include_router(player_invites.router, prefix="/api")
 app.include_router(player_social.router, prefix="/api")
 app.include_router(subsonic.settings_router, prefix="/api")
 app.include_router(subsonic.router)
@@ -256,6 +260,25 @@ app.include_router(discovery.router, prefix="/api")
 app.include_router(maintenance.router, prefix="/api")
 app.include_router(acquisition.router, prefix="/api")
 app.include_router(push.router, prefix="/api")
+app.include_router(server_tools_api.router, prefix="/api")
+app.include_router(trash_api.router, prefix="/api")
+
+
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    """Liveness/readiness probe for Docker, Unraid and reverse proxies: the process
+    is up AND can reach its database. Deliberately outside /api (no auth) and free
+    of provider/network calls so it stays fast and never flaps."""
+    from sqlalchemy import text
+
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception:  # noqa: BLE001
+        return JSONResponse(status_code=503, content={"status": "error", "detail": "database unavailable"})
+    finally:
+        db.close()
+    return {"status": "ok", "version": APP_VERSION}
 
 
 @app.get("/api")
