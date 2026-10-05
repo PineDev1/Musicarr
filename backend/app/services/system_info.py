@@ -10,7 +10,7 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 
-from app.core.config import settings as app_config
+from app.core.config import APP_VERSION, settings as app_config
 
 STARTED_AT = time.time()
 LOG_CAPACITY = 1000
@@ -23,10 +23,14 @@ _BEARER_RE = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}")
 
 
 _PATH_TOKEN_RE = re.compile(r"(/(?:cast|share)/)[A-Za-z0-9_-]{16,}")
+# Subsonic clients put their credentials in short query params (t=token, s=salt,
+# p=password); a logged token+salt pair can be replayed indefinitely.
+_SUBSONIC_QS_RE = re.compile(r"([?&](?:t|s|p)=)[^&\s\"']+")
 
 
 def redact(text: str) -> str:
     text = _PATH_TOKEN_RE.sub(lambda m: f"{m.group(1)}***", text)
+    text = _SUBSONIC_QS_RE.sub(lambda m: f"{m.group(1)}***", text)
     text = _BEARER_RE.sub(lambda m: f"{m.group(1)} ***", text)
     return _SECRET_RE.sub(lambda m: f"{m.group(1)}***", text)
 
@@ -81,19 +85,14 @@ def install_log_buffer() -> None:
         root.setLevel(logging.INFO)
 
 
-def _scheduled_tasks() -> list[dict]:
+def _running_schedulers() -> list:
     from app.services.completed_download_handler import completed_download_handler
     from app.services.import_lists import import_list_runner
     from app.services.indexer_engine import wanted_indexer_sweep
     from app.services.maintenance_scheduler import maintenance_scheduler
     from app.services.monitor import release_monitor
 
-    labels = {
-        "backup_nightly": "Nightly backup",
-        "dedupe_scan_weekly": "Weekly duplicate scan",
-        "health_check": "Health check (disk, provider session)",
-    }
-    tasks: list[dict] = []
+    out = []
     for owner in (
         release_monitor,
         maintenance_scheduler,
@@ -102,8 +101,30 @@ def _scheduled_tasks() -> list[dict]:
         import_list_runner,
     ):
         sched = getattr(owner, "scheduler", None)
-        if sched is None or not getattr(sched, "running", False):
-            continue
+        if sched is not None and getattr(sched, "running", False):
+            out.append(sched)
+    return out
+
+
+def run_task_now(task_id: str) -> bool:
+    """Ask the owning scheduler to fire a job immediately (its own enable
+    flags are still honoured inside the job). Returns False for unknown ids."""
+    for sched in _running_schedulers():
+        job = sched.get_job(task_id)
+        if job is not None:
+            job.modify(next_run_time=datetime.now(timezone.utc))
+            return True
+    return False
+
+
+def _scheduled_tasks() -> list[dict]:
+    labels = {
+        "backup_nightly": "Nightly backup",
+        "dedupe_scan_weekly": "Weekly duplicate scan",
+        "health_check": "Health check (disk, provider session)",
+    }
+    tasks: list[dict] = []
+    for sched in _running_schedulers():
         for job in sched.get_jobs():
             nxt = getattr(job, "next_run_time", None)
             tasks.append(
@@ -127,7 +148,7 @@ def system_status(library_path: str | None) -> dict:
         except OSError:
             disk = None
     return {
-        "version": "0.1.0",
+        "version": APP_VERSION,
         "python": platform.python_version(),
         "platform": f"{platform.system()} {platform.release()}",
         "uptime_seconds": int(time.time() - STARTED_AT),

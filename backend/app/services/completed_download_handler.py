@@ -232,6 +232,7 @@ class CompletedDownloadHandler:
                 db,
                 job,
                 f"{client_row.name} reported the download as failed or removed",
+                blocklist=True,
             )
             return "failed"
 
@@ -308,7 +309,7 @@ class CompletedDownloadHandler:
 
         files = self._audio_files(local)
         if not files:
-            self._fail_job(db, job, f"No audio files found in '{local}'")
+            self._fail_job(db, job, f"No audio files found in '{local}'", blocklist=True)
             return "failed"
 
         # Reject wrong-artist grabs before filing into this artist's library
@@ -319,6 +320,7 @@ class CompletedDownloadHandler:
                 job,
                 f"Downloaded files look like a different artist than '{artist_name}' "
                 f"(album/artist tags do not match). Not importing.",
+                blocklist=True,
             )
             return "failed"
 
@@ -343,6 +345,7 @@ class CompletedDownloadHandler:
                 job,
                 f"Only found {len(files)} audio file(s) in '{local}' but expected "
                 f"around {expected} tracks. Looks incomplete — not importing.",
+                blocklist=True,
             )
             return "failed"
 
@@ -625,7 +628,13 @@ class CompletedDownloadHandler:
             if callable(closer):
                 closer()
 
-    def _fail_job(self, db: Session, job: DownloadJob, message: str) -> None:
+    def _fail_job(
+        self, db: Session, job: DownloadJob, message: str, *, blocklist: bool = False
+    ) -> None:
+        """Mark a job failed. Only pass blocklist=True when the *release itself*
+        is bad (failed at the client, empty, wrong artist, incomplete) — never
+        for local problems (missing path mapping, crash, disk/permission
+        errors), which would permanently ban a perfectly good release."""
         try:
             job.state = "failed"
             job.error = message
@@ -636,12 +645,13 @@ class CompletedDownloadHandler:
             db.rollback()
             return
         logger.warning("Job %s failed: %s", job.id, message)
-        try:
-            from app.services.blocklist import add_from_job
+        if blocklist:
+            try:
+                from app.services.blocklist import add_from_job
 
-            add_from_job(db, job, f"Failed: {message}")
-        except Exception:  # noqa: BLE001
-            logger.warning("Could not blocklist failed job %s", job.id, exc_info=True)
+                add_from_job(db, job, f"Failed: {message}")
+            except Exception:  # noqa: BLE001
+                logger.warning("Could not blocklist failed job %s", job.id, exc_info=True)
         try:
             add_history(
                 db,

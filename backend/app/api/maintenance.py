@@ -18,6 +18,13 @@ def get_duplicates(db: Session = Depends(get_db)):
     return dedupe.scan(db)
 
 
+@router.get("/health-report")
+def health_report(db: Session = Depends(get_db)):
+    from app.services import library_health
+
+    return library_health.scan(db)
+
+
 @router.post("/resolve")
 def resolve(payload: MaintenanceResolveRequest, db: Session = Depends(get_db)):
     actions = [

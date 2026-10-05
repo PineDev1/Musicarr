@@ -559,6 +559,28 @@ export const api = {
     request<{ ok: boolean }>(`/artists/${id}`, { method: 'DELETE' }),
   patchArtist: (id: number, body: Record<string, unknown>) =>
     request<Artist>(`/artists/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  libraryHealth: () =>
+    request<{
+      total_issues: number
+      sections: {
+        key: string
+        label: string
+        hint: string
+        count: number
+        items: {
+          album_id?: number
+          artist_id: number
+          title?: string
+          artist_name: string
+          detail: string
+        }[]
+      }[]
+    }>('/maintenance/health-report'),
+  bulkArtistAction: (artist_ids: number[], action: string, value?: string | null) =>
+    request<{ affected: number; requested: number }>('/artists/bulk-action', {
+      method: 'POST',
+      body: JSON.stringify({ artist_ids, action, value: value ?? null }),
+    }),
   refreshArtist: (id: number) =>
     request<Artist>(`/artists/${id}/refresh`, { method: 'POST' }),
   downloadMissing: (id: number) =>
@@ -675,6 +697,17 @@ export const api = {
     request<{ cleared: number }>('/queue/clear-finished', { method: 'POST' }),
   history: (eventType?: 'audit' | 'activity') =>
     request<HistoryEvent[]>(`/history${eventType ? `?event_type=${eventType}` : ''}`),
+  reorganizePreview: () =>
+    request<{
+      total_moves: number
+      total_conflicts: number
+      already_in_place: number
+      moves: { artist: string; album: string; from: string; to: string }[]
+      conflicts: { artist: string; album: string; from: string; to: string }[]
+      limit: number
+    }>('/library/reorganize/preview'),
+  runSystemTask: (id: string) =>
+    request<{ ok: boolean }>(`/system/tasks/${encodeURIComponent(id)}/run`, { method: 'POST' }),
   systemStatus: () => request<SystemStatus>('/system/status'),
   systemLogs: (level: string, search: string) =>
     request<SystemLogLine[]>(

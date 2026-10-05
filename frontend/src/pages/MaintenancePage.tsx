@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../api'
 import { useToast } from '../Toast'
+import { LibraryHealthPanel } from './LibraryHealthPanel'
 
 function formatBytes(n: number) {
   if (!n) return '0 B'
@@ -45,6 +46,8 @@ export function MaintenancePage() {
           <p>Orphaned files, missing files, and duplicate tracks found in your library.</p>
         </div>
       </div>
+
+      <LibraryHealthPanel />
 
       {nothingFound && <p className="muted">Nothing to clean up — your library looks tidy.</p>}
 

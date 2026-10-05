@@ -282,3 +282,75 @@ struct Profile: Codable {
         case activityShared = "activity_shared"
     }
 }
+
+struct ListeningStats: Codable {
+    struct TopTrack: Codable, Identifiable {
+        var trackId: Int
+        var title: String
+        var artistName: String
+        var plays: Int
+        var id: Int { trackId }
+        enum CodingKeys: String, CodingKey {
+            case title, plays
+            case trackId = "track_id"
+            case artistName = "artist_name"
+        }
+    }
+    struct TopArtist: Codable, Identifiable {
+        var artistId: Int
+        var name: String
+        var plays: Int
+        var seconds: Int
+        var id: Int { artistId }
+        enum CodingKeys: String, CodingKey {
+            case name, plays, seconds
+            case artistId = "artist_id"
+        }
+    }
+    struct TopAlbum: Codable, Identifiable {
+        var albumId: Int
+        var title: String
+        var artistName: String
+        var plays: Int
+        var id: Int { albumId }
+        enum CodingKeys: String, CodingKey {
+            case title, plays
+            case albumId = "album_id"
+            case artistName = "artist_name"
+        }
+    }
+    struct TopGenre: Codable, Identifiable {
+        var genre: String
+        var plays: Int
+        var seconds: Int
+        var id: String { genre }
+    }
+
+    var playEvents: Int
+    var uniqueTracks: Int
+    var uniqueArtists: Int
+    var totalSeconds: Int
+    var topTracks: [TopTrack]
+    var topArtists: [TopArtist]
+    var topAlbums: [TopAlbum]
+    var topGenres: [TopGenre]
+    var playsByHour: [Int]
+    var activeDays: Int
+    var longestStreakDays: Int
+    var currentStreakDays: Int
+
+    enum CodingKeys: String, CodingKey {
+        case playEvents = "play_events"
+        case uniqueTracks = "unique_tracks"
+        case uniqueArtists = "unique_artists"
+        case totalSeconds = "total_seconds"
+        case topTracks = "top_tracks"
+        case topArtists = "top_artists"
+        case topAlbums = "top_albums"
+        case topGenres = "top_genres"
+        case playsByHour = "plays_by_hour"
+        case activeDays = "active_days"
+        case longestStreakDays = "longest_streak_days"
+        case currentStreakDays = "current_streak_days"
+    }
+}

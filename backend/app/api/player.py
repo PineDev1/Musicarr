@@ -75,7 +75,7 @@ from app.models.schemas import (
     PlayerUserOut,
     PlayerUserUpdate,
 )
-from app.services import app_auth, player_auth, player_presence
+from app.services import app_auth, login_throttle, player_auth, player_presence
 from app.services.app_auth import hash_password, verify_password
 from app.services.history import add_history
 from app.services.lyrics import ensure_genre, get_lyrics
@@ -450,11 +450,20 @@ def status(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=PlayerAuthStatus)
-def login(payload: PlayerLoginRequest, response: Response, db: Session = Depends(get_db)):
+def login(
+    payload: PlayerLoginRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+    request: Request = None,  # type: ignore[assignment]  # injected by FastAPI; None in direct calls
+):
     _require_player_enabled(db)
+    login_throttle.enforce("player", request, payload.username)
     user = player_auth.authenticate(db, payload.username, payload.password)
+    ip = login_throttle.client_ip(request)
     if not user:
+        login_throttle.record_failure("player", ip, payload.username)
         raise HTTPException(status_code=401, detail="Invalid username or password")
+    login_throttle.record_success("player", ip, payload.username)
     token = player_auth.create_session_token(db, user)
     player_auth.set_session_cookie(response, token, db)
     return PlayerAuthStatus(**player_auth.auth_status(db, token))
@@ -1192,6 +1201,20 @@ async def player_ws(websocket: WebSocket):
             return
         token = websocket.cookies.get(player_auth.COOKIE_NAME)
         user = player_auth.parse_session_token(db, token)
+        # Browsers always send Origin on a WebSocket handshake and don't apply
+        # CORS to it, so a page on another origin could ride the user's cookie
+        # (cross-site WebSocket hijacking). Allow same-host or configured origins.
+        origin = websocket.headers.get("origin")
+        if origin:
+            from urllib.parse import urlparse
+
+            from app.services.cors_origins import origin_is_allowed
+
+            origin_host = (urlparse(origin).netloc or "").lower()
+            same_host = origin_host == (websocket.headers.get("host") or "").lower()
+            if not (same_host or origin_is_allowed(origin, db)):
+                await websocket.close(code=4403)
+                return
     finally:
         db.close()
     if not user:
@@ -1627,11 +1650,33 @@ def listen_history(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/library/stats")
-def listen_stats(request: Request, db: Session = Depends(get_db), range_days: int = 30):
-    """Aggregate play counts for the current listener."""
+def listen_stats(
+    request: Request,
+    db: Session = Depends(get_db),
+    range_days: int = 30,
+    year: int | None = None,
+    tz_offset: int = 0,
+):
+    """Aggregate play counts for the current listener.
+
+    With `year`, covers that calendar year (year-in-review) instead of the
+    trailing `range_days`. `tz_offset` is the client's offset in minutes in
+    JavaScript's `getTimezoneOffset()` convention (UTC minus local), so hours,
+    weekdays, streak days and year boundaries follow the listener's own clock
+    instead of UTC.
+    """
     user = _current_player_user(request, db)
-    days = max(1, min(365, int(range_days or 30)))
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+    tz_offset = max(-14 * 60, min(14 * 60, int(tz_offset or 0)))
+    shift = timedelta(minutes=-tz_offset)
+    until: datetime | None = None
+    if year is not None:
+        year = max(2000, min(2100, int(year)))
+        since = datetime(year, 1, 1, tzinfo=timezone.utc) - shift
+        until = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - shift
+        days = (until - since).days
+    else:
+        days = max(1, min(365, int(range_days or 30)))
+        since = datetime.now(timezone.utc) - timedelta(days=days)
     events = list(
         db.scalars(
             select(PlayerPlayEvent)
@@ -1643,6 +1688,7 @@ def listen_stats(request: Request, db: Session = Depends(get_db), range_days: in
             .where(
                 PlayerPlayEvent.user_id == user.id,
                 PlayerPlayEvent.played_at >= since,
+                *([PlayerPlayEvent.played_at < until] if until else []),
             )
             .order_by(PlayerPlayEvent.played_at.desc())
         )
@@ -1651,6 +1697,11 @@ def listen_stats(request: Request, db: Session = Depends(get_db), range_days: in
     )
     track_counts: dict[int, dict] = {}
     artist_counts: dict[int, dict] = {}
+    album_counts: dict[int, dict] = {}
+    genre_counts: dict[str, dict] = {}
+    hours = [0] * 24
+    weekdays = [0] * 7
+    daily_seconds: dict[str, int] = {}
     total_seconds = 0
     for ev in events:
         track = ev.track
@@ -1658,6 +1709,35 @@ def listen_stats(request: Request, db: Session = Depends(get_db), range_days: in
             continue
         dur = int(track.duration or 0)
         total_seconds += dur
+        when = ev.played_at
+        if when is not None:
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            when = when + shift
+            hours[when.hour] += 1
+            weekdays[when.weekday()] += 1
+            day_key = when.date().isoformat()
+            daily_seconds[day_key] = daily_seconds.get(day_key, 0) + dur
+        album = track.album
+        if album:
+            al = album_counts.setdefault(
+                album.id,
+                {
+                    "album_id": album.id,
+                    "title": album.title,
+                    "artist_name": album.artist.name if album.artist else "",
+                    "cover_url": album.cover_url,
+                    "plays": 0,
+                    "seconds": 0,
+                },
+            )
+            al["plays"] += 1
+            al["seconds"] += dur
+        g = (track.genre or "").strip()
+        if g:
+            ge = genre_counts.setdefault(g.lower(), {"genre": g, "plays": 0, "seconds": 0})
+            ge["plays"] += 1
+            ge["seconds"] += dur
         t_entry = track_counts.setdefault(
             track.id,
             {
@@ -1690,15 +1770,55 @@ def listen_stats(request: Request, db: Session = Depends(get_db), range_days: in
 
     top_tracks = sorted(track_counts.values(), key=lambda x: (-x["plays"], -x["seconds"]))[:20]
     top_artists = sorted(artist_counts.values(), key=lambda x: (-x["plays"], -x["seconds"]))[:20]
+    top_albums = sorted(album_counts.values(), key=lambda x: (-x["plays"], -x["seconds"]))[:10]
+    top_genres = sorted(genre_counts.values(), key=lambda x: (-x["plays"], -x["seconds"]))[:10]
+    longest_streak, current_streak = _listening_streaks(
+        set(daily_seconds), (datetime.now(timezone.utc) + shift).date()
+    )
     return {
         "range_days": days,
+        "year": year,
         "play_events": len(events),
         "unique_tracks": len(track_counts),
         "unique_artists": len(artist_counts),
         "total_seconds": total_seconds,
         "top_tracks": top_tracks,
         "top_artists": top_artists,
+        "top_albums": top_albums,
+        "top_genres": top_genres,
+        "plays_by_hour": hours,
+        "plays_by_weekday": weekdays,
+        "active_days": len(daily_seconds),
+        "longest_streak_days": longest_streak,
+        "current_streak_days": current_streak,
+        "daily_seconds": [
+            {"date": d, "seconds": s} for d, s in sorted(daily_seconds.items())[-366:]
+        ],
     }
+
+
+def _listening_streaks(days: set[str], today=None) -> tuple[int, int]:
+    """(longest, current) run of consecutive listening days. Current counts
+    back from `today` (the listener's local date), or yesterday if today has
+    no plays yet."""
+    from datetime import date
+
+    if not days:
+        return 0, 0
+    parsed = sorted(date.fromisoformat(d) for d in days)
+    longest = run = 1
+    for prev, cur in zip(parsed, parsed[1:]):
+        run = run + 1 if (cur - prev).days == 1 else 1
+        longest = max(longest, run)
+    have = set(parsed)
+    cursor = today or datetime.now(timezone.utc).date()
+    if cursor not in have:
+        cursor -= timedelta(days=1)
+    current = 0
+    while cursor in have:
+        current += 1
+        cursor -= timedelta(days=1)
+    return longest, current
 
 
 _AVATAR_MAX_BYTES = 2 * 1024 * 1024

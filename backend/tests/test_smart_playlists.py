@@ -1,133 +1,113 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
-from app.models import (
-    Album,
-    Artist,
-    PlayerFavorite,
-    PlayerPlayEvent,
-    PlayerPlaylist,
-    PlayerUser,
-    Track,
-)
+import pytest
+
+from app.models import Album, PlayerPlayEvent, PlayerPlaylist, PlayerUser, Track
 from app.services.smart_playlists import evaluate_smart_playlist
+from tests.conftest import _artist
 
 
-def _user(db, username="u1"):
-    user = PlayerUser(username=username, password_hash="x")
+@pytest.fixture()
+def lib(db):
+    user = PlayerUser(username="u", password_hash="x")
     db.add(user)
+    luke = _artist(db, name="Luke Combs", provider="deezer", provider_id="a1")
+    post = _artist(db, name="Post Malone", provider="deezer", provider_id="a2")
+    old = Album(artist_id=luke.id, provider="deezer", provider_id="al1", title="This One's for You",
+                release_date="2017-06-02", status="downloaded")
+    new = Album(artist_id=post.id, provider="deezer", provider_id="al2", title="Austin",
+                release_date="2024-07-19", status="downloaded")
+    db.add_all([old, new])
     db.commit()
-    db.refresh(user)
-    return user
+    rows = {}
+    for key, album, title, dur, genre in (
+        ("hurricane", old, "Hurricane", 220, "Country"),
+        ("beer", old, "Beer Never Broke My Heart", 190, "Country"),
+        ("chemical", new, "Chemical", 184, "Pop"),
+        ("ghost", new, "No File", 100, "Pop"),
+    ):
+        t = Track(provider="deezer", provider_id=key, album_id=album.id, title=title, duration=dur,
+                  genre=genre, path=None if key == "ghost" else f"/m/{key}.flac")
+        db.add(t)
+        rows[key] = t
+    db.commit()
+    return user, rows
 
 
-def _album_with_track(db, *, artist_name, title, genre="", fmt="flac"):
-    artist = Artist(
-        provider="qobuz", provider_id=artist_name, name=artist_name, monitored=True
-    )
-    db.add(artist)
-    db.commit()
-    db.refresh(artist)
-    album = Album(provider="qobuz", provider_id=title, artist_id=artist.id, title=title)
-    db.add(album)
-    db.commit()
-    db.refresh(album)
-    track = Track(
-        provider="qobuz",
-        provider_id=f"{title}-1",
-        album_id=album.id,
-        title=title,
-        path=f"/music/{title}.{fmt}",
-        genre=genre,
-    )
-    db.add(track)
-    db.commit()
-    db.refresh(track)
-    return artist, album, track
-
-
-def _smart_playlist(db, user, criteria: dict):
-    pl = PlayerPlaylist(
-        user_id=user.id, name="Smart", is_smart=True, criteria_json=json.dumps(criteria)
-    )
+def _titles(db, user, **criteria):
+    pl = PlayerPlaylist(user_id=user.id, name="s", is_smart=True,
+                        criteria_json=json.dumps({"sort": "title", "limit": 50, **criteria}))
     db.add(pl)
     db.commit()
-    db.refresh(pl)
-    return pl
+    return [t.title for t in evaluate_smart_playlist(db, pl)]
 
 
-def test_genre_rule_filters(db):
-    user = _user(db)
-    _, _, rock = _album_with_track(db, artist_name="A", title="Rock Song", genre="Rock")
-    _, _, jazz = _album_with_track(db, artist_name="B", title="Jazz Song", genre="Jazz")
+def test_year_decade_and_ranges(db, lib):
+    user, _ = lib
+    assert _titles(db, user, rules=[{"field": "year", "op": "gte", "value": 2020}]) == ["Chemical"]
+    assert _titles(db, user, rules=[{"field": "decade", "op": "eq", "value": 2010}]) == [
+        "Beer Never Broke My Heart", "Hurricane",
+    ]
 
-    pl = _smart_playlist(
-        db, user, {"match": "all", "rules": [{"field": "genre", "op": "eq", "value": "Rock"}]}
+
+def test_text_contains_starts_with_and_not_contains(db, lib):
+    user, _ = lib
+    assert _titles(db, user, rules=[{"field": "title", "op": "contains", "value": "BEER"}]) == [
+        "Beer Never Broke My Heart"
+    ]
+    assert _titles(db, user, rules=[{"field": "artist_name", "op": "starts_with", "value": "post"}]) == ["Chemical"]
+    assert _titles(db, user, rules=[{"field": "album_title", "op": "contains", "value": "austin"}]) == ["Chemical"]
+    assert _titles(db, user, rules=[{"field": "artist_name", "op": "not_contains", "value": "luke"}]) == ["Chemical"]
+
+
+def test_empty_text_value_matches_nothing_rather_than_everything(db, lib):
+    user, _ = lib
+    assert _titles(db, user, rules=[{"field": "title", "op": "contains", "value": ""}]) == []
+
+
+def test_duration_rule_and_files_only(db, lib):
+    user, _ = lib
+    assert _titles(db, user, rules=[{"field": "duration", "op": "lt", "value": 200}]) == [
+        "Beer Never Broke My Heart", "Chemical",
+    ]  # the 100s "No File" track has no file so never appears
+
+
+def test_match_any_combines_new_and_old_rules(db, lib):
+    user, _ = lib
+    out = _titles(
+        db, user, match="any",
+        rules=[{"field": "year", "op": "gte", "value": 2024}, {"field": "title", "op": "contains", "value": "hurr"}],
     )
-    result = evaluate_smart_playlist(db, pl)
-    assert [t.id for t in result] == [rock.id]
+    assert out == ["Chemical", "Hurricane"]
 
 
-def test_favorited_rule(db):
-    user = _user(db)
-    _, _, liked = _album_with_track(db, artist_name="A", title="Liked")
-    _, _, unliked = _album_with_track(db, artist_name="B", title="Unliked")
-    db.add(PlayerFavorite(user_id=user.id, track_id=liked.id))
+def test_new_sorts(db, lib):
+    user, rows = lib
+    now = datetime.now(timezone.utc)
+    db.add_all([
+        PlayerPlayEvent(user_id=user.id, track_id=rows["chemical"].id, played_at=now - timedelta(days=1)),
+        PlayerPlayEvent(user_id=user.id, track_id=rows["chemical"].id, played_at=now - timedelta(days=2)),
+        PlayerPlayEvent(user_id=user.id, track_id=rows["hurricane"].id, played_at=now),
+    ])
     db.commit()
-
-    pl = _smart_playlist(
-        db, user, {"rules": [{"field": "favorited", "op": "eq", "value": True}]}
-    )
-    result = evaluate_smart_playlist(db, pl)
-    assert [t.id for t in result] == [liked.id]
-
-
-def test_play_count_and_match_any(db):
-    user = _user(db)
-    _, _, often = _album_with_track(db, artist_name="A", title="Often", genre="Pop")
-    _, _, rarely = _album_with_track(db, artist_name="B", title="Rarely", genre="Blues")
-    for _ in range(5):
-        db.add(PlayerPlayEvent(user_id=user.id, track_id=often.id))
-    db.commit()
-
-    pl = _smart_playlist(
-        db,
-        user,
-        {
-            "match": "any",
-            "rules": [
-                {"field": "play_count", "op": "gte", "value": 3},
-                {"field": "genre", "op": "eq", "value": "Blues"},
-            ],
-        },
-    )
-    result = {t.id for t in evaluate_smart_playlist(db, pl)}
-    assert result == {often.id, rarely.id}
+    assert _titles(db, user, sort="longest")[0] == "Hurricane"
+    assert _titles(db, user, sort="shortest")[0] == "Chemical"
+    assert _titles(db, user, sort="newest_release")[0] == "Chemical"
+    assert _titles(db, user, sort="oldest_release")[-1] == "Chemical"
+    assert _titles(db, user, sort="last_played")[0] == "Hurricane"
+    assert _titles(db, user, sort="least_played")[-1] == "Chemical"
 
 
-def test_format_rule_and_limit(db):
-    user = _user(db)
-    tracks = []
-    for i in range(3):
-        _, _, t = _album_with_track(db, artist_name=f"A{i}", title=f"T{i}", fmt="flac")
-        tracks.append(t)
-    _, _, mp3_track = _album_with_track(db, artist_name="B", title="Mp3", fmt="mp3")
-
-    pl = _smart_playlist(
-        db,
-        user,
-        {"rules": [{"field": "format", "op": "eq", "value": "flac"}], "sort": "title", "limit": 2},
-    )
-    result = evaluate_smart_playlist(db, pl)
-    assert len(result) == 2
-    assert mp3_track.id not in [t.id for t in result]
-
-
-def test_no_criteria_returns_empty(db):
-    user = _user(db)
-    pl = PlayerPlaylist(user_id=user.id, name="Not smart", is_smart=False)
-    db.add(pl)
-    db.commit()
-    db.refresh(pl)
-    assert evaluate_smart_playlist(db, pl) == []
+def test_numeric_rule_with_string_or_blank_value_does_not_crash(db, lib):
+    user, _ = lib
+    # "2020" as a string used to raise TypeError (int >= str) and 500 the playlist.
+    assert _titles(db, user, rules=[{"field": "year", "op": "gte", "value": "2020"}]) == ["Chemical"]
+    assert _titles(db, user, rules=[{"field": "decade", "op": "eq", "value": "2010"}]) == [
+        "Beer Never Broke My Heart", "Hurricane",
+    ]
+    # A cleared number box saves '': the rule can't be evaluated, so it matches nothing.
+    for op in ("gte", "eq", "ne", "lt"):
+        assert _titles(db, user, rules=[{"field": "year", "op": op, "value": ""}]) == []

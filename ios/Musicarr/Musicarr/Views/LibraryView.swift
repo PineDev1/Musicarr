@@ -8,6 +8,7 @@ struct LibraryView: View {
             NavigationLink("Songs") { SongsListView() }
             NavigationLink("Playlists") { PlaylistsListView() }
             NavigationLink("People") { PeopleView() }
+            NavigationLink("Stats") { StatsView() }
         }
         .scrollContentBackground(.hidden)
         .background(Theme.background.ignoresSafeArea())

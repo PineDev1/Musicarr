@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.core.config import APP_VERSION
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -24,11 +25,13 @@ from app.api import (
     musicbrainz_catalog,
     ops,
     player,
+    player_queue,
     player_social,
     push,
     search,
     settings,
     stats,
+    subsonic,
 )
 from app.core.database import SessionLocal, ensure_dirs, init_db
 from app.services import api_keys, app_auth, player_auth, player_presence
@@ -88,7 +91,7 @@ from app.services import system_info as _system_info  # noqa: E402
 
 _system_info.install_log_buffer()
 
-app = FastAPI(title="Musicarr", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Musicarr", version=APP_VERSION, lifespan=lifespan)
 
 # Static local origins at boot; DynamicCorsMiddleware also allows configured public_domain.
 app.add_middleware(
@@ -197,7 +200,14 @@ async def proxy_headers(request: Request, call_next):
         request.state.forwarded_host = forwarded_host(request, db)
     finally:
         db.close()
-    return await call_next(request)
+    response = await call_next(request)
+    # Cheap, UI-safe hardening: no MIME sniffing of served audio/images/uploads,
+    # no framing by other sites (clickjacking), and no full URLs (which carry
+    # share/cast tokens in the path) leaked to third parties via Referer.
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    return response
 
 
 app.include_router(settings.router, prefix="/api")
@@ -207,7 +217,10 @@ app.include_router(albums.router, prefix="/api")
 app.include_router(ops.router, prefix="/api")
 app.include_router(events.router, prefix="/api")
 app.include_router(player.router, prefix="/api")
+app.include_router(player_queue.router, prefix="/api")
 app.include_router(player_social.router, prefix="/api")
+app.include_router(subsonic.settings_router, prefix="/api")
+app.include_router(subsonic.router)
 app.include_router(musicbrainz_catalog.router, prefix="/api")
 app.include_router(backup.router, prefix="/api")
 app.include_router(import_lists.router, prefix="/api")
@@ -320,7 +333,9 @@ def share_landing(token: str, request: Request):
         artist_name = escape(artist.name if artist else "Unknown artist")
         album_title = escape(album.title if album else "")
         cover = (album.cover_url if album else None) or ""
-        desc = f"{artist_name} — {album_title}".strip(" —")
+        # Built from the raw names: the template escapes desc itself, so using the
+        # already-escaped copies would double-escape ("&" -> "&amp;amp;").
+        desc = f"{artist.name if artist else 'Unknown artist'} — {album.title if album else ''}".strip(" —")
         page_url = str(request.url)
         html = f"""<!doctype html>
 <html lang="en">
@@ -358,7 +373,14 @@ def spa_fallback(full_path: str, request: Request):
     index_file = STATIC_DIR / "index.html"
     if not index_file.exists():
         raise HTTPException(status_code=404)
-    candidate = STATIC_DIR / full_path
-    if candidate.is_file():
+    # full_path is attacker-controlled (and "..%2f" survives URL decoding), so
+    # only serve files that really resolve inside the static directory —
+    # otherwise GET /../data/musicarr.db hands out the database unauthenticated.
+    static_root = STATIC_DIR.resolve()
+    try:
+        candidate = (STATIC_DIR / full_path).resolve()
+    except (OSError, ValueError):
+        return FileResponse(index_file)
+    if candidate.is_relative_to(static_root) and candidate.is_file():
         return FileResponse(candidate)
     return FileResponse(index_file)

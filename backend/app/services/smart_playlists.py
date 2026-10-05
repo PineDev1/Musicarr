@@ -29,6 +29,28 @@ def _format_from_path(path: str | None) -> str:
     return path.rsplit(".", 1)[-1].lower() if "." in path else ""
 
 
+_NUMERIC_FIELDS = {
+    "artist_id", "album_id", "play_count", "last_played_days", "year", "decade", "duration",
+}
+_TEXT_FIELDS = {"genre", "format", "title", "artist_name", "album_title"}
+
+
+def _to_number(value: object) -> float | int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        return float(str(value).strip())
+    except ValueError:
+        return None
+
+
+def _year(track: Track) -> int | None:
+    rd = (track.album.release_date or "")[:4] if track.album else ""
+    return int(rd) if rd.isdigit() else None
+
+
 def evaluate_smart_playlist(db: Session, playlist: PlayerPlaylist) -> list[Track]:
     """Compute a smart playlist's track list live from its criteria_json.
 
@@ -95,6 +117,15 @@ def evaluate_smart_playlist(db: Session, playlist: PlayerPlaylist) -> list[Track
         op = (rule.get("op") or "eq").lower()
         value = rule.get("value")
 
+        if field in _NUMERIC_FIELDS:
+            # JSON/editor values may arrive as "1999" or "" — comparing those to
+            # an int raised TypeError and 500'd the whole playlist.
+            value = _to_number(value) if op not in ("in", "not_in") else [
+                n for n in (_to_number(v) for v in (value if isinstance(value, list) else [value])) if n is not None
+            ]
+        elif op in ("in", "not_in") and isinstance(value, str):
+            value = [v.strip().lower() if field in _TEXT_FIELDS else v for v in value.split(",") if v.strip()]
+
         if field == "favorited":
             actual: object = track.id in _favorites()
         elif field == "genre":
@@ -117,9 +148,36 @@ def evaluate_smart_playlist(db: Session, playlist: PlayerPlaylist) -> list[Track
                 if played.tzinfo is None:
                     played = played.replace(tzinfo=timezone.utc)
                 actual = (datetime.now(timezone.utc) - played).days
+        elif field == "year":
+            actual = _year(track)
+        elif field == "decade":
+            y = _year(track)
+            actual = (y // 10) * 10 if y is not None else None
+        elif field == "duration":
+            actual = int(track.duration or 0)
+        elif field in ("title", "artist_name", "album_title"):
+            if field == "title":
+                actual = (track.title or "").lower()
+            elif field == "album_title":
+                actual = (track.album.title if track.album else "").lower()
+            else:
+                actual = (track.album.artist.name if track.album and track.album.artist else "").lower()
+            value = str(value or "").strip().lower()
         else:
             return False
 
+        if op in ("contains", "not_contains", "starts_with"):
+            if not isinstance(actual, str) or not isinstance(value, str) or not value:
+                return False
+            if op == "contains":
+                return value in actual
+            if op == "starts_with":
+                return actual.startswith(value)
+            return value not in actual
+        if field in _NUMERIC_FIELDS and value is None:
+            # Unparseable number: a rule that can't be evaluated matches nothing
+            # (including "ne", which would otherwise match every track).
+            return False
         if op == "eq":
             return actual == value
         if op == "ne":
@@ -155,6 +213,28 @@ def evaluate_smart_playlist(db: Session, playlist: PlayerPlaylist) -> list[Track
     elif sort == "most_played":
         counts = _play_counts()
         matched.sort(key=lambda t: counts.get(t.id, 0), reverse=True)
+    elif sort == "least_played":
+        counts = _play_counts()
+        matched.sort(key=lambda t: counts.get(t.id, 0))
+    elif sort == "last_played":
+        seen = _last_played()
+        floor = datetime.min.replace(tzinfo=timezone.utc)
+
+        def _when(t: Track) -> datetime:
+            w = seen.get(t.id)
+            if w is None:
+                return floor
+            return w if w.tzinfo else w.replace(tzinfo=timezone.utc)
+
+        matched.sort(key=_when, reverse=True)
+    elif sort == "newest_release":
+        matched.sort(key=lambda t: _year(t) or 0, reverse=True)
+    elif sort == "oldest_release":
+        matched.sort(key=lambda t: _year(t) or 9999)
+    elif sort == "longest":
+        matched.sort(key=lambda t: t.duration or 0, reverse=True)
+    elif sort == "shortest":
+        matched.sort(key=lambda t: t.duration or 0)
     elif sort == "title":
         matched.sort(key=lambda t: (t.title or "").lower())
     elif sort == "artist":

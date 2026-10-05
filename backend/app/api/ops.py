@@ -219,6 +219,14 @@ def library_review_link(
     )
 
 
+@router.get("/library/reorganize/preview")
+def library_reorganize_preview(db: Session = Depends(get_db)):
+    """Dry run: what "Reorganize Library" would move, without touching anything."""
+    from app.services.library import preview_reorganize
+
+    return preview_reorganize(db)
+
+
 @router.post("/library/reorganize", response_model=LibraryJobOut, status_code=202)
 def library_reorganize():
     from app.services import library_jobs
@@ -253,3 +261,18 @@ def system_logs(level: str = "INFO", search: str = "", limit: int = 300):
     return system_info.log_buffer.snapshot(
         level=level, search=search, limit=max(1, min(limit, 1000))
     )
+
+
+@router.post("/system/tasks/{task_id}/run")
+def run_system_task(task_id: str):
+    """Fire a scheduled task now instead of waiting for its next run."""
+    if not system_info.run_task_now(task_id):
+        raise HTTPException(status_code=404, detail="Unknown task")
+    from app.services.history import audit
+
+    db = next(get_db())
+    try:
+        audit(db, "Scheduled task run manually", task_id)
+    finally:
+        db.close()
+    return {"ok": True}
