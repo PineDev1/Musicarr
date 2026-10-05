@@ -36,7 +36,7 @@ from app.models import (
     Track,
 )
 from app.core.config import APP_VERSION
-from app.services import player_auth
+from app.services import login_throttle, player_auth
 from app.services.smart_playlists import evaluate_smart_playlist, parse_criteria
 
 API_VERSION = "1.16.1"
@@ -721,7 +721,16 @@ async def dispatch(method: str, request: Request, db: Session = Depends(get_db))
     name = method[:-5] if method.endswith(".view") else method
     p = await _params(request)
     try:
-        user = _authenticate(db, p)
+        ip = login_throttle.client_ip(request)
+        uname = (_first(p, "u") or "").strip()
+        if login_throttle.retry_after("subsonic", ip, uname):
+            raise SubsonicError(40, "Too many failed attempts, try again later")
+        try:
+            user = _authenticate(db, p)
+        except SubsonicError as e:
+            if e.code == 40:
+                login_throttle.record_failure("subsonic", ip, uname)
+            raise
         handler = HANDLERS.get(name)
         if not handler:
             raise SubsonicError(70, f"Unsupported method: {name}")

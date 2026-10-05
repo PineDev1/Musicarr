@@ -119,6 +119,18 @@ def _snapshot_db_bytes(db_path: Path) -> bytes:
                 )
             except sqlite3.OperationalError:
                 pass  # very old snapshot without those columns
+            # A TOTP secret in a backup lets whoever finds the file mint valid
+            # 2FA codes, and cast tokens are live bearer credentials for
+            # streaming. Disable 2FA alongside the secret so nobody is locked
+            # out on restore (same trade as the blanked admin password above).
+            for stmt in (
+                "UPDATE admin_users SET totp_secret = NULL, totp_enabled = 0",
+                "DELETE FROM player_cast_tokens",
+            ):
+                try:
+                    dest.execute(stmt)
+                except sqlite3.OperationalError:
+                    pass  # table/column absent in an old snapshot
             dest.commit()
         finally:
             dest.close()
@@ -181,6 +193,16 @@ def _validate_and_stage(archive_bytes: bytes, staged_db_path: Path) -> dict[str,
     missing = {MANIFEST_ENTRY_NAME, SETTINGS_ENTRY_NAME, DB_ENTRY_NAME} - names
     if missing:
         raise RestoreError(f"Backup archive is missing: {', '.join(sorted(missing))}")
+
+    # The upload is size-capped, but compressed data isn't: refuse entries that
+    # would inflate far past anything a real backup holds (zip bomb).
+    for entry, cap in (
+        (MANIFEST_ENTRY_NAME, 5 * 1024 * 1024),
+        (SETTINGS_ENTRY_NAME, 5 * 1024 * 1024),
+        (DB_ENTRY_NAME, 4 * 1024**3),
+    ):
+        if zf.getinfo(entry).file_size > cap:
+            raise RestoreError(f"Backup entry {entry} is unreasonably large")
 
     try:
         manifest = json.loads(zf.read(MANIFEST_ENTRY_NAME))

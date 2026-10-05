@@ -90,12 +90,12 @@ def parse_session_token(db: Session, token: str | None) -> PlayerUser | None:
         return None
     secret = ensure_player_secret(db)
     payload = f"{user_id_s}|{username}|{exp_s}|{nonce}"
-    if not hmac.compare_digest(sig, _sign(secret, payload)):
+    if not hmac.compare_digest(sig.encode("utf-8"), _sign(secret, payload).encode("utf-8")):
         return None
     user = db.get(PlayerUser, user_id)
     if not user or not user.is_active:
         return None
-    if not hmac.compare_digest(user.username, username):
+    if not hmac.compare_digest(user.username.encode("utf-8"), username.encode("utf-8")):
         return None
     return user
 

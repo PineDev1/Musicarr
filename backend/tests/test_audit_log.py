@@ -26,7 +26,10 @@ def test_settings_change_logs_field_names_only(db):
     assert msgs == ["Settings changed: fields: notify_on_complete"]
 
 
-def test_failed_login_audit_rows_are_capped_during_a_flood(db):
+def test_failed_login_audit_rows_are_capped_during_a_flood(db, monkeypatch):
+    from app.services import login_throttle
+
+    monkeypatch.setattr(login_throttle, "MAX_PER_IP", 10_000)  # isolate the audit cap from the throttle
     row = ensure_settings(db)
     row.auth_enabled = True
     db.commit()

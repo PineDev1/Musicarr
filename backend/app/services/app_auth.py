@@ -78,7 +78,7 @@ def parse_session_token(db: Session, token: str | None) -> str | None:
     secret = ensure_auth_secret(db)
     payload = f"{user_id_s}|{username}|{exp_s}|{nonce}"
     expected = _sign(secret, payload)
-    if not hmac.compare_digest(sig, expected):
+    if not hmac.compare_digest(sig.encode("utf-8"), expected.encode("utf-8")):
         return None
     if user_id:
         from app.models import AdminUser
@@ -86,11 +86,11 @@ def parse_session_token(db: Session, token: str | None) -> str | None:
         user = db.get(AdminUser, user_id)
         if not user or not user.is_active:
             return None
-        if not hmac.compare_digest(user.username, username):
+        if not hmac.compare_digest(user.username.encode("utf-8"), username.encode("utf-8")):
             return None
         return user.username
     expected_user = (get_setting_cached(db, "auth_username", None) or "admin").strip() or "admin"
-    if not hmac.compare_digest(username, expected_user):
+    if not hmac.compare_digest(username.encode("utf-8"), expected_user.encode("utf-8")):
         return None
     return username
 

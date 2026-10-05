@@ -19,7 +19,7 @@ from app.models.schemas import (
     TotpDisableRequest,
     TotpSetupOut,
 )
-from app.services import admin_auth, api_keys, app_auth
+from app.services import admin_auth, api_keys, app_auth, login_throttle
 from app.services.history import add_history
 from app.services.providers import get_provider
 from app.services.providers.base import ProviderError
@@ -39,9 +39,16 @@ def app_auth_status(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=AppAuthStatus)
-def app_login(payload: AppLoginRequest, response: Response, db: Session = Depends(get_db)):
+def app_login(
+    payload: AppLoginRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+    request: Request = None,  # type: ignore[assignment]  # injected by FastAPI; None in direct calls
+):
     if not app_auth.auth_enabled(db):
         raise HTTPException(status_code=400, detail="Login is disabled")
+    login_throttle.enforce("admin", request, payload.username or "")
+    ip = login_throttle.client_ip(request)
     settings = ensure_settings(db)
     expected_user = (getattr(settings, "auth_username", None) or "admin").strip() or "admin"
     username = (payload.username or "").strip()
@@ -57,12 +64,17 @@ def app_login(payload: AppLoginRequest, response: Response, db: Session = Depend
         admin_user = admin_auth.authenticate(db, username, payload.password)
         if admin_user:
             if not admin_auth.verify_totp_for_login(admin_user, payload.totp_code):
+                # Asking for the code is a normal step; a wrong code is a guess.
+                if payload.totp_code:
+                    login_throttle.record_failure("admin", ip, username)
                 raise HTTPException(status_code=401, detail="totp_required")
             token = app_auth.create_session_token(db, admin_user.username, user_id=admin_user.id)
             add_history(db, "app_login", f"Signed in as {admin_user.username}")
     if not token:
+        login_throttle.record_failure("admin", ip, username)
         _audit_failed_login(db, username)
         raise HTTPException(status_code=401, detail="Invalid username or password")
+    login_throttle.record_success("admin", ip, username)
     app_auth.set_session_cookie(response, token, db)
     return AppAuthStatus(**app_auth.auth_status(db, token))
 
@@ -96,7 +108,8 @@ def _audit_failed_login(db: Session, username: str) -> None:
 def hmac_compare(a: str, b: str) -> bool:
     import hmac
 
-    return hmac.compare_digest(a, b)
+    # compare_digest raises TypeError on non-ASCII str — encode so a odd username is a 401, not a 500.
+    return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
 
 
 @router.post("/logout-session", response_model=AppAuthStatus)

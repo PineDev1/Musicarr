@@ -75,7 +75,7 @@ from app.models.schemas import (
     PlayerUserOut,
     PlayerUserUpdate,
 )
-from app.services import app_auth, player_auth, player_presence
+from app.services import app_auth, login_throttle, player_auth, player_presence
 from app.services.app_auth import hash_password, verify_password
 from app.services.history import add_history
 from app.services.lyrics import ensure_genre, get_lyrics
@@ -450,11 +450,20 @@ def status(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=PlayerAuthStatus)
-def login(payload: PlayerLoginRequest, response: Response, db: Session = Depends(get_db)):
+def login(
+    payload: PlayerLoginRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+    request: Request = None,  # type: ignore[assignment]  # injected by FastAPI; None in direct calls
+):
     _require_player_enabled(db)
+    login_throttle.enforce("player", request, payload.username)
     user = player_auth.authenticate(db, payload.username, payload.password)
+    ip = login_throttle.client_ip(request)
     if not user:
+        login_throttle.record_failure("player", ip, payload.username)
         raise HTTPException(status_code=401, detail="Invalid username or password")
+    login_throttle.record_success("player", ip, payload.username)
     token = player_auth.create_session_token(db, user)
     player_auth.set_session_cookie(response, token, db)
     return PlayerAuthStatus(**player_auth.auth_status(db, token))
@@ -1192,6 +1201,20 @@ async def player_ws(websocket: WebSocket):
             return
         token = websocket.cookies.get(player_auth.COOKIE_NAME)
         user = player_auth.parse_session_token(db, token)
+        # Browsers always send Origin on a WebSocket handshake and don't apply
+        # CORS to it, so a page on another origin could ride the user's cookie
+        # (cross-site WebSocket hijacking). Allow same-host or configured origins.
+        origin = websocket.headers.get("origin")
+        if origin:
+            from urllib.parse import urlparse
+
+            from app.services.cors_origins import origin_is_allowed
+
+            origin_host = (urlparse(origin).netloc or "").lower()
+            same_host = origin_host == (websocket.headers.get("host") or "").lower()
+            if not (same_host or origin_is_allowed(origin, db)):
+                await websocket.close(code=4403)
+                return
     finally:
         db.close()
     if not user:

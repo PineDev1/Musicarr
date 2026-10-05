@@ -87,6 +87,10 @@ def send_notification(
     url = (webhook_url if webhook_url is not None else getattr(settings, "notify_webhook_url", None) or "").strip()
     if not url:
         return
+    if not url.lower().startswith(("http://", "https://")):
+        # urllib.request.urlopen also speaks file:// and ftp://; a webhook must be HTTP(S).
+        logger.warning("Notification skipped: webhook URL must start with http:// or https://")
+        return
     channel = (channel if channel is not None else getattr(settings, "notify_channel", None) or "custom").strip().lower() or "custom"
     token = (token if token is not None else getattr(settings, "notify_token", None) or "").strip()
     content = f"{title}\n{message}"

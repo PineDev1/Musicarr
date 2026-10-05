@@ -45,3 +45,12 @@ def _artist(
     db.commit()
     db.refresh(row)
     return row
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_throttle():
+    from app.services import login_throttle
+
+    login_throttle.reset()
+    yield
+    login_throttle.reset()
