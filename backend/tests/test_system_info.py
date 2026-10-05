@@ -60,3 +60,19 @@ def test_run_task_now_actually_fires_the_job_and_rejects_unknown_ids(monkeypatch
         assert system_info.run_task_now("does_not_exist") is False
     finally:
         sched.shutdown(wait=False)
+
+
+def test_prune_history_removes_only_rows_past_retention(db):
+    from datetime import datetime, timedelta, timezone
+
+    from app.models import HistoryEvent
+    from app.services.maintenance_scheduler import prune_history
+
+    now = datetime.now(timezone.utc)
+    db.add_all([
+        HistoryEvent(event_type="audit", message="old", created_at=now - timedelta(days=400)),
+        HistoryEvent(event_type="downloaded", message="recent", created_at=now - timedelta(days=30)),
+    ])
+    db.commit()
+    assert prune_history(db) == 1
+    assert [e.message for e in db.query(HistoryEvent).all()] == ["recent"]

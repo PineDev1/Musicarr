@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from functools import lru_cache
 from difflib import SequenceMatcher
 
 _LEADING_ARTICLE = re.compile(r"^(the|an|a)\s+", re.I)
@@ -22,7 +23,7 @@ def fold_diacritics(text: str) -> str:
     "Beyoncé" -> "Beyonce", "Mötley Crüe" -> "Motley Crue", "Sigur Rós" -> "Sigur Ros".
     Characters with no decomposition (e.g. CJK) pass through unchanged.
     """
-    if not text:
+    if not text or text.isascii():  # NFKD never changes pure-ASCII text
         return text
     decomposed = unicodedata.normalize("NFKD", text)
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
@@ -33,6 +34,7 @@ def strip_leading_article(text: str) -> str:
     return _LEADING_ARTICLE.sub("", text, count=1)
 
 
+@lru_cache(maxsize=32768)
 def normalize_key(text: str) -> str:
     """Identity-comparison key: fold diacritics, drop a leading article,
     lowercase, strip punctuation, collapse whitespace. No edition/paren

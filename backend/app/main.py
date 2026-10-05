@@ -8,6 +8,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
+from starlette.datastructures import MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
@@ -56,6 +58,11 @@ PUBLIC_API_PATHS = {
     "/api/player/login",
     "/api/player/logout",
 }
+
+
+# The HTML shell references the hashed bundle, so it must revalidate each load
+# or a deploy would keep serving a stale shell pointing at a replaced bundle.
+_NO_CACHE = {"Cache-Control": "no-cache"}
 
 
 @asynccontextmanager
@@ -190,24 +197,42 @@ async def app_login_gate(request: Request, call_next):
     return JSONResponse(status_code=401, content={"detail": "Authentication required"})
 
 
-@app.middleware("http")
-async def proxy_headers(request: Request, call_next):
-    db = SessionLocal()
-    try:
-        from app.services.proxy import forwarded_host, request_is_https
+_SECURITY_HEADERS = {
+    # No MIME sniffing of served audio/images/uploads.
+    "X-Content-Type-Options": "nosniff",
+    # No framing by other sites (clickjacking).
+    "X-Frame-Options": "SAMEORIGIN",
+    # Share/cast tokens live in URL paths: don't leak full URLs via Referer.
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+}
 
-        request.state.https = request_is_https(request, db)
-        request.state.forwarded_host = forwarded_host(request, db)
-    finally:
-        db.close()
-    response = await call_next(request)
-    # Cheap, UI-safe hardening: no MIME sniffing of served audio/images/uploads,
-    # no framing by other sites (clickjacking), and no full URLs (which carry
-    # share/cast tokens in the path) leaked to third parties via Referer.
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
-    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    return response
+
+class SecurityHeadersMiddleware:
+    """Pure ASGI (no BaseHTTPMiddleware): adds headers on the response start
+    message without buffering bodies or opening a DB session, so streamed audio
+    pays nothing for it. (Replaces proxy_headers, which opened a session per
+    request to set request.state values that nothing ever read.)"""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for key, value in _SECURITY_HEADERS.items():
+                    if key not in headers:
+                        headers[key] = value
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 app.include_router(settings.router, prefix="/api")
@@ -238,15 +263,39 @@ def api_root():
     return {"name": "Musicarr", "docs": "/docs"}
 
 
+class HashedAssetFiles(StaticFiles):
+    """Vite fingerprints every file in /assets (index-<hash>.js), so a given URL
+    never changes content: let browsers cache it for a year instead of
+    revalidating the 800 KB bundle on every visit."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code in (200, 304):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
 if (STATIC_DIR / "assets").exists():
-    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+    app.mount("/assets", HashedAssetFiles(directory=STATIC_DIR / "assets"), name="assets")
+
+
+# JSON lists (hundreds of KB), the JS/CSS bundle and HTML compress 4-10x. Audio,
+# images, event streams and 206 range responses are skipped by the defaults;
+# octet-stream is added because unknown audio types fall back to it. Added last
+# so it wraps every other middleware.
+app.add_middleware(
+    GZipMiddleware,
+    minimum_size=1024,
+    compresslevel=5,
+    exclude_content_types=(*DEFAULT_EXCLUDED_CONTENT_TYPES, "application/octet-stream"),
+)
 
 
 @app.get("/")
 def index():
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
-        return FileResponse(index_file)
+        return FileResponse(index_file, headers=_NO_CACHE)
     return {
         "name": "Musicarr",
         "message": "API running. Build the frontend into backend/static for the UI.",
@@ -292,7 +341,7 @@ def share_landing(token: str, request: Request):
     if not _is_link_preview_agent(request):
         index_file = STATIC_DIR / "index.html"
         if index_file.exists():
-            return FileResponse(index_file)
+            return FileResponse(index_file, headers=_NO_CACHE)
         # Dev without static build — let Vite SPA handle it via proxy miss
         raise HTTPException(status_code=404, detail="Build frontend for share pages")
 
@@ -380,7 +429,7 @@ def spa_fallback(full_path: str, request: Request):
     try:
         candidate = (STATIC_DIR / full_path).resolve()
     except (OSError, ValueError):
-        return FileResponse(index_file)
+        return FileResponse(index_file, headers=_NO_CACHE)
     if candidate.is_relative_to(static_root) and candidate.is_file():
         return FileResponse(candidate)
-    return FileResponse(index_file)
+    return FileResponse(index_file, headers=_NO_CACHE)

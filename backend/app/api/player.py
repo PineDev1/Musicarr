@@ -21,7 +21,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import case, delete, func, literal, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings as app_config
@@ -131,8 +131,15 @@ def _quality_for_track(track: Track) -> str:
     return fmt
 
 
+# Tracks whose duration couldn't be read from the file (corrupt, offline mount).
+# Without this every list request re-opened them with mutagen, forever — slow on
+# network storage. Bounded; cleared when it fills (just means a retry).
+_UNREADABLE_DURATION: set[str] = set()
+_UNREADABLE_DURATION_MAX = 5000
+
+
 def _file_duration_seconds(path: str | None) -> int:
-    if not path:
+    if not path or path in _UNREADABLE_DURATION:
         return 0
     try:
         audio = MutagenFile(path)
@@ -141,6 +148,9 @@ def _file_duration_seconds(path: str | None) -> int:
             return int(round(float(length)))
     except Exception:  # noqa: BLE001
         pass
+    if len(_UNREADABLE_DURATION) >= _UNREADABLE_DURATION_MAX:
+        _UNREADABLE_DURATION.clear()
+    _UNREADABLE_DURATION.add(path)
     return 0
 
 
@@ -1389,49 +1399,45 @@ def get_mood(mood: str, request: Request, db: Session = Depends(get_db)):
 @router.get("/library/recommended", response_model=list[PlayerTrackOut])
 def library_recommended(request: Request, db: Session = Depends(get_db)):
     user = _current_player_user(request, db)
-    import random
-
-    recent_events = db.scalars(
-        select(PlayerPlayEvent)
-        .where(PlayerPlayEvent.user_id == user.id)
-        .order_by(PlayerPlayEvent.played_at.desc())
-        .limit(50)
-    ).all()
-    recent_track_ids: set[int] = set()
+    # Artists to seed from: the last 50 plays plus up to 100 favorites — one
+    # joined query each (this used to db.get() every play event, then load the
+    # whole library to score it in Python).
+    recent_ids = list(
+        db.scalars(
+            select(PlayerPlayEvent.track_id)
+            .where(PlayerPlayEvent.user_id == user.id)
+            .order_by(PlayerPlayEvent.played_at.desc())
+            .limit(50)
+        ).all()
+    )
     seed_artist_ids: set[int] = set()
-    for ev in recent_events:
-        recent_track_ids.add(ev.track_id)
-        tr = db.get(Track, ev.track_id)
-        if tr and tr.album:
-            seed_artist_ids.add(tr.album.artist_id)
+    if recent_ids:
+        seed_artist_ids.update(
+            db.scalars(
+                select(Album.artist_id)
+                .join(Track, Track.album_id == Album.id)
+                .where(Track.id.in_(set(recent_ids)))
+            ).all()
+        )
+    fav_track_ids = select(PlayerFavorite.track_id).where(PlayerFavorite.user_id == user.id).limit(100)
+    seed_artist_ids.update(
+        db.scalars(
+            select(Album.artist_id).join(Track, Track.album_id == Album.id).where(Track.id.in_(fav_track_ids))
+        ).all()
+    )
 
-    fav_rows = db.scalars(
-        select(PlayerFavorite)
-        .options(joinedload(PlayerFavorite.track).joinedload(Track.album))
-        .where(PlayerFavorite.user_id == user.id)
-        .limit(100)
-    ).unique().all()
-    for row in fav_rows:
-        if row.track and row.track.album:
-            seed_artist_ids.add(row.track.album.artist_id)
-
-    all_tracks = list(db.scalars(_downloaded_tracks_query()).unique().all())
-    scored: list[tuple[int, Track]] = []
-    for t in all_tracks:
-        if t.id in recent_track_ids:
-            continue
-        score = 0
-        if t.album and t.album.artist_id in seed_artist_ids:
-            score += 10
-        scored.append((score, t))
-    scored.sort(key=lambda x: (-x[0], x[1].id))
-    picks = [t for _, t in scored[:20]]
-    if len(picks) < 20:
-        pool = [t for t in all_tracks if t.id not in recent_track_ids and t not in picks]
-        random.shuffle(pool)
-        picks.extend(pool[: 20 - len(picks)])
+    # Same ranking as before: tracks by a seed artist first, then by id; recently
+    # played tracks excluded.
+    stmt = _downloaded_tracks_query().join(Album, Track.album_id == Album.id)
+    if recent_ids:
+        stmt = stmt.where(Track.id.not_in(set(recent_ids)))
+    boost = (
+        case((Album.artist_id.in_(seed_artist_ids), 10), else_=0) if seed_artist_ids else literal(0)
+    )
+    picks = list(db.scalars(stmt.order_by(boost.desc(), Track.id).limit(20)).unique().all())
+    out = [_track_out(t) for t in picks]  # before commit(), which would expire/reload each row
     db.commit()
-    return [_track_out(t) for t in picks[:20]]
+    return out
 
 
 def build_radio_tracks(db: Session, seed: Artist) -> list[Track]:
@@ -1548,23 +1554,38 @@ def library_songs(
     offset = max(0, offset)
     limit = min(max(1, limit), 200)
     query = (q or "").strip().lower()
-    tracks = db.scalars(_downloaded_tracks_query().order_by(Track.title)).unique().all()
+    # Filter, count and paginate in SQL: this used to load every track in the
+    # library (with album+artist joins) on each page request and slice in Python.
+    base = (
+        select(Track.id)
+        .outerjoin(Album, Track.album_id == Album.id)
+        .outerjoin(Artist, Album.artist_id == Artist.id)
+        .where(Track.path.is_not(None), Track.path != "")
+    )
     if query:
-        filtered = []
-        for t in tracks:
-            album = t.album
-            artist = album.artist if album else None
-            blob = " ".join(
-                [t.title or "", album.title if album else "", artist.name if artist else ""]
-            ).lower()
-            if query in blob:
-                filtered.append(t)
-        tracks = filtered
-    total = len(tracks)
-    page = tracks[offset : offset + limit]
-    db.commit()
+        blob = func.lower(
+            func.coalesce(Track.title, "")
+            + " "
+            + func.coalesce(Album.title, "")
+            + " "
+            + func.coalesce(Artist.name, "")
+        )
+        like = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        base = base.where(blob.like(like, escape="\\"))
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    page_ids = list(
+        db.scalars(base.order_by(Track.title, Track.id).offset(offset).limit(limit)).all()
+    )
+    loaded = {
+        t.id: t
+        for t in db.scalars(_downloaded_tracks_query().where(Track.id.in_(page_ids))).unique()
+    } if page_ids else {}
+    # Build the output BEFORE committing: commit expires every loaded row, which
+    # would turn each _track_out into a fresh reload (an N+1).
+    items = [_track_out(loaded[i]) for i in page_ids if i in loaded]
+    db.commit()  # persists any durations filled in from file tags
     return PlayerLibrarySongsPage(
-        items=[_track_out(t) for t in page],
+        items=items,
         total=total,
         offset=offset,
         limit=limit,
@@ -1616,23 +1637,20 @@ def library_continue(request: Request, db: Session = Depends(get_db)):
         return PlayerContinueOut(source_label="")
 
     album = track.album
-    db.commit()
-    return PlayerContinueOut(
+    out = PlayerContinueOut(  # serialize before commit(), which expires every loaded row
         album=_album_out(album, include_tracks=True) if album else None,
         track=_track_out(track),
         position=position,
         source_label=source_label,
     )
+    db.commit()
+    return out
 
 
 @router.delete("/library/history")
 def clear_listen_history(request: Request, db: Session = Depends(get_db)):
     user = _current_player_user(request, db)
-    rows = db.scalars(
-        select(PlayerPlayEvent).where(PlayerPlayEvent.user_id == user.id)
-    ).all()
-    for row in rows:
-        db.delete(row)
+    db.execute(delete(PlayerPlayEvent).where(PlayerPlayEvent.user_id == user.id))
     user.continue_track_id = None
     user.continue_album_id = None
     user.continue_position = 0.0
@@ -1645,8 +1663,9 @@ def listen_history(request: Request, db: Session = Depends(get_db)):
     """Full listen history — always available (unlike the hideable Recently Played builtin)."""
     user = _current_player_user(request, db)
     tracks = _tracks_recently_played(db, user.id, limit=200)
+    out = _builtin_meta("history", "Listening History", tracks)
     db.commit()
-    return _builtin_meta("history", "Listening History", tracks)
+    return out
 
 
 @router.get("/library/stats")
