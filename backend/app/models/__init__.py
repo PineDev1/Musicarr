@@ -89,6 +89,8 @@ class AppSettings(Base):
     spotify_client_id: Mapped[str] = mapped_column(String(128), default="")
     spotify_client_secret: Mapped[str] = mapped_column(String(128), default="")
     backup_schedule_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    update_check_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    trash_retention_days: Mapped[int] = mapped_column(Integer, default=30)
     backup_retention_count: Mapped[int] = mapped_column(Integer, default=7)
     dedupe_scan_schedule_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     low_disk_threshold_gb: Mapped[int] = mapped_column(Integer, default=10)
@@ -335,6 +337,37 @@ class RemotePathMapping(Base):
     remote_path: Mapped[str] = mapped_column(String(2048), default="")
     local_path: Mapped[str] = mapped_column(String(2048), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PlayerInvite(Base):
+    """One-time link an admin sends so a new listener picks their own username and
+    password. Only a sha256 of the token is stored (shown once, like API keys)."""
+
+    __tablename__ = "player_invites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    note: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    used_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class TrashItem(Base):
+    """A file/folder removed through the UI, parked in <data_dir>/trash so a
+    mistaken delete can be undone until it expires."""
+
+    __tablename__ = "trash_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    original_path: Mapped[str] = mapped_column(Text)
+    trash_path: Mapped[str] = mapped_column(Text)
+    label: Mapped[str] = mapped_column(String(512), default="")
+    reason: Mapped[str] = mapped_column(String(64), default="")
+    is_dir: Mapped[bool] = mapped_column(Boolean, default=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
 class HistoryEvent(Base):

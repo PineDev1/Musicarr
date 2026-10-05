@@ -278,6 +278,13 @@ export const DEFAULT_PREFS: PlayerPrefs = {
 
 export const playerApi = {
   status: () => request<PlayerAuthStatus>('/status'),
+  checkInvite: (token: string) =>
+    request<{ valid: boolean; note: string; expires_at: string }>(`/invite/${encodeURIComponent(token)}`),
+  acceptInvite: (token: string, body: { username: string; password: string; display_name: string }) =>
+    request<PlayerAuthStatus>(`/invite/${encodeURIComponent(token)}/accept`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   login: (username: string, password: string) =>
     request<PlayerAuthStatus>('/login', {
       method: 'POST',

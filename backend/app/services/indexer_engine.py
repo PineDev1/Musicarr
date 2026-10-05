@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -255,6 +257,35 @@ class WantedIndexerSweep:
 
         self.scheduler = BackgroundScheduler()
         self._started = False
+        # State of the user-triggered "Search all wanted" run (one at a time).
+        self._manual_lock = threading.Lock()
+        self.manual: dict = {"state": "idle"}
+
+    def start_manual(self, *, include_all: bool) -> dict:
+        """Run the sweep in a background thread so a big Wanted list doesn't tie up
+        an HTTP request for minutes. Raises RuntimeError if one is already running."""
+        with self._manual_lock:
+            if self.manual.get("state") == "running":
+                raise RuntimeError("A wanted search is already running")
+            self.manual = {
+                "state": "running",
+                "include_all": include_all,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "checked": 0,
+                "grabbed": 0,
+                "total": 0,
+            }
+
+        def work() -> None:
+            try:
+                result = self.run_once(force=True, include_all=include_all)
+                self.manual = {**self.manual, **result, "state": "done"}
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Manual wanted search failed")
+                self.manual = {**self.manual, "state": "error", "error": str(exc)}
+
+        threading.Thread(target=work, name="wanted-search", daemon=True).start()
+        return self.manual
 
     def start(self) -> None:
         if self._started:
@@ -286,12 +317,15 @@ class WantedIndexerSweep:
             self.scheduler.shutdown(wait=False)
             self._started = False
 
-    def run_once(self, force: bool = False, db: Session | None = None) -> dict:
+    def run_once(self, force: bool = False, db: Session | None = None, include_all: bool = False) -> dict:
         """Grab whatever indexers now have for the existing Wanted list.
 
         `force=True` (the manual-trigger endpoint) still checks each
         artist's own effective_auto_grab — this is "run the sweep now", not
-        "grab everything regardless of settings". `db` is normally omitted
+        "grab everything regardless of settings". `include_all=True` is the
+        explicit "Search all wanted" button: a deliberate click covers artists
+        that never opted into auto-grab (the score threshold and blocklist
+        still apply). `db` is normally omitted
         (a fresh session is opened and closed here, same as the other
         scheduler jobs) — tests pass one in directly instead of going
         through the real configured database.
@@ -339,9 +373,11 @@ class WantedIndexerSweep:
                 artist = album.artist
                 if not artist or album.id in active_job_album_ids:
                     continue
-                if not effective_auto_grab(db, artist, settings):
+                if not include_all and not effective_auto_grab(db, artist, settings):
                     continue
                 checked += 1
+                if self.manual.get("state") == "running":
+                    self.manual.update(checked=checked, total=len(albums))
                 try:
                     if try_auto_grab_release(db, artist, album, settings):
                         grabbed += 1
@@ -349,6 +385,8 @@ class WantedIndexerSweep:
                     logger.exception(
                         "Wanted-sweep grab failed for %s – %s", artist.name, album.title
                     )
+                if self.manual.get("state") == "running":
+                    self.manual["grabbed"] = grabbed
             if checked:
                 from app.services.history import add_history
 

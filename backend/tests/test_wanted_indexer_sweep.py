@@ -91,3 +91,41 @@ def test_run_once_respects_indexer_sweep_enabled_when_not_forced(db):
 
     assert result.get("skipped") is True
     grab.assert_not_called()
+
+
+def test_include_all_searches_artists_that_never_opted_into_auto_grab(db):
+    _settings(db, auto_grab_indexers_enabled=False)
+    artist = _artist(db, name="Luke Combs", provider="qobuz", provider_id="a1")
+    _album(db, artist, "Album One", "al1")
+
+    with patch("app.services.indexer_engine.try_auto_grab_release", return_value=True) as grab:
+        result = WantedIndexerSweep().run_once(force=True, db=db, include_all=True)
+
+    assert result["checked"] == 1 and result["grabbed"] == 1
+    grab.assert_called_once()
+
+
+def test_manual_search_runs_in_background_and_refuses_a_second_concurrent_run(db):
+    import threading
+
+    gate = threading.Event()
+    sweep = WantedIndexerSweep()
+
+    def slow(*_a, **_k):
+        gate.wait(5)
+        return {"ok": True, "checked": 3, "grabbed": 1}
+
+    with patch.object(sweep, "run_once", side_effect=slow):
+        started = sweep.start_manual(include_all=True)
+        assert started["state"] == "running"
+        try:
+            sweep.start_manual(include_all=True)
+            raise AssertionError("expected RuntimeError")
+        except RuntimeError:
+            pass
+        gate.set()
+        for _ in range(100):
+            if sweep.manual["state"] != "running":
+                break
+            threading.Event().wait(0.02)
+    assert sweep.manual["state"] == "done" and sweep.manual["grabbed"] == 1

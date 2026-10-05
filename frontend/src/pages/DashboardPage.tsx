@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api'
 import { Sparkline } from '../components/Sparkline'
+import { SetupChecklist } from './SetupChecklist'
 
 function formatWhen(iso: string) {
   const raw = iso?.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(iso || '') ? iso : `${iso}Z`
@@ -53,6 +54,8 @@ export function DashboardPage() {
           <p>A library-wide overview.</p>
         </div>
       </div>
+
+      <SetupChecklist />
 
       <div className="stat-grid">
         <div className="stat-card">

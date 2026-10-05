@@ -60,6 +60,8 @@ class SettingsOut(BaseModel):
     spotify_client_id: str = ""
     spotify_client_secret_set: bool = False
     backup_schedule_enabled: bool = True
+    update_check_enabled: bool = True
+    trash_retention_days: int = 30
     backup_retention_count: int = 7
     dedupe_scan_schedule_enabled: bool = True
     low_disk_threshold_gb: int = 10
@@ -129,6 +131,8 @@ class SettingsUpdate(BaseModel):
     spotify_client_id: str | None = None
     spotify_client_secret: str | None = None
     backup_schedule_enabled: bool | None = None
+    update_check_enabled: bool | None = None
+    trash_retention_days: int | None = Field(default=None, ge=0, le=365)
     backup_retention_count: int | None = Field(default=None, ge=1, le=60)
     dedupe_scan_schedule_enabled: bool | None = None
     low_disk_threshold_gb: int | None = Field(default=None, ge=1, le=1000)

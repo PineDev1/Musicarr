@@ -9,7 +9,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.core.config import settings as app_config
 from app.core.database import SessionLocal
 from app.services import dedupe
-from app.services.backup_service import export_backup
+from app.services.backup_service import backups_dir as _backups_dir
+from app.services.backup_service import export_backup, save_backup_file
 from app.services.history import add_history
 from app.services.notifications import send_notification
 from app.services.providers import get_provider
@@ -19,9 +20,7 @@ logger = logging.getLogger("musicarr.maintenance")
 
 
 def backups_dir() -> Path:
-    d = app_config.data_dir / "backups"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    return _backups_dir()
 
 
 def run_backup_job() -> dict:
@@ -32,20 +31,10 @@ def run_backup_job() -> dict:
         # Re-read each run — Settings toggles must take effect without restart.
         if not bool(getattr(settings, "backup_schedule_enabled", True)):
             return {"ok": True, "skipped": True}
-        data, filename = export_backup(db)
-        out_dir = backups_dir()
-        out_path = out_dir / filename
-        out_path.write_bytes(data)
-
-        retention = max(1, int(getattr(settings, "backup_retention_count", 7) or 7))
-        existing = sorted(out_dir.glob("musicarr-backup-*.zip"), key=lambda p: p.name)
-        removed = 0
-        for stale in existing[:-retention]:
-            stale.unlink(missing_ok=True)
-            removed += 1
+        out_path = save_backup_file(db, export_backup(db))
 
         add_history(db, "backup_scheduled", f"Scheduled backup saved ({out_path.name})")
-        return {"ok": True, "file": out_path.name, "pruned": removed}
+        return {"ok": True, "file": out_path.name}
     except Exception as exc:  # noqa: BLE001
         logger.exception("Scheduled backup failed")
         try:
@@ -186,6 +175,23 @@ def run_history_prune_job() -> int:
         db.close()
 
 
+def run_trash_purge_job() -> int:
+    from app.services import trash
+
+    db = SessionLocal()
+    try:
+        removed = trash.purge_expired(db)
+        if removed:
+            logger.info("Purged %d expired trash item(s)", removed)
+        return removed
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.warning("Trash purge failed", exc_info=True)
+        return 0
+    finally:
+        db.close()
+
+
 class MaintenanceScheduler:
     def __init__(self) -> None:
         self.scheduler = BackgroundScheduler()
@@ -221,6 +227,15 @@ class MaintenanceScheduler:
             hour=4,
             minute=30,
             id="history_prune",
+            replace_existing=True,
+            max_instances=1,
+        )
+        self.scheduler.add_job(
+            run_trash_purge_job,
+            "cron",
+            hour=4,
+            minute=45,
+            id="trash_purge",
             replace_existing=True,
             max_instances=1,
         )

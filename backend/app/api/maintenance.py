@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models import Track
 from app.models.schemas import MaintenanceResolveRequest, MaintenanceScanOut
-from app.services import dedupe
+from app.services import dedupe, trash
 from app.services.history import add_history
 from app.services.library_roots import all_library_roots
 
@@ -54,7 +54,10 @@ def resolve(payload: MaintenanceResolveRequest, db: Session = Depends(get_db)):
         if not any(target == r or r in target.parents for r in roots):
             raise HTTPException(status_code=400, detail="Path is outside the library folders")
         if target.exists() and target.is_file():
-            target.unlink(missing_ok=True)
+            try:
+                trash.delete_or_trash(db, target, reason="orphan_file")
+            except trash.TrashError as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
         add_history(db, "maintenance", f"Deleted orphan file {target}")
         return {"ok": True}
 
@@ -69,7 +72,10 @@ def resolve(payload: MaintenanceResolveRequest, db: Session = Depends(get_db)):
             if track.path:
                 p = Path(track.path)
                 if p.exists() and p.is_file():
-                    p.unlink(missing_ok=True)
+                    try:
+                        trash.delete_or_trash(db, p, reason="duplicate_track", label=track.title)
+                    except trash.TrashError as exc:
+                        raise HTTPException(status_code=500, detail=str(exc)) from exc
             removed.append(track.title)
             db.delete(track)
         db.commit()

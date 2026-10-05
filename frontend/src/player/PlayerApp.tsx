@@ -2,7 +2,8 @@ import { PlayerPeoplePage } from './PlayerPeoplePage'
 import { PlayerProfilePage } from './PlayerProfilePage'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, matchPath, useLocation } from 'react-router-dom'
+import { PlayerInvitePage } from './PlayerInvitePage'
 import { PlayerAlbumPage } from './PlayerAlbumPage'
 import { PlayerAlbumsPage } from './PlayerAlbumsPage'
 import { PlayerArtistPage } from './PlayerArtistPage'
@@ -24,6 +25,7 @@ import { playerApi } from './playerApi'
 
 export function PlayerApp() {
   const qc = useQueryClient()
+  const location = useLocation()
   const status = useQuery({
     queryKey: ['player-status'],
     queryFn: playerApi.status,
@@ -68,6 +70,16 @@ export function PlayerApp() {
           </p>
         </div>
       </div>
+    )
+  }
+
+  const invite = matchPath('/player/invite/:token', location.pathname)
+  if (invite?.params.token) {
+    return (
+      <PlayerInvitePage
+        token={invite.params.token}
+        onDone={() => qc.invalidateQueries({ queryKey: ['player-status'] })}
+      />
     )
   }
 

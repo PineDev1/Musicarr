@@ -99,6 +99,8 @@ export type Settings = {
   spotify_client_secret_set: boolean
   backup_schedule_enabled: boolean
   backup_retention_count: number
+  update_check_enabled: boolean
+  trash_retention_days: number
   dedupe_scan_schedule_enabled: boolean
   low_disk_threshold_gb: number
   notify_on_maintenance: boolean
@@ -420,6 +422,57 @@ export type PlayerStats = {
   daily_plays: { date: string; plays: number }[]
 }
 
+export type SavedBackup = { name: string; size: number; created_at: string }
+export type UpdateStatus = {
+  enabled: boolean
+  current: string
+  latest: string | null
+  update_available: boolean
+  url: string | null
+}
+export type ChecklistItem = {
+  key: string
+  label: string
+  status: 'ok' | 'todo' | 'optional'
+  detail: string
+  link: string
+}
+export type Checklist = { items: ChecklistItem[]; done: number; total: number; required_left: number }
+export type FolderListing = {
+  path: string
+  parent: string | null
+  writable: boolean
+  entries: { name: string; path: string }[]
+  truncated: boolean
+  error: string | null
+  shortcuts: { name: string; path: string }[]
+}
+export type TrashEntry = {
+  id: number
+  label: string
+  reason: string
+  original_path: string
+  is_dir: boolean
+  size_bytes: number
+  deleted_at: string | null
+}
+export type TrashList = { retention_days: number; total_bytes: number; items: TrashEntry[] }
+export type PlayerInviteRow = {
+  id: number
+  note: string
+  status: 'pending' | 'used' | 'expired'
+  created_at: string | null
+  expires_at: string | null
+  used_by_user_id: number | null
+}
+export type WantedSearchState = {
+  state: 'idle' | 'running' | 'done' | 'error'
+  checked?: number
+  grabbed?: number
+  total?: number
+  error?: string
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     credentials: 'include',
@@ -441,6 +494,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  savedBackups: () => request<{ files: SavedBackup[] }>('/backup/files'),
+  runBackupNow: () => request<{ ok: boolean; name: string; size: number }>('/backup/run', { method: 'POST' }),
+  deleteSavedBackup: (name: string) =>
+    request<{ ok: boolean }>(`/backup/files/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  restoreSavedBackup: (name: string) =>
+    request<unknown>(`/backup/files/${encodeURIComponent(name)}/restore`, { method: 'POST' }),
+  updateStatus: (refresh = false) => request<UpdateStatus>(`/system/update${refresh ? '?refresh=true' : ''}`),
+  checklist: () => request<Checklist>('/system/checklist'),
+  browseFolders: (path?: string) =>
+    request<FolderListing>(`/fs/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+  trash: () => request<TrashList>('/trash'),
+  restoreTrash: (id: number) => request<{ ok: boolean; restored_to: string }>(`/trash/${id}/restore`, { method: 'POST' }),
+  deleteTrash: (id: number) => request<{ ok: boolean }>(`/trash/${id}`, { method: 'DELETE' }),
+  emptyTrash: () => request<{ ok: boolean; removed: number }>('/trash', { method: 'DELETE' }),
+  playerInvites: () => request<PlayerInviteRow[]>('/player/admin/invites'),
+  createPlayerInvite: (body: { note: string; days: number }) =>
+    request<PlayerInviteRow & { token: string; path: string }>('/player/admin/invites', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  revokePlayerInvite: (id: number) =>
+    request<{ ok: boolean }>(`/player/admin/invites/${id}`, { method: 'DELETE' }),
+  searchAllWanted: () => request<WantedSearchState>('/acquisition/search-wanted', { method: 'POST' }),
+  searchAllWantedStatus: () => request<WantedSearchState>('/acquisition/search-wanted/status'),
   authStatus: () => request<AppAuthStatus>('/auth/status'),
   appLogin: (username: string, password: string, totp_code?: string) =>
     request<AppAuthStatus>('/auth/login', {

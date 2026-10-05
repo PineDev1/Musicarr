@@ -32,6 +32,8 @@ COPY --from=frontend /app/backend/static ./static
 RUN mkdir -p /config /music
 
 EXPOSE 8787
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD python -c "import os,urllib.request as u; u.urlopen('http://127.0.0.1:%s/healthz' % os.environ.get('MUSICARR_PORT','8787'), timeout=4)" || exit 1
 VOLUME ["/config", "/music"]
 
 CMD ["python", "run.py"]
