@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable
@@ -30,15 +31,22 @@ def _emit(on_progress: ProgressCb | None, **kwargs: Any) -> None:
         on_progress(kwargs)
 
 
+_PAREN = re.compile(r"\([^)]*\)")
+_BRACKET = re.compile(r"\[[^\]]*\]")
+_SPACES = re.compile(r"\s+")
+
+
+@lru_cache(maxsize=32768)  # pure and called thousands of times per scan on repeated titles
 def _norm(s: str | None) -> str:
     t = fold_diacritics((s or "").lower().strip())
     t = strip_leading_article(t)
-    t = re.sub(r"\([^)]*\)", "", t)
-    t = re.sub(r"\[[^\]]*\]", "", t)
-    t = re.sub(r"\s+", " ", t).strip()
+    t = _PAREN.sub("", t)
+    t = _BRACKET.sub("", t)
+    t = _SPACES.sub(" ", t).strip()
     return t
 
 
+@lru_cache(maxsize=32768)
 def _norm_strict(s: str | None) -> str:
     """Like _norm but keeps parenthetical/bracketed content, so edition
     markers ("Deluxe", "Live", "Remaster", ...) stay distinguishing instead

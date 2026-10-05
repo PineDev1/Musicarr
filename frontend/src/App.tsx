@@ -1,32 +1,44 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect } from 'react'
+import { Suspense, useEffect } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { Layout } from './Layout'
 import { ToastProvider } from './Toast'
+import { lazyPage } from './lazyPage'
 import { api } from './api'
-import { ActivityPage } from './pages/ActivityPage'
-import { AddArtistPage } from './pages/AddArtistPage'
-import { AlbumPage } from './pages/AlbumPage'
-import { ArtistPage } from './pages/ArtistPage'
-import { CalendarPage } from './pages/CalendarPage'
-import { SystemPage } from './pages/SystemPage'
-import { DiscoverPage } from './pages/DiscoverPage'
-import { DashboardPage } from './pages/DashboardPage'
-import { ImportListsPage } from './pages/ImportListsPage'
-import { ImportReviewPage } from './pages/ImportReviewPage'
-import { LibraryPage } from './pages/LibraryPage'
 import { LoginPage } from './pages/LoginPage'
-import { MaintenancePage } from './pages/MaintenancePage'
-import { PendingArtistsPage } from './pages/PendingArtistsPage'
-import { QueuePage } from './pages/QueuePage'
-import { SettingsPage } from './pages/SettingsPage'
 import { SetupWizardPage, isSetupComplete, markSetupDone } from './pages/SetupWizardPage'
-import { SkippedReleasesPage } from './pages/SkippedReleasesPage'
-import { UpgradesPage } from './pages/UpgradesPage'
-import { WantedPage } from './pages/WantedPage'
-import { NowPlayingPage } from './pages/NowPlayingPage'
-import { PlayerApp } from './player/PlayerApp'
-import { ShareSongPage } from './player/ShareSongPage'
+
+// Route-level code splitting: each page (and the whole player) is its own chunk, so a
+// visit downloads only what it opens instead of one ~800 KB bundle.
+const ActivityPage = lazyPage(() => import('./pages/ActivityPage').then((m) => ({ default: m.ActivityPage })))
+const AddArtistPage = lazyPage(() => import('./pages/AddArtistPage').then((m) => ({ default: m.AddArtistPage })))
+const AlbumPage = lazyPage(() => import('./pages/AlbumPage').then((m) => ({ default: m.AlbumPage })))
+const ArtistPage = lazyPage(() => import('./pages/ArtistPage').then((m) => ({ default: m.ArtistPage })))
+const CalendarPage = lazyPage(() => import('./pages/CalendarPage').then((m) => ({ default: m.CalendarPage })))
+const SystemPage = lazyPage(() => import('./pages/SystemPage').then((m) => ({ default: m.SystemPage })))
+const DiscoverPage = lazyPage(() => import('./pages/DiscoverPage').then((m) => ({ default: m.DiscoverPage })))
+const DashboardPage = lazyPage(() => import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage })))
+const ImportListsPage = lazyPage(() => import('./pages/ImportListsPage').then((m) => ({ default: m.ImportListsPage })))
+const ImportReviewPage = lazyPage(() => import('./pages/ImportReviewPage').then((m) => ({ default: m.ImportReviewPage })))
+const LibraryPage = lazyPage(() => import('./pages/LibraryPage').then((m) => ({ default: m.LibraryPage })))
+const MaintenancePage = lazyPage(() => import('./pages/MaintenancePage').then((m) => ({ default: m.MaintenancePage })))
+const PendingArtistsPage = lazyPage(() => import('./pages/PendingArtistsPage').then((m) => ({ default: m.PendingArtistsPage })))
+const QueuePage = lazyPage(() => import('./pages/QueuePage').then((m) => ({ default: m.QueuePage })))
+const SettingsPage = lazyPage(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
+const SkippedReleasesPage = lazyPage(() => import('./pages/SkippedReleasesPage').then((m) => ({ default: m.SkippedReleasesPage })))
+const UpgradesPage = lazyPage(() => import('./pages/UpgradesPage').then((m) => ({ default: m.UpgradesPage })))
+const WantedPage = lazyPage(() => import('./pages/WantedPage').then((m) => ({ default: m.WantedPage })))
+const NowPlayingPage = lazyPage(() => import('./pages/NowPlayingPage').then((m) => ({ default: m.NowPlayingPage })))
+const PlayerApp = lazyPage(() => import('./player/PlayerApp').then((m) => ({ default: m.PlayerApp })))
+const ShareSongPage = lazyPage(() => import('./player/ShareSongPage').then((m) => ({ default: m.ShareSongPage })))
+
+function PageFallback() {
+  return (
+    <div className="login-shell">
+      <p className="muted">Loading…</p>
+    </div>
+  )
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -84,6 +96,7 @@ function AdminApp() {
   }
 
   return (
+    <Suspense fallback={<PageFallback />}>
     <Routes>
       <Route path="setup" element={<SetupWizardPage />} />
       {needsSetup ? (
@@ -113,6 +126,7 @@ function AdminApp() {
         </Route>
       )}
     </Routes>
+    </Suspense>
   )
 }
 
@@ -121,11 +135,13 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
         <BrowserRouter>
+          <Suspense fallback={<PageFallback />}>
           <Routes>
             <Route path="/s/:token" element={<ShareSongPage />} />
             <Route path="/player/*" element={<PlayerApp />} />
             <Route path="/*" element={<AdminApp />} />
           </Routes>
+          </Suspense>
         </BrowserRouter>
       </ToastProvider>
     </QueryClientProvider>

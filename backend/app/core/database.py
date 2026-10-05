@@ -301,6 +301,20 @@ def migrate_schema(engine_: Engine | None = None) -> None:
             ("ix_albums_status", "status"),
             ("ix_albums_skip_reason_code", "skip_reason_code"),
         ],
+        # tracks.album_id had no index: every "tracks of this album" lookup
+        # (album pages, joinedload, health/dedupe scans) scanned the whole table.
+        "tracks": [
+            ("ix_tracks_album_id", "album_id"),
+        ],
+        # Activity/audit pages and the failed-login counter filter + sort here.
+        "history_events": [
+            ("ix_history_events_created_at", "created_at"),
+            ("ix_history_events_type_created_at", "event_type, created_at"),
+        ],
+        # Recently played / stats: WHERE user_id ORDER BY played_at without a temp sort.
+        "player_play_events": [
+            ("ix_player_play_events_user_played_at", "user_id, played_at"),
+        ],
         "download_jobs": [
             ("ix_download_jobs_album_id", "album_id"),
             ("ix_download_jobs_state", "state"),

@@ -152,6 +152,40 @@ def run_health_check_job() -> dict:
         db.close()
 
 
+HISTORY_RETENTION_DAYS = 365
+
+
+def prune_history(db, *, days: int = HISTORY_RETENTION_DAYS) -> int:
+    """Delete activity/audit rows older than `days`. Nothing else ever removed
+    them, so the table (one row per failed login, download, audit event...)
+    grew without bound. Returns the number of rows removed."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import delete
+
+    from app.models import HistoryEvent
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    result = db.execute(delete(HistoryEvent).where(HistoryEvent.created_at < cutoff))
+    db.commit()
+    return result.rowcount or 0
+
+
+def run_history_prune_job() -> int:
+    db = SessionLocal()
+    try:
+        removed = prune_history(db)
+        if removed:
+            logger.info("Pruned %d history event(s) older than %d days", removed, HISTORY_RETENTION_DAYS)
+        return removed
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.warning("History prune failed", exc_info=True)
+        return 0
+    finally:
+        db.close()
+
+
 class MaintenanceScheduler:
     def __init__(self) -> None:
         self.scheduler = BackgroundScheduler()
@@ -178,6 +212,15 @@ class MaintenanceScheduler:
             hour=4,
             minute=0,
             id="dedupe_scan_weekly",
+            replace_existing=True,
+            max_instances=1,
+        )
+        self.scheduler.add_job(
+            run_history_prune_job,
+            "cron",
+            hour=4,
+            minute=30,
+            id="history_prune",
             replace_existing=True,
             max_instances=1,
         )
